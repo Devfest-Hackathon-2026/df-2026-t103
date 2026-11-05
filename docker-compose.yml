@@ -1,0 +1,141 @@
+name: moshimoshimonshin
+
+# ローカル開発環境（詳細は docs/08_Docker_Makefile運用.md）
+# - firebase : Firebase Emulator Suite（Auth / Firestore / Realtime DB / Storage）
+# - api      : Cloud Run API のローカル相当（services/api が作成されると起動対象）
+# - hospital : Next.js 病院ポータル（apps/hospital が作成されると起動対象）
+#
+# ファイル変更の自動適用は `docker compose watch`（make up が起動）が担当し、
+# コンテナ内への同期は watch の sync で行う。バインドマウントされたパスは
+# watch の監視対象外になるため、ソースはあえてマウントしない。
+# 患者用 Flutter アプリは iOS/Android 実機開発のため Docker ではなく
+# `make up` がホスト側で `flutter run -d web-server` として起動する。
+
+volumes:
+  firebase-emulator-data:
+  api-node-modules:
+  hospital-node-modules:
+
+services:
+  firebase:
+    build:
+      context: .
+      dockerfile: docker/firebase/Dockerfile
+    env_file:
+      - path: .env.local
+        required: false
+      - path: .secret.local
+        required: false
+    environment:
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-demo-mmr-dev}
+    ports:
+      - "4000:4000"   # Emulator Suite UI
+      - "8081:8080"   # Firestore (host 8081 -> container 8080)
+      - "9000:9000"   # Realtime Database
+      - "9099:9099"   # Authentication
+      - "9199:9199"   # Storage
+    volumes:
+      - firebase-emulator-data:/workspace/.local
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    develop:
+      watch:
+        - action: sync+restart
+          path: firebase.json
+          target: /workspace/firebase.json
+        - action: sync+restart
+          path: firebase
+          target: /workspace/firebase
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+      target: dev
+    command: sh -c "npm install && npm run dev"
+    env_file:
+      - path: .env.local
+        required: false
+      - path: .secret.local
+        required: false
+    environment:
+      NODE_ENV: development
+      PORT: "8080"
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-demo-mmr-dev}
+      GCLOUD_PROJECT: ${FIREBASE_PROJECT_ID:-demo-mmr-dev}
+      FIRESTORE_EMULATOR_HOST: firebase:8080
+      FIREBASE_AUTH_EMULATOR_HOST: firebase:9099
+      FIREBASE_STORAGE_EMULATOR_HOST: firebase:9199
+      DATABASE_EMULATOR_HOST: firebase:9000
+    ports:
+      - "8080:8080"
+    volumes:
+      - api-node-modules:/app/node_modules
+    depends_on:
+      firebase:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    develop:
+      watch:
+        - action: sync
+          path: services/api
+          target: /app
+          ignore:
+            - node_modules
+        - action: sync+restart
+          path: services/api/package.json
+          target: /app/package.json
+
+  hospital:
+    build:
+      context: .
+      dockerfile: docker/hospital/Dockerfile
+      target: dev
+    command: sh -c "npm install && npm run dev"
+    env_file:
+      - path: .env.local
+        required: false
+      - path: .secret.local
+        required: false
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080/v1}
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-demo-mmr-dev}
+      NEXT_PUBLIC_USE_FIREBASE_EMULATOR: ${NEXT_PUBLIC_USE_FIREBASE_EMULATOR:-true}
+      NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL: http://localhost:9099
+      NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST: localhost:8081
+      NEXT_PUBLIC_FIREBASE_STORAGE_EMULATOR_HOST: localhost:9199
+    ports:
+      - "3000:3000"
+    volumes:
+      - hospital-node-modules:/app/node_modules
+    depends_on:
+      firebase:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    develop:
+      watch:
+        - action: sync
+          path: apps/hospital
+          target: /app
+          ignore:
+            - node_modules
+            - .next
+        - action: sync+restart
+          path: apps/hospital/package.json
+          target: /app/package.json

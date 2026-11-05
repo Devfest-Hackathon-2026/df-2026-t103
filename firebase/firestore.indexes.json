@@ -1,0 +1,18 @@
+{
+  "indexes": [
+    {"collectionGroup":"intakes","queryScope":"COLLECTION","fields":[{"fieldPath":"patientUid","order":"ASCENDING"},{"fieldPath":"updatedAt","order":"DESCENDING"}]},
+    {"collectionGroup":"questionnaires","queryScope":"COLLECTION","fields":[{"fieldPath":"patientUid","order":"ASCENDING"},{"fieldPath":"finalizedAt","order":"DESCENDING"}]},
+    {"collectionGroup":"medications","queryScope":"COLLECTION","fields":[{"fieldPath":"patientUid","order":"ASCENDING"},{"fieldPath":"currentStatus","order":"ASCENDING"},{"fieldPath":"updatedAt","order":"DESCENDING"}]},
+    {"collectionGroup":"deliveries","queryScope":"COLLECTION","fields":[{"fieldPath":"facilityId","order":"ASCENDING"},{"fieldPath":"deliveredAt","order":"DESCENDING"}]},
+    {"collectionGroup":"deliveries","queryScope":"COLLECTION","fields":[{"fieldPath":"facilityId","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"deliveredAt","order":"DESCENDING"}]},
+    {"collectionGroup":"deliveries","queryScope":"COLLECTION","fields":[{"fieldPath":"senderUid","order":"ASCENDING"},{"fieldPath":"createdAt","order":"DESCENDING"}]},
+    {"collectionGroup":"facilityMemberships","queryScope":"COLLECTION","fields":[{"fieldPath":"userUid","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"}]},
+    {"collectionGroup":"facilityMemberships","queryScope":"COLLECTION","fields":[{"fieldPath":"facilityId","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"}]},
+    {"collectionGroup":"deletionJobs","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"executeAfter","order":"ASCENDING"}]},
+    {"collectionGroup":"legalConsents","queryScope":"COLLECTION","fields":[{"fieldPath":"subjectUid","order":"ASCENDING"},{"fieldPath":"occurredAt","order":"DESCENDING"}]}
+  ],
+  "fieldOverrides": [
+    {"collectionGroup":"intakes","fieldPath":"initialSymptomText","indexes":[]},
+    {"collectionGroup":"medications","fieldPath":"instructionsText","indexes":[]}
+  ]
+}

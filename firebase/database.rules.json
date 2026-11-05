@@ -1,0 +1,10 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "publicOperationalStatus": {
+      ".read": true,
+      ".write": false
+    }
+  }
+}

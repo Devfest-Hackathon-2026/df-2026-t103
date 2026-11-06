@@ -3,6 +3,9 @@ import type {
   ConsentType,
   DeletionJobStatus,
   DeletionStepStatus,
+  MedicationConfirmationStatus,
+  MedicationCurrentStatus,
+  MedicationSourceType,
   OcrFailureCode,
   OcrJobStatus,
   OnboardingState,
@@ -172,6 +175,39 @@ export interface OcrJobDoc {
   createdAt: unknown;
   startedAt?: unknown;
   finishedAt?: unknown;
+  updatedAt: unknown;
+}
+
+/**
+ * 04_DB設計書 §5.6 medications。同名薬・異用量は単純重複排除しない。
+ * OCR候補は本人確認後にのみ confirmed。服薬状況は現在/過去/不明を必須保持。
+ */
+export interface MedicationDoc {
+  patientUid: string;
+  /** 表示名。入力または候補名（OCRの確信ではない）。 */
+  displayName: string;
+  /** 正規化不能なら null。 */
+  genericName?: string | null;
+  /** 規格。数値・単位の曖昧性をそのまま保持。 */
+  strength?: string | null;
+  /** 用法・用量の記載転記（医療指示を新規生成しない）。 */
+  instructionsText?: string | null;
+  /** 数量・日数。 */
+  quantity?: string | null;
+  /** 処方日 YYYY-MM-DD（服薬開始日と混同しない）。 */
+  prescribedAt?: string | null;
+  currentStatus: MedicationCurrentStatus;
+  confirmationStatus: MedicationConfirmationStatus;
+  sourceType: MedicationSourceType;
+  /** 元画像への内部参照。 */
+  uploadId?: string;
+  /** 抽出処理の証跡。 */
+  ocrJobId?: string;
+  /** FR-M07: 問診票へ選択的添付する薬剤だけ true。 */
+  attachToQuestionnaire: boolean;
+  /** 本人が確認済みにした時刻。 */
+  userConfirmedAt?: unknown;
+  createdAt: unknown;
   updatedAt: unknown;
 }
 

@@ -191,3 +191,59 @@ export const uploadInitBodySchema = z
   })
   .strict();
 export type UploadInitBody = z.infer<typeof uploadInitBodySchema>;
+
+/**
+ * API-023 POST /medications（本人確認済み薬剤登録）。
+ * OCR由来は ocrJobId(+candidateId) を付すと出所・証跡が保存される。
+ * currentStatus は利用者の明示が必須（FR-M05）。未確認のまま登録する場合は
+ * confirmationStatus="unconfirmed" を指定する（E2E-003）。
+ */
+export const medicationCreateSchema = z
+  .object({
+    displayName: z.string().trim().min(1, "薬剤名を入力してください。").max(200),
+    genericName: z.string().trim().max(200).optional(),
+    // OCR候補の誤値を利用者が明示的に消せるよう null 許容（FR-M04）。
+    // undefined は候補値の引継ぎ、null はクリア、文字列は上書き。
+    strength: z.string().trim().max(100).nullable().optional(),
+    instructionsText: z.string().trim().max(500).nullable().optional(),
+    quantity: z.string().trim().max(100).nullable().optional(),
+    prescribedAt: z
+      .string()
+      .trim()
+      .regex(DATE_PATTERN, "処方日は YYYY-MM-DD 形式で入力してください。")
+      .nullable()
+      .optional(),
+    currentStatus: z.enum(["taking", "past", "not_sure"]),
+    confirmationStatus: z.enum(["confirmed", "unconfirmed"]).optional(),
+    ocrJobId: z.string().min(1).max(200).optional(),
+    candidateId: z.string().min(1).max(200).optional(),
+    attachToQuestionnaire: z.boolean().optional(),
+  })
+  .strict();
+export type MedicationCreateBody = z.infer<typeof medicationCreateSchema>;
+
+/** API-025 PATCH /medications/{id}。出所フィールドは変更不可。 */
+export const medicationPatchSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(200).optional(),
+    genericName: z.string().trim().max(200).nullable().optional(),
+    strength: z.string().trim().max(100).nullable().optional(),
+    instructionsText: z.string().trim().max(500).nullable().optional(),
+    quantity: z.string().trim().max(100).nullable().optional(),
+    prescribedAt: z
+      .string()
+      .trim()
+      .regex(DATE_PATTERN)
+      .nullable()
+      .optional(),
+    currentStatus: z.enum(["taking", "past", "not_sure"]).optional(),
+    confirmationStatus: z
+      .enum(["unconfirmed", "confirmed", "rejected"])
+      .optional(),
+    attachToQuestionnaire: z.boolean().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, {
+    message: "更新する項目を指定してください。",
+  });
+export type MedicationPatchBody = z.infer<typeof medicationPatchSchema>;

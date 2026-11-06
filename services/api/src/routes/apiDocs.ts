@@ -133,6 +133,49 @@ export const jobRunResultSchema = z.object({
   attemptCount: z.number().optional(),
 });
 
+export const medicationResponseSchema = z.object({
+  medicationId: z.string(),
+  displayName: z.string(),
+  genericName: z.string().nullable(),
+  strength: z.string().nullable(),
+  instructionsText: z.string().nullable(),
+  quantity: z.string().nullable(),
+  prescribedAt: z.string().nullable(),
+  currentStatus: z.string(),
+  confirmationStatus: z.string(),
+  sourceType: z.string(),
+  uploadId: z.string().nullable(),
+  ocrJobId: z.string().nullable(),
+  attachToQuestionnaire: z.boolean(),
+  userConfirmedAt: z.string().nullable(),
+  createdAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+});
+
+export const medicationListResponseSchema = z.object({
+  medications: z.array(medicationResponseSchema),
+});
+
+export const extractionResponseSchema = z.object({
+  jobId: z.string(),
+  status: z.string(),
+  errorCode: z.string().nullable(),
+  candidates: z.array(
+    z.object({
+      candidateId: z.string(),
+      name: z.string().nullable(),
+      strength: z.string().nullable(),
+      dosage: z.string().nullable(),
+      quantity: z.string().nullable(),
+      prescribedAt: z.string().nullable(),
+      confidence: z.number(),
+      evidenceSpan: z
+        .object({ start: z.number(), end: z.number() })
+        .optional(),
+    }),
+  ),
+});
+
 export const ocrRunResultSchema = z.object({
   jobId: z.string(),
   outcome: z.enum([

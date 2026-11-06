@@ -309,3 +309,63 @@ export const finalizeResponseSchema = z.object({
   questionnaireRevision: z.number(),
   status: z.literal("finalized"),
 });
+
+export const questionnaireListItemSchema = z.object({
+  questionnaireId: z.string(),
+  intakeId: z.string(),
+  status: z.string(),
+  latestRevision: z.number(),
+  finalizedAt: z.string().nullable(),
+  createdAt: z.string().nullable(),
+});
+
+export const questionnaireListResponseSchema = z.object({
+  questionnaires: z.array(questionnaireListItemSchema),
+});
+
+export const questionnaireDetailResponseSchema = z.object({
+  questionnaireId: z.string(),
+  intakeId: z.string(),
+  status: z.string(),
+  latestRevision: z.number(),
+  finalizedAt: z.string().nullable(),
+  createdAt: z.string().nullable(),
+  revisions: z.array(
+    z.object({
+      versionNumber: z.number(),
+      createdAt: z.string().nullable(),
+      rawAnswerSnapshotHash: z.string(),
+    }),
+  ),
+  revision: z.object({
+    versionNumber: z.number(),
+    schemaVersion: z.string(),
+    chiefComplaint: z.object({
+      value: z.string().nullable(),
+      source: z.string(),
+    }),
+    sections: z.record(
+      z.string(),
+      z.object({
+        value: z.string().nullable(),
+        source: z.string().nullable(),
+        answerState: z.string(),
+      }),
+    ),
+    bodyLocations: z.array(z.string()),
+    medicalHistorySnapshot: z.array(
+      z.object({ conditionText: z.string(), source: z.string() }),
+    ),
+    medicationSnapshots: z.array(
+      z.object({
+        medicationId: z.string(),
+        displayName: z.string(),
+        confirmed: z.literal(true),
+      }),
+    ),
+    unansweredTopics: z.array(z.string()),
+    rawAnswerSnapshotHash: z.string(),
+    summaryReviewConfirmedAt: z.string().nullable(),
+    createdAt: z.string().nullable(),
+  }),
+});

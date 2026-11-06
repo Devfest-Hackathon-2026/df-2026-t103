@@ -16,6 +16,12 @@ Flutter の Android / iOS / Web 向けデモ雛形です。現在は準備画面
 
 Android Emulator での確認には別途 Android SDK、エミュレータとシステムイメージ、仮想化対応環境が必要です。iOS のエミュレータやビルドには macOS と Xcode が必要です。
 
+ホーム画面の見た目を単独で確認するには、Flutter SDK を用意し、`apps/patient` から以下を実行してブラウザで http://localhost:5051 を開きます。確認後は Ctrl+C で停止します。Nix は不要です。このプレビューは認証や API に接続せず、各操作は未実装です。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5051 -t lib/demo_home_preview.dart
+```
+
 ## 検証
 
 `apps/patient` で `flutter pub get`、`flutter analyze`、`flutter test` を実行します。iOS のビルドには macOS と Xcode が別途必要です。Android のビルドにも対応する SDK が必要です。

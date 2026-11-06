@@ -426,6 +426,50 @@ describe("intake routes (#11, API-009〜016)", () => {
     ).toBe(fbody.questionnaireId);
   });
 
+  it("POST /summary on an expired draft archives it and returns 412", async () => {
+    const { app, deps } = await setup();
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    // TTL(7日)を超過させる
+    deps.clock.advanceMs(8 * 24 * 60 * 60 * 1000);
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/summary`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+    expect(res.statusCode).toBe(412);
+    const doc = (
+      await deps.memDb.doc(`intakes/${intakeId}`).get()
+    ).data() as { status: string } | undefined;
+    expect(doc?.status).toBe("archived");
+  });
+
+  it("POST /finalize on an expired draft archives it and returns 412", async () => {
+    const { app, deps } = await setup();
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const sum = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/summary`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+    const srev = (sum.json() as { intakeRevision: number }).intakeRevision;
+    deps.clock.advanceMs(8 * 24 * 60 * 60 * 1000);
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/finalize`,
+      headers: { ...authHeader(UID), ...idem("fin-expired") },
+      payload: { expectedIntakeRevision: srev, summaryReviewConfirmed: true },
+    });
+    expect(res.statusCode).toBe(412);
+    const doc = (
+      await deps.memDb.doc(`intakes/${intakeId}`).get()
+    ).data() as { status: string } | undefined;
+    expect(doc?.status).toBe("archived");
+  });
+
   it("all intake endpoints reject requests without auth", async () => {
     const { app } = await setup();
     const res = await app.inject({

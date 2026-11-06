@@ -24,7 +24,12 @@ import {
 } from "../repos/intakes.js";
 import { listAttachableMedications } from "../repos/medications.js";
 import { generateNextQuestion } from "./questionGen.js";
-import { appendQuestion } from "./intakes.js";
+import {
+  appendQuestion,
+  DRAFT_EXPIRED,
+  draftExpiredError,
+  expired,
+} from "./intakes.js";
 import type { NextQuestionSpec } from "./questionGen.js";
 
 function getOwned(
@@ -225,7 +230,7 @@ export async function summarizeIntake(
     );
   }
   const summary = await buildSummary(deps, intake, params.intakeId);
-  const revision = await deps.db.runTransaction(async (tx) => {
+  const txResult = await deps.db.runTransaction(async (tx) => {
     const ref = deps.db.doc(`intakes/${params.intakeId}`);
     const snap = await tx.get(ref);
     const doc = getOwned(snap.data() as IntakeDoc | undefined, snap.exists, params.uid);
@@ -234,6 +239,13 @@ export async function summarizeIntake(
         ErrorCodes.REVISION_CONFLICT,
         "他の端末で更新されています。最新の状態を取得してください。",
       );
+    }
+    if (expired(deps, doc)) {
+      tx.update(ref, {
+        status: "archived",
+        updatedAt: Timestamp.fromDate(deps.clock.now()),
+      });
+      return DRAFT_EXPIRED;
     }
     const next = doc.revision + 1;
     tx.update(ref, {
@@ -244,6 +256,8 @@ export async function summarizeIntake(
     });
     return next;
   });
+  if (typeof txResult !== "number") throw draftExpiredError();
+  const revision = txResult;
   return {
     intakeId: params.intakeId,
     status: "review",
@@ -296,10 +310,10 @@ export async function finalizeIntake(
     }),
   );
 
-  const { result } = await runIdempotent<{
-    questionnaireId: string;
-    questionnaireRevision: number;
-  }>(deps, {
+  const { result } = await runIdempotent<
+    | { questionnaireId: string; questionnaireRevision: number }
+    | typeof DRAFT_EXPIRED
+  >(deps, {
     namespace: "intake_finalize",
     key: params.idempotencyKey,
     principal: params.uid,
@@ -320,6 +334,14 @@ export async function finalizeIntake(
           ErrorCodes.REVISION_CONFLICT,
           "他の端末で更新されています。最新の状態を取得してください。",
         );
+      }
+      if (expired(deps, doc)) {
+        tx.update(ref, {
+          status: "archived",
+          updatedAt: Timestamp.fromDate(deps.clock.now()),
+        });
+        // sentinel を結果として保存: リプレイでも同じ期限切れ応答を返す
+        return DRAFT_EXPIRED;
       }
       if (doc.status !== "review") {
         throw ApiError.precondition(
@@ -365,6 +387,7 @@ export async function finalizeIntake(
       };
     },
   });
+  if ("kind" in result) throw draftExpiredError();
   await audit(deps, {
     actorType: "patient",
     actorUidHash: auditUidHash(deps, params.uid),

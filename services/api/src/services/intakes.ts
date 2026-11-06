@@ -125,7 +125,7 @@ async function getOwnedIntake(
   return doc;
 }
 
-function expired(deps: Deps, doc: IntakeDoc): boolean {
+export function expired(deps: Deps, doc: IntakeDoc): boolean {
   if (!isResumableIntake(doc.status)) return false;
   const exp = doc.expiresAt;
   const at =
@@ -140,9 +140,9 @@ function expired(deps: Deps, doc: IntakeDoc): boolean {
  * txコールバック内で throw すると実Firestoreではtx全体が abort し
  * archived 書込も巻き戻るため、マーカーを返してcommit後に投げる。
  */
-const DRAFT_EXPIRED = { kind: "draft_expired" } as const;
+export const DRAFT_EXPIRED = { kind: "draft_expired" } as const;
 
-function draftExpiredError(): ApiError {
+export function draftExpiredError(): ApiError {
   return ApiError.precondition(
     "この下書きは保存期限を過ぎています。新しい問診を開始してください。",
   );

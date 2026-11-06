@@ -56,6 +56,7 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     ocrTasksQueue: undefined,
     ocrTasksTargetUrl: undefined,
     ocrTasksOidcSa: undefined,
+    intakeDraftTtlDays: 7,
     ...overrides,
   });
 }

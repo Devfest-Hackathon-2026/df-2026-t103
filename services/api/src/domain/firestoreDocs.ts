@@ -1,14 +1,18 @@
 import type {
   AccountStatus,
+  AnswerState,
   ConsentType,
   DeletionJobStatus,
   DeletionStepStatus,
+  IntakeStatus,
   MedicationConfirmationStatus,
   MedicationCurrentStatus,
   MedicationSourceType,
   OcrFailureCode,
   OcrJobStatus,
   OnboardingState,
+  QuestionGeneratedBy,
+  QuestionStatus,
   RegistrationOperationStatus,
   RegistrationSource,
   UploadSourcePurpose,
@@ -208,6 +212,68 @@ export interface MedicationDoc {
   /** 本人が確認済みにした時刻。 */
   userConfirmedAt?: unknown;
   createdAt: unknown;
+  updatedAt: unknown;
+}
+
+/** 04_DB設計書 §5.4 intakes。問診進行・楽観ロック revision を保持。 */
+export interface IntakeDoc {
+  patientUid: string;
+  status: IntakeStatus;
+  /** 初回症状入力（最大1000字暫定）。 */
+  initialSymptomText?: string;
+  /** 体の部位コード（FR-I02）。 */
+  bodyLocations: string[];
+  currentQuestionId?: string;
+  /** 発行済み質問数（暫定12上限）。 */
+  questionCount: number;
+  /** 楽観ロック用リビジョン。回答・遷移でインクリメント。 */
+  revision: number;
+  questionGraphVersion: string;
+  safetyRulesetVersion: string;
+  aiPolicyVersion: string;
+  /** 本番のAI承認設定に基づく。未承認なら固定質問のみ。 */
+  aiEnabledForThisIntake: boolean;
+  /** 安全ルールが検出した注意喚起フラグ（FR-I09）。 */
+  safetyFlags: string[];
+  /** 外部AI呼出しの識別子を分離した時刻。 */
+  lastProcessedAt?: unknown;
+  /** 下書きの短期保存期限（FR-I06）。 */
+  expiresAt: unknown;
+  createdAt: unknown;
+  updatedAt: unknown;
+  finalizedAt?: unknown;
+}
+
+/** intakes/{id}/questions/{id}。AI発行質問も含めたスナップショット。 */
+export interface QuestionDoc {
+  stepIndex: number;
+  questionText: string;
+  /** 収集トピック（onset_timing 等）。重複検査に使う。 */
+  topic: string;
+  options: Array<{ code: string; label: string }>;
+  generatedBy: QuestionGeneratedBy;
+  /** AI使用時のモデル/プロンプト版。APIキー・患者内容は含めない。 */
+  modelVersion?: string;
+  /** 質問バージョン。再発行で+1。 */
+  questionRevision: number;
+  status: QuestionStatus;
+  createdAt: unknown;
+}
+
+/** intakes/{id}/answers/{questionId}（質問1件=回答1件、編集は上書き）。 */
+export interface AnswerDoc {
+  questionId: string;
+  /** 表示時の質問版（stale回答の検出用）。 */
+  questionRevision: number;
+  stepIndex: number;
+  /** 設問に存在するコードのみ。 */
+  selectedCodes: string[];
+  /** 患者の原文。空文字は未回答と混同しない（null保持）。 */
+  freeText?: string | null;
+  answerState: AnswerState;
+  /** 初期は patient のみ。 */
+  answerSource: "patient";
+  answeredAt: unknown;
   updatedAt: unknown;
 }
 

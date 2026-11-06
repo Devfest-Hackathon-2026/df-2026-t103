@@ -45,6 +45,9 @@ const envSchema = z.object({
   OCR_TASKS_TARGET_URL: z.string().optional(),
   /** タスクOIDC発行用サービスアカウント。 */
   OCR_TASKS_OIDC_SA: z.string().optional(),
+
+  /** 下書き問診の保存日数（FR-I06 短期）。 */
+  INTAKE_DRAFT_TTL_DAYS: z.coerce.number().int().positive().default(7),
 });
 
 export type AppConfig = Readonly<{
@@ -79,6 +82,7 @@ export type AppConfig = Readonly<{
   ocrTasksQueue: string | undefined;
   ocrTasksTargetUrl: string | undefined;
   ocrTasksOidcSa: string | undefined;
+  intakeDraftTtlDays: number;
 }>;
 
 const DUMMY_SECRETS = new Set(["", "change-me-local-dev"]);
@@ -135,5 +139,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ocrTasksQueue: parsed.OCR_TASKS_QUEUE,
     ocrTasksTargetUrl: parsed.OCR_TASKS_TARGET_URL,
     ocrTasksOidcSa: parsed.OCR_TASKS_OIDC_SA,
+    intakeDraftTtlDays: parsed.INTAKE_DRAFT_TTL_DAYS,
   });
 }

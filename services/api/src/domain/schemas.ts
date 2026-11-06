@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { UPLOAD_ALLOWED_MIME_TYPES } from "./uploads.js";
+import { BODY_LOCATIONS, INTAKE_SYMPTOM_MAX_CHARS } from "./intake.js";
 
 const KANA_PATTERN = /^[ァ-ヶー・\s]+$/u;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -247,3 +248,61 @@ export const medicationPatchSchema = z
     message: "更新する項目を指定してください。",
   });
 export type MedicationPatchBody = z.infer<typeof medicationPatchSchema>;
+
+/** API-009 POST /intakes。 */
+export const intakeCreateSchema = z
+  .object({
+    questionnaireTemplateVersion: z.string().trim().max(50).optional(),
+    locale: z.string().trim().max(10).optional(),
+  })
+  .strict();
+export type IntakeCreateBody = z.infer<typeof intakeCreateSchema>;
+
+/** API-011 POST /intakes/{id}/symptoms（FR-I01/I02）。 */
+export const intakeSymptomsSchema = z
+  .object({
+    initialSymptomText: z
+      .string()
+      .max(
+        INTAKE_SYMPTOM_MAX_CHARS,
+        `症状は${INTAKE_SYMPTOM_MAX_CHARS}文字以内で入力してください。`,
+      ),
+    bodyLocations: z
+      .array(z.enum(BODY_LOCATIONS))
+      .max(BODY_LOCATIONS.length)
+      .default([]),
+    expectedIntakeRevision: z.number().int().min(1),
+  })
+  .strict();
+export type IntakeSymptomsBody = z.infer<typeof intakeSymptomsSchema>;
+
+/**
+ * API-013 POST /intakes/{id}/answers。
+ * 表示時の questionRevision と intake revision を必須化（stale検出, 04 §9.1）。
+ */
+export const intakeAnswerSchema = z
+  .object({
+    questionId: z.string().min(1).max(200),
+    questionRevision: z.number().int().min(1),
+    selectedCodes: z.array(z.string().min(1).max(50)).max(10).default([]),
+    freeText: z.string().max(2000).nullish(),
+    answerState: z.enum(["answered", "unknown", "skipped"]),
+    expectedIntakeRevision: z.number().int().min(1),
+  })
+  .strict();
+export type IntakeAnswerBody = z.infer<typeof intakeAnswerSchema>;
+
+/** API-014 PATCH /answers/{answerId} — answers の docId は questionId。 */
+export const intakeAnswerPatchSchema = z
+  .object({
+    questionRevision: z.number().int().min(1),
+    selectedCodes: z.array(z.string().min(1).max(50)).max(10).optional(),
+    freeText: z.string().max(2000).nullable().optional(),
+    answerState: z.enum(["answered", "unknown", "skipped"]).optional(),
+    expectedIntakeRevision: z.number().int().min(1),
+  })
+  .strict()
+  .refine((v) => v.selectedCodes !== undefined || v.freeText !== undefined || v.answerState !== undefined, {
+    message: "更新する項目を指定してください。",
+  });
+export type IntakeAnswerPatchBody = z.infer<typeof intakeAnswerPatchSchema>;

@@ -19,6 +19,7 @@ import { requestHash, runIdempotent } from "../lib/idempotency.js";
 import { audit, auditUidHash } from "../lib/audit.js";
 import { activeUploadsQuery, getUpload } from "../repos/uploads.js";
 import { queryDocs } from "../repos/helpers.js";
+import { latestOcrJobForUpload } from "../repos/ocrJobs.js";
 
 export interface InitUploadResult {
   uploadId: string;
@@ -348,11 +349,19 @@ export async function getUploadProcessing(
   if (!upload || upload.patientUid !== params.uid) {
     throw ApiError.notFound("アップロードが見つかりません。");
   }
+  const job = await latestOcrJobForUpload(deps.db, params.uploadId);
   return {
     uploadId: params.uploadId,
     status: upload.status,
-    // OCRジョブの配線は ocr-worker issue で追加する
-    ocrJob: null,
+    // 非PHIのみ返す: 患者識別子・薬剤名・OCR本文は含めない（FR-O05, 04 §6.2）
+    ocrJob: job
+      ? {
+          jobId: job.id,
+          status: job.data.status,
+          errorCode: job.data.errorCode,
+          candidateCount: job.data.candidates.length,
+        }
+      : null,
   };
 }
 

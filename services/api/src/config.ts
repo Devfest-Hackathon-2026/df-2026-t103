@@ -35,6 +35,14 @@ const envSchema = z.object({
   UPLOAD_MAX_ACTIVE: z.coerce.number().int().positive().default(20),
   UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().max(3600).default(900),
   UPLOAD_DOC_TTL_DAYS: z.coerce.number().int().positive().default(30),
+
+  OCR_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
+  OCR_TASKS_LOCATION: z.string().default("asia-northeast1"),
+  OCR_TASKS_QUEUE: z.string().optional(),
+  /** OCRタスクが叩くAPIの外部URL（Cloud Run URL）。未設定時はキュー無効。 */
+  OCR_TASKS_TARGET_URL: z.string().optional(),
+  /** タスクOIDC発行用サービスアカウント。 */
+  OCR_TASKS_OIDC_SA: z.string().optional(),
 });
 
 export type AppConfig = Readonly<{
@@ -62,6 +70,11 @@ export type AppConfig = Readonly<{
   uploadUrlTtlSeconds: number;
   /** uploadsドキュメントの保管日数（FR-M06）。 */
   uploadDocTtlDays: number;
+  ocrMaxAttempts: number;
+  ocrTasksLocation: string;
+  ocrTasksQueue: string | undefined;
+  ocrTasksTargetUrl: string | undefined;
+  ocrTasksOidcSa: string | undefined;
 }>;
 
 const DUMMY_SECRETS = new Set(["", "change-me-local-dev"]);
@@ -112,5 +125,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     uploadMaxActive: parsed.UPLOAD_MAX_ACTIVE,
     uploadUrlTtlSeconds: parsed.UPLOAD_URL_TTL_SECONDS,
     uploadDocTtlDays: parsed.UPLOAD_DOC_TTL_DAYS,
+    ocrMaxAttempts: parsed.OCR_MAX_ATTEMPTS,
+    ocrTasksLocation: parsed.OCR_TASKS_LOCATION,
+    ocrTasksQueue: parsed.OCR_TASKS_QUEUE,
+    ocrTasksTargetUrl: parsed.OCR_TASKS_TARGET_URL,
+    ocrTasksOidcSa: parsed.OCR_TASKS_OIDC_SA,
   });
 }

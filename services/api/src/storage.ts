@@ -88,5 +88,11 @@ export function createStorageGateway(
       const [buf] = await file.download({ start: 0, end: maxBytes - 1 });
       return new Uint8Array(buf);
     },
+
+    async readObject(bucket, objectPath) {
+      const file = storage.bucket(bucket).file(objectPath);
+      const [buf] = await file.download();
+      return new Uint8Array(buf);
+    },
   };
 }

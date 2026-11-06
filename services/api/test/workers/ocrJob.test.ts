@@ -1,0 +1,340 @@
+import { describe, expect, it } from "vitest";
+import { makeTestDeps, type TestDeps } from "../helpers/deps.js";
+import {
+  authHeader,
+  buildTestApp,
+  seedAccount,
+  seedCurrentConsents,
+  seedLegalDocuments,
+} from "../helpers/app.js";
+import { createOcrJobForUpload } from "../../src/services/ocr.js";
+import { OcrWorker } from "../../src/workers/ocrJob.js";
+import type {
+  OcrJobDoc,
+  UploadDoc,
+} from "../../src/domain/firestoreDocs.js";
+import type { OcrCandidate } from "../../src/domain/ocr.js";
+
+const UID = "u-ocr-1";
+const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+
+async function seedUpload(
+  deps: TestDeps,
+  uploadId: string,
+  status: UploadDoc["status"] = "uploaded",
+  mimeType = "image/jpeg",
+): Promise<UploadDoc> {
+  const doc: UploadDoc = {
+    patientUid: UID,
+    storageBucket: "test-bucket",
+    objectPath: `patient-uploads/${UID}/${uploadId}/original`,
+    mimeType,
+    bytes: JPEG_BYTES.length,
+    sha256: "a".repeat(64),
+    status,
+    sourcePurpose: "prescription_photo",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    expiresAt: new Date(Date.now() + 3600_000),
+  };
+  await deps.db.doc(`uploads/${uploadId}`).set(doc as unknown as Record<string, unknown>);
+  return doc;
+}
+
+async function getJob(deps: TestDeps, jobId: string): Promise<OcrJobDoc> {
+  const snap = await deps.db.doc(`ocrJobs/${jobId}`).get();
+  return snap.data() as OcrJobDoc;
+}
+
+const CANDIDATE: OcrCandidate = {
+  candidateId: "c1",
+  name: "ロキソプロフェンNa錠",
+  strength: "60mg",
+  dosage: "1日3回毎食後",
+  quantity: "7日分",
+  prescribedAt: "2026-04-01",
+  confidence: 0.82,
+  evidenceSpan: { start: 10, end: 42 },
+};
+
+describe("createOcrJobForUpload（complete後フック）", () => {
+  it("queued ジョブを作成してキュー投入する", async () => {
+    const deps = makeTestDeps();
+    const { jobId, created } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    expect(created).toBe(true);
+    expect(deps.fakeOcrQueue.enqueued).toEqual([jobId]);
+    const job = await getJob(deps, jobId);
+    expect(job.status).toBe("queued");
+    expect(job.patientUid).toBe(UID);
+  });
+
+  it("進行中ジョブがあれば再利用する（冪等）", async () => {
+    const deps = makeTestDeps();
+    const first = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const second = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    expect(second.created).toBe(false);
+    expect(second.jobId).toBe(first.jobId);
+    expect(deps.fakeOcrQueue.enqueued).toHaveLength(1);
+  });
+
+  it("enqueue 失敗でもジョブは queued のまま残る", async () => {
+    const deps = makeTestDeps();
+    deps.fakeOcrQueue.failNext = true;
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    expect((await getJob(deps, jobId)).status).toBe("queued");
+  });
+});
+
+describe("OcrWorker.runJob", () => {
+  it("候補を抽出して succeeded。候補は確認前のまま保存される", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.result = {
+      ok: true,
+      candidates: [CANDIDATE],
+      extractedText: "処方箋テキスト…",
+    };
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const worker = new OcrWorker(deps);
+    const res = await worker.runJob(jobId);
+    expect(res.outcome).toBe("succeeded");
+    const job = await getJob(deps, jobId);
+    expect(job.status).toBe("succeeded");
+    expect(job.candidates).toHaveLength(1);
+    // 候補は evidence 付き・確定フィールドなし（VAL-013: 自動確定しない）
+    expect(job.candidates[0]).toEqual(CANDIDATE);
+    expect(job.extractedText).toBe("処方箋テキスト…");
+    expect(job.errorCode).toBeNull();
+  });
+
+  it("終端失敗（not_prescription）は failed + errorCode", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.result = { ok: false, code: "not_prescription" };
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const res = await new OcrWorker(deps).runJob(jobId);
+    expect(res.outcome).toBe("failed_terminal");
+    const job = await getJob(deps, jobId);
+    expect(job.status).toBe("failed");
+    expect(job.errorCode).toBe("not_prescription");
+  });
+
+  it("再試行可能失敗は queued に戻り、上限到達で failed になる", async () => {
+    const deps = makeTestDeps({ ocrMaxAttempts: 2 });
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.shouldThrow = true;
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const worker = new OcrWorker(deps);
+    const r1 = await worker.runJob(jobId);
+    expect(r1.outcome).toBe("failed_retryable");
+    expect((await getJob(deps, jobId)).status).toBe("queued");
+    expect((await getJob(deps, jobId)).attempt).toBe(1);
+    const r2 = await worker.runJob(jobId);
+    expect(r2.outcome).toBe("failed_terminal");
+    const job = await getJob(deps, jobId);
+    expect(job.status).toBe("failed");
+    expect(job.errorCode).toBe("engine_unavailable");
+  });
+
+  it("PDF 6頁超は page_limit_exceeded（暫定上限5頁）", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1", "uploaded", "application/pdf");
+    const pages = Array.from({ length: 6 }, (_, i) =>
+      `obj${i}<</Type /Page>>`,
+    ).join("\n");
+    deps.fakeStorage.seedObject(
+      "test-bucket",
+      `patient-uploads/${UID}/up-1/original`,
+      new TextEncoder().encode(`%PDF-1.4\n${pages}`),
+      "application/pdf",
+    );
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const res = await new OcrWorker(deps).runJob(jobId);
+    expect(res.outcome).toBe("failed_terminal");
+    const job = await getJob(deps, jobId);
+    expect(job.errorCode).toBe("page_limit_exceeded");
+    expect(deps.fakeOcrEngine.calls).toBe(0); // 前処理で落ちてエンジン未呼出
+  });
+
+  it("upload が uploaded でなければ upload_invalid", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1", "pending");
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const res = await new OcrWorker(deps).runJob(jobId);
+    expect(res.outcome).toBe("failed_terminal");
+    expect((await getJob(deps, jobId)).errorCode).toBe("upload_invalid");
+  });
+
+  it("終端ジョブの再実行は冪等", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1");
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const worker = new OcrWorker(deps);
+    await worker.runJob(jobId);
+    const again = await worker.runJob(jobId);
+    expect(again.outcome).toBe("already_terminal");
+    expect(deps.fakeOcrEngine.calls).toBe(1);
+  });
+
+  it("不存在ジョブは not_found", async () => {
+    const deps = makeTestDeps();
+    const res = await new OcrWorker(deps).runJob("no-such");
+    expect(res.outcome).toBe("not_found");
+  });
+
+  it("extractedText は上限で切り詰めて証跡保存", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.result = {
+      ok: true,
+      candidates: [],
+      extractedText: "x".repeat(30_000),
+    };
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    await new OcrWorker(deps).runJob(jobId);
+    const job = await getJob(deps, jobId);
+    expect(job.extractedText).toHaveLength(20_000);
+    expect(job.extractedTextTruncated).toBe(true);
+  });
+});
+
+describe("processing・internal run ルート配線", () => {
+  it("complete 後に GET processing が ocrJob を返す（非PHIのみ）", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    await seedAccount(deps, UID);
+    await seedCurrentConsents(deps, UID);
+    const app = buildTestApp(deps);
+
+    const init = await app.inject({
+      method: "POST",
+      url: "/v1/uploads/init",
+      headers: { ...authHeader(UID), "idempotency-key": "i-ocr" },
+      payload: {
+        mimeType: "image/jpeg",
+        bytes: JPEG_BYTES.length,
+        sha256: "a".repeat(64),
+        sourcePurpose: "prescription_photo",
+      },
+    });
+    const uploadId = init.json().uploadId;
+    const doc = (
+      await deps.db.doc(`uploads/${uploadId}`).get()
+    ).data() as UploadDoc;
+    deps.fakeStorage.seedObject(
+      doc.storageBucket,
+      doc.objectPath,
+      JPEG_BYTES,
+      "image/jpeg",
+    );
+    await app.inject({
+      method: "POST",
+      url: `/v1/uploads/${uploadId}/complete`,
+      headers: { ...authHeader(UID), "idempotency-key": "c-ocr" },
+      payload: {},
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/v1/uploads/${uploadId}/processing`,
+      headers: authHeader(UID),
+    });
+    expect(res.statusCode).toBe(200);
+    const job = res.json().ocrJob;
+    expect(job).not.toBeNull();
+    expect(job.status).toBe("queued");
+    expect(job.candidateCount).toBe(0);
+    // 非PHI: jobId/status/errorCode/candidateCount のみ
+    expect(Object.keys(job).sort()).toEqual([
+      "candidateCount",
+      "errorCode",
+      "jobId",
+      "status",
+    ]);
+    await app.close();
+  });
+
+  it("internal run エンドポイントがジョブを実行する", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.result = { ok: true, candidates: [CANDIDATE] };
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/internal/jobs/ocr/${jobId}/run`,
+      headers: { "x-internal-job-token": "test-internal-token" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().outcome).toBe("succeeded");
+    const job = await getJob(deps, jobId);
+    expect(job.status).toBe("succeeded");
+    await app.close();
+  });
+
+  it("再試行可能失敗は 500（Tasks 再送用）", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.shouldThrow = true;
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/internal/jobs/ocr/${jobId}/run`,
+      headers: { "x-internal-job-token": "test-internal-token" },
+    });
+    expect(res.statusCode).toBe(500);
+    expect((await getJob(deps, jobId)).status).toBe("queued");
+    await app.close();
+  });
+
+  it("internal トークンなしは 403", async () => {
+    const deps = makeTestDeps();
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/internal/jobs/ocr/some-id/run",
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
+  });
+});

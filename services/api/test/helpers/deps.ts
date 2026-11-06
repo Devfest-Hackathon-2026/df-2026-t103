@@ -5,10 +5,13 @@ import { ManualClock } from "../../src/lib/clock.js";
 import { RateLimiter } from "../../src/lib/rateLimit.js";
 import { MemoryFirestore } from "./memoryFirestore.js";
 import { SignatureContentScanner } from "../../src/lib/contentScan.js";
+import { createOcrJobForUpload } from "../../src/services/ocr.js";
 import {
   FakeAppCheckVerifier,
   FakeAuthAdmin,
   FakeAuthVerifier,
+  FakeOcrEngine,
+  FakeOcrTaskQueue,
   FakeStorageGateway,
 } from "./fakes.js";
 
@@ -21,6 +24,8 @@ export interface TestDeps extends Deps {
   fakeAuthAdmin: FakeAuthAdmin;
   fakeAppCheck: FakeAppCheckVerifier;
   fakeStorage: FakeStorageGateway;
+  fakeOcrEngine: FakeOcrEngine;
+  fakeOcrQueue: FakeOcrTaskQueue;
 }
 
 export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
@@ -45,6 +50,11 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     uploadMaxActive: 20,
     uploadUrlTtlSeconds: 900,
     uploadDocTtlDays: 30,
+    ocrMaxAttempts: 3,
+    ocrTasksLocation: "asia-northeast1",
+    ocrTasksQueue: undefined,
+    ocrTasksTargetUrl: undefined,
+    ocrTasksOidcSa: undefined,
     ...overrides,
   });
 }
@@ -59,9 +69,11 @@ export function makeTestDeps(
   const fakeAuthAdmin = new FakeAuthAdmin();
   const fakeAppCheck = new FakeAppCheckVerifier();
   const fakeStorage = new FakeStorageGateway();
+  const fakeOcrEngine = new FakeOcrEngine();
+  const fakeOcrQueue = new FakeOcrTaskQueue();
   const logger = pino({ level: "silent" });
 
-  return {
+  const deps: TestDeps = {
     config,
     db: memDb.asFirestore(),
     memDb,
@@ -70,6 +82,8 @@ export function makeTestDeps(
     appCheck: fakeAppCheck,
     storage: fakeStorage,
     contentScanner: new SignatureContentScanner(),
+    ocrEngine: fakeOcrEngine,
+    ocrQueue: fakeOcrQueue,
     rateLimiter: new RateLimiter(clock),
     clock,
     logger,
@@ -77,5 +91,13 @@ export function makeTestDeps(
     fakeAuthAdmin,
     fakeAppCheck,
     fakeStorage,
+    fakeOcrEngine,
+    fakeOcrQueue,
   };
+  deps.uploadCompletion = {
+    onUploadCompleted: async (p) => {
+      await createOcrJobForUpload(deps, p);
+    },
+  };
+  return deps;
 }

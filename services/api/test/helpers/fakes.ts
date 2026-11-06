@@ -6,10 +6,13 @@ import type {
 import type {
   AuthAdmin,
   ContentScanner,
+  OcrEngine,
+  OcrTaskQueue,
   StorageGateway,
   StoredObjectInfo,
   UploadUrlInstruction,
 } from "../../src/deps.js";
+import type { OcrEngineResult } from "../../src/domain/ocr.js";
 
 /** "token-<uid>" 形式のトークンを受理する検証フェイク。 */
 export class FakeAuthVerifier implements AuthVerifier {
@@ -214,6 +217,38 @@ export class FakeStorageGateway implements StorageGateway {
     const obj = this.objects.get(this.key(bucket, objectPath));
     if (!obj) throw new Error("storage/object-not-found");
     return obj.data.slice(0, maxBytes);
+  }
+
+  async readObject(bucket: string, objectPath: string): Promise<Uint8Array> {
+    const obj = this.objects.get(this.key(bucket, objectPath));
+    if (!obj) throw new Error("storage/object-not-found");
+    return obj.data;
+  }
+}
+
+export class FakeOcrEngine implements OcrEngine {
+  readonly name = "fake";
+  result: OcrEngineResult = { ok: true, candidates: [] };
+  calls = 0;
+  shouldThrow = false;
+
+  async extract(): Promise<OcrEngineResult> {
+    this.calls++;
+    if (this.shouldThrow) throw new Error("ocr/engine-threw");
+    return this.result;
+  }
+}
+
+export class FakeOcrTaskQueue implements OcrTaskQueue {
+  enqueued: string[] = [];
+  failNext = false;
+
+  async enqueueOcrJob(jobId: string): Promise<void> {
+    if (this.failNext) {
+      this.failNext = false;
+      throw new Error("tasks/enqueue-failed");
+    }
+    this.enqueued.push(jobId);
   }
 }
 

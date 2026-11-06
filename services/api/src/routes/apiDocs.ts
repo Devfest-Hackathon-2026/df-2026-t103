@@ -133,6 +133,20 @@ export const jobRunResultSchema = z.object({
   attemptCount: z.number().optional(),
 });
 
+export const ocrRunResultSchema = z.object({
+  jobId: z.string(),
+  outcome: z.enum([
+    "succeeded",
+    "failed_retryable",
+    "failed_terminal",
+    "already_running",
+    "already_terminal",
+    "not_found",
+  ]),
+  errorCode: z.string().optional(),
+  attemptCount: z.number().optional(),
+});
+
 export const scanResultSchema = z.object({
   scanned: z.number(),
   executed: z.number(),

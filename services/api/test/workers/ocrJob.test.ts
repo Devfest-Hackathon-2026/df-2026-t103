@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Timestamp } from "firebase-admin/firestore";
 import { makeTestDeps, type TestDeps } from "../helpers/deps.js";
 import {
   authHeader,
@@ -86,14 +87,36 @@ describe("createOcrJobForUpload（complete後フック）", () => {
     expect(deps.fakeOcrQueue.enqueued).toHaveLength(1);
   });
 
-  it("enqueue 失敗でもジョブは queued のまま残る", async () => {
+  it("enqueue 失敗でもジョブは queued のまま残り、次の呼び出しで回収される", async () => {
     const deps = makeTestDeps();
     deps.fakeOcrQueue.failNext = true;
     const { jobId } = await createOcrJobForUpload(deps, {
       uploadId: "up-1",
       patientUid: UID,
     });
-    expect((await getJob(deps, jobId)).status).toBe("queued");
+    const job = await getJob(deps, jobId);
+    expect(job.status).toBe("queued");
+    expect(job.dispatchState).toBe("pending");
+
+    // 後続呼び出し（complete冪等リプレイ等）で未投入ジョブを再投入する
+    const second = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    expect(second.jobId).toBe(jobId);
+    expect(second.created).toBe(false);
+    expect(deps.fakeOcrQueue.enqueued).toEqual([jobId]);
+    expect((await getJob(deps, jobId)).dispatchState).toBe("enqueued");
+  });
+
+  it("enqueue 済みジョブの再利用では再投入しない", async () => {
+    const deps = makeTestDeps();
+    const first = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    await createOcrJobForUpload(deps, { uploadId: "up-1", patientUid: UID });
+    expect(deps.fakeOcrQueue.enqueued).toEqual([first.jobId]);
   });
 });
 
@@ -210,6 +233,97 @@ describe("OcrWorker.runJob", () => {
     const deps = makeTestDeps();
     const res = await new OcrWorker(deps).runJob("no-such");
     expect(res.outcome).toBe("not_found");
+  });
+
+  it("リース有効な running ジョブは二重実行しない", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1");
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    // 他ワーカーがリース中の状態を再現
+    await deps.db.doc(`ocrJobs/${jobId}`).update({
+      status: "running",
+      attempt: 1,
+      claimOwner: "other-worker",
+      claimExpiresAt: Timestamp.fromMillis(
+        deps.clock.now().getTime() + 60_000,
+      ),
+    });
+    const res = await new OcrWorker(deps).runJob(jobId);
+    expect(res.outcome).toBe("already_running");
+    expect(deps.fakeOcrEngine.calls).toBe(0);
+  });
+
+  it("リース切れの running ジョブは回収して再実行する", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.result = { ok: true, candidates: [CANDIDATE] };
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    // ワーカーが中断しリースが切れた状態を再現
+    await deps.db.doc(`ocrJobs/${jobId}`).update({
+      status: "running",
+      attempt: 1,
+      claimOwner: "dead-worker",
+      claimExpiresAt: Timestamp.fromMillis(
+        deps.clock.now().getTime() - 1_000,
+      ),
+    });
+    const res = await new OcrWorker(deps).runJob(jobId);
+    expect(res.outcome).toBe("succeeded");
+    const job = await getJob(deps, jobId);
+    expect(job.status).toBe("succeeded");
+    expect(job.attempt).toBe(2);
+  });
+
+  it("リース切れかつ最終attemptの running は worker_interrupted で終端化", async () => {
+    const deps = makeTestDeps({ ocrMaxAttempts: 2 });
+    await seedUpload(deps, "up-1");
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    // attempt 上限到達済みで放棄された running（永遠に running のまま残る状態を防止）
+    await deps.db.doc(`ocrJobs/${jobId}`).update({
+      status: "running",
+      attempt: 2,
+      claimOwner: "dead-worker",
+      claimExpiresAt: Timestamp.fromMillis(
+        deps.clock.now().getTime() - 1_000,
+      ),
+    });
+    const res = await new OcrWorker(deps).runJob(jobId);
+    expect(res.outcome).toBe("already_terminal");
+    expect(res.errorCode).toBe("worker_interrupted");
+    const job = await getJob(deps, jobId);
+    expect(job.status).toBe("failed");
+    expect(job.errorCode).toBe("worker_interrupted");
+    expect(deps.fakeOcrEngine.calls).toBe(0);
+  });
+
+  it("claim 失効後の遅延完了は結果を上書きしない", async () => {
+    const deps = makeTestDeps({ ocrLeaseMs: 10 });
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.result = { ok: true, candidates: [CANDIDATE] };
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    // ワーカーAがclaim（リース10ms）→ リース切れ → ワーカーBが回収
+    const workerA = new OcrWorker(deps);
+    const runA = workerA.runJob(jobId); // claim → extract
+    await Promise.resolve();
+    const resA = await runA;
+    // A の実行が完走した場合は succeeded（完了前にBが走ることはない直列ケース）
+    expect(resA.outcome).toBe("succeeded");
+    // 遅延してBの重複実行が来ても terminal は上書きされない
+    const resB = await new OcrWorker(deps).runJob(jobId);
+    expect(resB.outcome).toBe("already_terminal");
+    expect((await getJob(deps, jobId)).status).toBe("succeeded");
   });
 
   it("extractedText は上限で切り詰めて証跡保存", async () => {

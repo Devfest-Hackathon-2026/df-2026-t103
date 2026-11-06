@@ -163,6 +163,12 @@ export interface OcrJobDoc {
   /** 証跡用 OCR生テキスト（上限で切り詰め）。 */
   extractedText?: string;
   extractedTextTruncated?: boolean;
+  /** 実行claimの所有トークン。結果書き込みは所有者のみ許可。 */
+  claimOwner?: string;
+  /** claimのリース期限。期限切れなら放棄とみなし回収可能。 */
+  claimExpiresAt?: unknown;
+  /** キュー投入状態。pending は enqueue 未完了（再投入で回収）。 */
+  dispatchState: "pending" | "enqueued";
   createdAt: unknown;
   startedAt?: unknown;
   finishedAt?: unknown;

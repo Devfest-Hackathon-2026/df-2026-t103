@@ -61,7 +61,8 @@ export type OcrFailureCode =
   | "indeterminate"
   | "engine_unavailable"
   | "page_limit_exceeded"
-  | "upload_invalid";
+  | "upload_invalid"
+  | "worker_interrupted";
 
 export type DeletionStepStatus = "pending" | "running" | "succeeded" | "failed";
 

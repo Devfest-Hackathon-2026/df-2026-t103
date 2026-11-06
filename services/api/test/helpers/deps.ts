@@ -51,6 +51,7 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     uploadUrlTtlSeconds: 900,
     uploadDocTtlDays: 30,
     ocrMaxAttempts: 3,
+    ocrLeaseMs: 300_000,
     ocrTasksLocation: "asia-northeast1",
     ocrTasksQueue: undefined,
     ocrTasksTargetUrl: undefined,

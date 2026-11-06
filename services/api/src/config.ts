@@ -37,6 +37,8 @@ const envSchema = z.object({
   UPLOAD_DOC_TTL_DAYS: z.coerce.number().int().positive().default(30),
 
   OCR_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
+  /** OCR実行claimのリース(ms)。期限切れの running は放棄とみなし回収する。 */
+  OCR_LEASE_MS: z.coerce.number().int().positive().default(300_000),
   OCR_TASKS_LOCATION: z.string().default("asia-northeast1"),
   OCR_TASKS_QUEUE: z.string().optional(),
   /** OCRタスクが叩くAPIの外部URL（Cloud Run URL）。未設定時はキュー無効。 */
@@ -71,6 +73,8 @@ export type AppConfig = Readonly<{
   /** uploadsドキュメントの保管日数（FR-M06）。 */
   uploadDocTtlDays: number;
   ocrMaxAttempts: number;
+  /** OCR実行claimのリース(ms)。 */
+  ocrLeaseMs: number;
   ocrTasksLocation: string;
   ocrTasksQueue: string | undefined;
   ocrTasksTargetUrl: string | undefined;
@@ -126,6 +130,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     uploadUrlTtlSeconds: parsed.UPLOAD_URL_TTL_SECONDS,
     uploadDocTtlDays: parsed.UPLOAD_DOC_TTL_DAYS,
     ocrMaxAttempts: parsed.OCR_MAX_ATTEMPTS,
+    ocrLeaseMs: parsed.OCR_LEASE_MS,
     ocrTasksLocation: parsed.OCR_TASKS_LOCATION,
     ocrTasksQueue: parsed.OCR_TASKS_QUEUE,
     ocrTasksTargetUrl: parsed.OCR_TASKS_TARGET_URL,

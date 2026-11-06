@@ -111,8 +111,13 @@ export function registerInternalJobRoutes(
       if (result.outcome === "not_found") {
         throw ApiError.notFound("OCRジョブが見つかりません。");
       }
-      // Cloud Tasks の再送に任せるため、再試行可能失敗は 5xx で返す
-      if (result.outcome === "failed_retryable") {
+      // Cloud Tasks の再送に任せるため、再試行可能失敗とリース中の
+      // already_running は 5xx で返す。200だとタスクが消費され、実行中
+      // ワーカーが中断した際にリース切れ後の回収配送が来なくなる。
+      if (
+        result.outcome === "failed_retryable" ||
+        result.outcome === "already_running"
+      ) {
         throw new ApiError(500, "INTERNAL", "OCRジョブを再試行します。", {
           retryable: true,
         });

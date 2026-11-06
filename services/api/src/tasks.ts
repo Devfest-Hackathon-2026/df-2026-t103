@@ -23,9 +23,9 @@ export class CloudTasksOcrQueue implements OcrTaskQueue {
     const url =
       `https://cloudtasks.googleapis.com/v2/projects/${projectId}` +
       `/locations/${ocrTasksLocation}/queues/${ocrTasksQueue}/tasks`;
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-    };
+    // ボディなしPOSTなので content-type は付けない（application/json
+    // 宣言のみだと Fastify が空JSONボディを拒否しタスクが実行されない）。
+    const headers: Record<string, string> = {};
     if (this.config.internalJobToken) {
       headers["x-internal-job-token"] = this.config.internalJobToken;
     }

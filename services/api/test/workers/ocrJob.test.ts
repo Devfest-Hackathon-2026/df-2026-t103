@@ -422,6 +422,33 @@ describe("processing・internal run ルート配線", () => {
     await app.close();
   });
 
+  it("リース中の already_running は 500（Tasks 再送用）", async () => {
+    const deps = makeTestDeps();
+    await seedUpload(deps, "up-1");
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    // 他ワーカーのリース有効状態を再現
+    await deps.db.doc(`ocrJobs/${jobId}`).update({
+      status: "running",
+      attempt: 1,
+      claimOwner: "other-worker",
+      claimExpiresAt: Timestamp.fromMillis(
+        deps.clock.now().getTime() + 60_000,
+      ),
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/internal/jobs/ocr/${jobId}/run`,
+      headers: { "x-internal-job-token": "test-internal-token" },
+    });
+    // 200だとタスクが消費され回収配送が来ないため 5xx を返す
+    expect(res.statusCode).toBe(500);
+    await app.close();
+  });
+
   it("再試行可能失敗は 500（Tasks 再送用）", async () => {
     const deps = makeTestDeps();
     await seedUpload(deps, "up-1");

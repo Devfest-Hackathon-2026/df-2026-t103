@@ -249,14 +249,36 @@ export async function submitSymptoms(
     if (doc.status !== "draft" && doc.status !== "questioning") {
       assertIntakeTransition(doc.status, "questioning");
     }
-    tx.update(ref, {
+    // 主訴・部位の変更は全質問の前提を変え得るため、内容が変わった場合は
+    // 既出の active/answered 質問を全て無効化し回答を除去する（04 §5.4）。
+    // read は全て write より先（Firestore tx 制約）。
+    const symptomChanged =
+      doc.initialSymptomText !== text ||
+      JSON.stringify([...doc.bodyLocations].sort()) !==
+        JSON.stringify([...body.bodyLocations].sort());
+    const downstream = symptomChanged
+      ? await tx.get(
+          deps.db.collection(`intakes/${params.intakeId}/questions`),
+        )
+      : null;
+    const intakeUpdate: Record<string, unknown> = {
       status: "questioning",
       initialSymptomText: text,
       bodyLocations: body.bodyLocations,
       safetyFlags: flags,
       revision: doc.revision + 1,
       updatedAt: nowTs(deps),
-    });
+    };
+    if (
+      downstream !== null &&
+      invalidateDownstream(tx, deps, params.intakeId, -1, downstream)
+    ) {
+      // 問診を実質やり直すため、発行済み数と現在質問をリセットする
+      // （このままでは上限到達で代替質問を出題できない）
+      intakeUpdate.questionCount = 0;
+      intakeUpdate.currentQuestionId = null;
+    }
+    tx.update(ref, intakeUpdate);
     return {
       intakeId: params.intakeId,
       status: "questioning" as IntakeStatus,

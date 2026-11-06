@@ -455,6 +455,103 @@ describe("intake domain (#9)", () => {
     expect(a2doc.exists).toBe(false);
   });
 
+  it("主訴を変更すると既出質問と回答を全て無効化し再出題できる", async () => {
+    const deps = makeTestDeps();
+    const intakeId = await makeQuestioning(deps);
+    const q1 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: 2,
+      question: {
+        questionText: "頭痛の程度は？",
+        topic: "severity",
+        options: [{ code: "A", label: "強い" }],
+        generatedBy: "fixed_template",
+      },
+    });
+    const a1 = await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: q1.questionId,
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        answerState: "answered",
+        expectedIntakeRevision: q1.intakeRevision,
+      },
+    });
+    // 頭痛 → 腹痛 へ主訴を変更（質問はすべて新しい文脈で出し直す必要がある）
+    const r = await submitSymptoms(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        initialSymptomText: "昨日から腹痛があります",
+        bodyLocations: ["abdomen"],
+        expectedIntakeRevision: a1.intakeRevision,
+      },
+    });
+    expect(r.status).toBe("questioning");
+    const qdoc = (
+      await deps.memDb
+        .doc(`intakes/${intakeId}/questions/${q1.questionId}`)
+        .get()
+    ).data() as QuestionDoc | undefined;
+    expect(qdoc?.status).toBe("invalidated");
+    const adoc = await deps.memDb
+      .doc(`intakes/${intakeId}/answers/${q1.questionId}`)
+      .get();
+    expect(adoc.exists).toBe(false);
+    const intake = (await deps.memDb.doc(`intakes/${intakeId}`).get()).data() as
+      | IntakeDoc
+      | undefined;
+    expect(intake?.questionCount).toBe(0);
+    expect(intake?.currentQuestionId).toBeNull();
+    // 再出題できる
+    const q2 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: r.revision,
+      question: {
+        questionText: "腹痛はいつから？",
+        topic: "onset_timing",
+        options: [{ code: "A", label: "昨日" }],
+        generatedBy: "fixed_template",
+      },
+    });
+    expect(q2.intakeRevision).toBe(r.revision + 1);
+  });
+
+  it("主訴が同じ内容の再送信では質問・回答を維持する", async () => {
+    const deps = makeTestDeps();
+    const intakeId = await makeQuestioning(deps);
+    const q1 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: 2,
+      question: {
+        questionText: "q1",
+        topic: "t1",
+        options: [{ code: "A", label: "a" }],
+        generatedBy: "fixed_template",
+      },
+    });
+    await submitSymptoms(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        initialSymptomText: "3日前から頭痛がします",
+        bodyLocations: ["head"],
+        expectedIntakeRevision: q1.intakeRevision,
+      },
+    });
+    const qdoc = (
+      await deps.memDb
+        .doc(`intakes/${intakeId}/questions/${q1.questionId}`)
+        .get()
+    ).data() as QuestionDoc | undefined;
+    expect(qdoc?.status).toBe("active");
+  });
+
   it("saveAnswer で既回答を置換した場合も後続分岐を再評価する", async () => {
     const deps = makeTestDeps();
     const intakeId = await makeQuestioning(deps);

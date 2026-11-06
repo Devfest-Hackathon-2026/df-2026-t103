@@ -32,6 +32,12 @@ nix develop --command bash apps/patient/preview.sh symptom
 
 Android Emulator での確認には別途 Android SDK、エミュレータとシステムイメージ、仮想化対応環境が必要です。iOS のエミュレータやビルドには macOS と Xcode が必要です。
 
+症状入力の独立プレビューは Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5052 を開いて確認できます。確認後は Ctrl+C で停止します。Nix は不要です。入力は画面内だけに保持し、保存・送信しません。実際の症状や個人情報ではなく架空の内容を使用してください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5052 -t lib/demo_symptom_preview.dart
+```
+
 ホーム画面の見た目を単独で確認するには、Flutter SDK を用意し、`apps/patient` から以下を実行してブラウザで http://localhost:5051 を開きます。確認後は Ctrl+C で停止します。Nix は不要です。このプレビューは認証や API に接続せず、各操作は未実装です。
 
 ```sh

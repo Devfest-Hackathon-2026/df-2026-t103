@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { hasZodFastifySchemaValidationErrors } from "fastify-type-provider-zod";
 import { type ZodError } from "zod";
 import { resolveRequestId } from "./requestId.js";
 
@@ -155,6 +156,14 @@ export function sendError(
   const clientStatus = fastifyClientErrorStatus(err);
   if (isApiError(err)) {
     apiError = err;
+  } else if (hasZodFastifySchemaValidationErrors(err)) {
+    // fastify-type-provider-zod の validatorCompiler が返すルートスキーマ検証エラー
+    apiError = ApiError.validation(
+      err.validation.map((issue) => ({
+        field: issue.instancePath.replace(/^\//u, "").replace(/\//gu, ".") || "(root)",
+        message: issue.message ?? "不正な値です。",
+      })),
+    );
   } else if (clientStatus !== undefined) {
     // JSONパース失敗・非対応Content-Type・ボディ超過等のフレームワーク400系は
     // 500ではなく元のステータスを保持した標準エラー形式で返す

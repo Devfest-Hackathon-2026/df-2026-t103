@@ -24,6 +24,7 @@ make down     # 全停止
 
 - Firebase Emulator UI: http://localhost:4000
 - API ヘルスチェック: `curl http://localhost:8080/healthz`
+- API 仕様（Swagger UI）: http://localhost:8080/docs （OpenAPI JSON は `/docs/json`。ローカル既定で有効、本番は `API_DOCS_ENABLED` で制御）
 - アプリ実装（`apps/hospital`/`apps/patient`/`services/api`）を追加すると `make up` が自動で起動対象に含めます
 - 詳しい手順・ツール導入・個別停止は [docs/07_環境構築手順書](docs/07_環境構築手順書.md) と [docs/08_Docker_Makefile運用](docs/08_Docker_Makefile運用.md)
 

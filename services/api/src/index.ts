@@ -1,10 +1,28 @@
 import pino from "pino";
+import { FieldValue } from "firebase-admin/firestore";
 import { loadConfig } from "./config.js";
 import { loggerOptions } from "./logger.js";
 import { initFirebase } from "./firebase.js";
 import { buildApp } from "./app.js";
 import type { Deps } from "./deps.js";
 import { systemClock } from "./lib/clock.js";
+import { RateLimiter } from "./lib/rateLimit.js";
+import { AdminAuthVerifier, createAppCheckVerifier } from "./auth/verifiers.js";
+import { DEV_LEGAL_DOCUMENTS } from "./domain/legalDocuments.js";
+
+/** エミュレータ環境で appConfigs/publicLegalVersion が無ければ開発用文書をシードする。 */
+async function seedDevLegalDocuments(deps: Deps): Promise<void> {
+  const ref = deps.db.doc("appConfigs/publicLegalVersion");
+  const snap = await ref.get();
+  if (snap.exists) return;
+  await ref.set({
+    ...DEV_LEGAL_DOCUMENTS,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  deps.logger.warn(
+    "seeded dev legal documents into appConfigs/publicLegalVersion (emulator only)",
+  );
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -14,9 +32,26 @@ async function main(): Promise<void> {
   const deps: Deps = {
     config,
     db: firebase.firestore,
+    auth: new AdminAuthVerifier(firebase.auth),
+    authAdmin: firebase.auth,
+    appCheck: createAppCheckVerifier(config, firebase.appCheck),
+    storage: {
+      async deleteObject(bucket, objectPath, generation) {
+        const file = firebase.storage.bucket(bucket).file(objectPath);
+        await file.delete({ ignoreNotFound: true });
+        void generation; // generation一致確認はエミュレータ非対応のため省略（本運用で再検討）
+      },
+    },
+    rateLimiter: new RateLimiter(systemClock),
     clock: systemClock,
     logger,
   };
+
+  if (config.emulator) {
+    await seedDevLegalDocuments(deps).catch((err) =>
+      logger.warn({ err }, "dev legal document seed skipped"),
+    );
+  }
 
   const app = buildApp(deps);
   await app.listen({ port: config.port, host: config.host });

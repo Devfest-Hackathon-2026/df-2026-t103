@@ -19,6 +19,7 @@ const envSchema = z.object({
   SERVER_HMAC_SECRET: z.string().default("change-me-local-dev"),
   APP_CHECK_MODE: z.enum(["enforce", "permissive"]).optional(),
   INTERNAL_JOB_TOKEN: z.string().optional(),
+  API_DOCS_ENABLED: z.enum(["true", "false"]).optional(),
 
   REAUTH_WINDOW_SECONDS: z.coerce.number().int().positive().default(900),
   DELETION_GRACE_PERIOD_DAYS: z.coerce.number().int().min(0).default(30),
@@ -38,6 +39,7 @@ export type AppConfig = Readonly<{
   hmacSecret: string;
   appCheckMode: "enforce" | "permissive";
   internalJobToken: string | undefined;
+  apiDocsEnabled: boolean;
   reauthWindowSeconds: number;
   deletionGracePeriodDays: number;
   deletionJobMaxAttempts: number;
@@ -80,6 +82,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     hmacSecret: parsed.SERVER_HMAC_SECRET,
     appCheckMode,
     internalJobToken: parsed.INTERNAL_JOB_TOKEN,
+    apiDocsEnabled:
+      parsed.API_DOCS_ENABLED !== undefined
+        ? parsed.API_DOCS_ENABLED === "true"
+        : emulator || parsed.NODE_ENV !== "production",
     reauthWindowSeconds: parsed.REAUTH_WINDOW_SECONDS,
     deletionGracePeriodDays: parsed.DELETION_GRACE_PERIOD_DAYS,
     deletionJobMaxAttempts: parsed.DELETION_JOB_MAX_ATTEMPTS,

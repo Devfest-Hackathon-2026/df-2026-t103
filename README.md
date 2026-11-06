@@ -10,7 +10,7 @@ DevFest 社会課題.exeの開発用リポジトリです。
 |---|---|---|
 | 患者アプリ（Android/iOS/Web） | Flutter（Dart） | `apps/patient`（未作成） |
 | 医療機関ポータル（管理画面・Web） | Next.js + TypeScript + Tailwind CSS | `apps/hospital`（未作成、デプロイはFirebase Hosting） |
-| API（Cloud Run / Cloud Functions 第2世代相当） | Node.js + TypeScript | `services/api`（未作成） |
+| API（Cloud Run 相当） | Node.js + TypeScript + Fastify | `services/api`（[ADR-0004](docs/adr/0004_APIフレームワーク選定.md)） |
 | データ | Firestore(東京) / Storage(東京) / RTDB(非PHI・SG) | Firebase Emulator でローカル再現 |
 
 ## クイックスタート
@@ -23,6 +23,7 @@ make down     # 全停止
 ```
 
 - Firebase Emulator UI: http://localhost:4000
+- API ヘルスチェック: `curl http://localhost:8080/healthz`
 - アプリ実装（`apps/hospital`/`apps/patient`/`services/api`）を追加すると `make up` が自動で起動対象に含めます
 - 詳しい手順・ツール導入・個別停止は [docs/07_環境構築手順書](docs/07_環境構築手順書.md) と [docs/08_Docker_Makefile運用](docs/08_Docker_Makefile運用.md)
 

@@ -12,13 +12,13 @@
 | `api` | Docker | 8080 | `services/api/package.json` が存在 |
 | `hospital` | Docker | 3000 | `apps/hospital/package.json` が存在 |
 | `patient` | ホスト（flutter run -d web-server） | 5050 | `apps/patient/pubspec.yaml` が存在 |
-| `watch` | ホスト（docker compose watch） | - | `make up` で自動起動 |
+| `watch` | ホスト（docker compose watch） | - | `make up` で自動起動（firebase 向けのみ監視） |
 
 ファイルの対応：
 
 | ファイル | 役割 |
 |---|---|
-| `docker-compose.yml` | サービス・ポート・ボリューム・watch定義 |
+| `docker-compose.yml` | サービス・ポート・ボリューム・watch定義（firebase のみ） |
 | `docker/firebase/Dockerfile` + `entrypoint.sh` | Firebase Emulator Suite イメージ（Node 22 + JDK 25 + firebase-tools） |
 | `docker/api/Dockerfile` | APIイメージ（`dev`/`prod` マルチステージ） |
 | `docker/hospital/Dockerfile` | Next.jsイメージ（`dev`/`prod` マルチステージ） |
@@ -91,11 +91,15 @@ docker compose を直接使って止める場合: `docker compose stop api`（�
 
 ## 4. ファイル変更時の自動適用
 
+`services/api`・`apps/hospital` のソースは**バインドマウント**方式（ADR-0006）。
+`node_modules` は named volume に分離し、ホスト側の変更は即座にコンテナへ見える。
+compose watch が監視するのは firebase エミュレータ向け（`sync+restart`）のみ。
+
 | 変更 | 仕組み | 結果 |
 |---|---|---|
-| `services/api`・`apps/hospital` のコード | compose watch の `sync`（＋バインドマウント） | devサーバが検出してホットリロード |
-| `package.json` | watch の `sync+restart` | コンテナ再起動→起動時 `npm install` で依存更新 |
-| `firebase.json`・`firebase/` | watch の `restart` | エミュレータ再起動 |
+| `services/api`・`apps/hospital` のコード | バインドマウント＋コンテナ内 dev サーバの監視（tsx watch / Next.js dev） | devサーバが検出してホットリロード |
+| `package.json`（依存追加） | `make restart-api` / `make restart-hospital` | コンテナ再起動→起動時 `npm install` で依存更新 |
+| `firebase.json`・`firebase/` | compose watch の `sync+restart` | エミュレータ再起動 |
 | `apps/patient` | flutter run のホットリロード | 保存で即時反映 |
 | `docker-compose.yml`・Dockerfile | `make up`/`make rebuild` の `--build` | イメージ再構築（キャッシュ利用） |
 
@@ -113,7 +117,7 @@ make up && make urls
 # APIだけログを見ながら作業（別ターミナル）
 make logs-api
 
-# 依存を追加した（package.json変更）→ 自動で sync+restart。手動なら:
+# 依存を追加した（package.json変更）→ コンテナ再起動で起動時 npm install に任せる:
 make restart-api
 
 # エミュレータのルールを変えた → 自動再起動。確認:

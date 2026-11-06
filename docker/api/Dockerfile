@@ -14,12 +14,18 @@ CMD ["npm", "run", "dev"]
 FROM base AS prod-deps
 ENV NODE_ENV=production
 COPY services/api/package*.json ./
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
+
+FROM base AS prod-build
+COPY services/api/package*.json ./
+RUN npm ci
+COPY services/api ./
+RUN npm run build
 
 FROM base AS prod
 ENV NODE_ENV=production
 COPY --from=prod-deps /app/node_modules ./node_modules
-COPY services/api ./
+COPY --from=prod-build /app/dist ./dist
 USER node
 EXPOSE 8080
 CMD ["node", "dist/index.js"]

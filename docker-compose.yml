@@ -5,9 +5,10 @@ name: moshimoshimonshin
 # - api      : Cloud Run API のローカル相当（services/api が作成されると起動対象）
 # - hospital : Next.js 病院ポータル（apps/hospital が作成されると起動対象）
 #
-# ファイル変更の自動適用は `docker compose watch`（make up が起動）が担当し、
-# コンテナ内への同期は watch の sync で行う。バインドマウントされたパスは
-# watch の監視対象外になるため、ソースはあえてマウントしない。
+# ファイル変更の自動適用: api/hospital のソースはバインドマウントで即時反映し
+# コンテナ内の dev server（tsx watch / next dev）が再読込する。
+# firebase.json / firebase/ 配下は `docker compose watch`（make up が起動）の
+# sync+restart でエミュレータへ適用する。
 # 患者用 Flutter アプリは iOS/Android 実機開発のため Docker ではなく
 # `make up` がホスト側で `flutter run -d web-server` として起動する。
 
@@ -70,10 +71,13 @@ services:
       FIRESTORE_EMULATOR_HOST: firebase:8080
       FIREBASE_AUTH_EMULATOR_HOST: firebase:9099
       FIREBASE_STORAGE_EMULATOR_HOST: firebase:9199
-      DATABASE_EMULATOR_HOST: firebase:9000
+      FIREBASE_DATABASE_EMULATOR_HOST: firebase:9000
     ports:
       - "8080:8080"
     volumes:
+      # ソースはバインドマウント（tsx watch がコンテナ内で変更を検知して再読込）。
+      # node_modules はコンテナ側 volume で分離する。
+      - ./services/api:/app
       - api-node-modules:/app/node_modules
     depends_on:
       firebase:
@@ -84,16 +88,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    develop:
-      watch:
-        - action: sync
-          path: services/api
-          target: /app
-          ignore:
-            - node_modules
-        - action: sync+restart
-          path: services/api/package.json
-          target: /app/package.json
+    # ソースはバインドマウント済みのため watch ルールは不要
+    # （依存変更時は `make restart-api`）
 
   hospital:
     build:
@@ -118,6 +114,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
+      - ./apps/hospital:/app
       - hospital-node-modules:/app/node_modules
     depends_on:
       firebase:
@@ -128,14 +125,4 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
-    develop:
-      watch:
-        - action: sync
-          path: apps/hospital
-          target: /app
-          ignore:
-            - node_modules
-            - .next
-        - action: sync+restart
-          path: apps/hospital/package.json
-          target: /app/package.json
+    # ソースはバインドマウント済みのため watch ルールは不要

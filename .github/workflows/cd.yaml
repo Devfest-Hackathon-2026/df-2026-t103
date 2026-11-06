@@ -1,0 +1,15 @@
+name: cd
+
+# CD は現時点では未導入。手動 dispatch のみ受け付け、
+# 実際のデプロイ処理はまだ定義しない（誤って push などで実行されないためのスタブ）。
+# 将来: Cloud Run / Firebase Hosting / Functions へのデプロイをここに定義する。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  disabled:
+    name: cd disabled
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CD is not enabled yet. Nothing to do."

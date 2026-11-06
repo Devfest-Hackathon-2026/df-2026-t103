@@ -47,3 +47,13 @@ flutter run -d web-server --web-hostname=localhost --web-port=5051 -t lib/demo_h
 ## 検証
 
 `apps/patient` で `flutter pub get`、`flutter analyze`、`flutter test` を実行します。iOS のビルドには macOS と Xcode が別途必要です。Android のビルドにも対応する SDK が必要です。
+
+## 認証方式選択プレビュー
+
+認証方式選択（P-003）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5056 を開きます。確認後は Ctrl+C で停止します。このプレビューは認証・API に接続せず、選択操作は未接続です。実患者情報は入力しないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5056 -t lib/demo_auth_method_preview.dart
+```
+
+Passkey は審査承認まで既定で非表示です。表示状態だけを確認する場合は、承認済みのレビュー環境に限り `--dart-define=PASSKEY_AUTH_ENABLED=true` を追加します。このフラグは公開承認を意味しません。

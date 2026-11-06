@@ -345,8 +345,38 @@ export interface FacilityDoc {
   serviceAgreementVersion: string;
   verifiedAt?: unknown;
   verificationRecordId?: string;
+  /** 運営の受付停止（API-037）時刻・理由。receivingEnabled=false の根拠。 */
+  receivingDisabledAt?: unknown;
+  receivingDisabledReason?: string;
   createdAt: unknown;
   updatedAt: unknown;
+}
+
+/**
+ * facilityVerificationRecords/{recordId}（FR-H04, O-001）。
+ * 施設本人確認の検証証跡。審査担当者と確認項目を記録し、
+ * 施設docの verificationRecordId から参照される。
+ * 患者情報（PHI）は含めない。サーバ内参照のみでAPI経由では返さない。
+ */
+export interface FacilityVerificationRecordDoc {
+  facilityId: string;
+  /** 審査した運営者の UID（サーバ内の責任追跡用）。 */
+  verifierUid: string;
+  /** FR-H04 の4検証項目。承認には全て true が必須。 */
+  checks: {
+    /** 実在確認。 */
+    existence: boolean;
+    /** 申請者の確認。 */
+    applicant: boolean;
+    /** 受信担当者の確認。 */
+    receiverContact: boolean;
+    /** 所在地の確認。 */
+    location: boolean;
+  };
+  /** 検証に用いた文書・記録への参照。 */
+  verificationRecordId: string;
+  note: string | null;
+  createdAt: unknown;
 }
 
 /** 04 §5.10 deliveries/{deliveryId}（PHI、送信後施設宛コピー）。 */

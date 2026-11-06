@@ -17,7 +17,9 @@
     {"collectionGroup":"deletionJobs","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"lastStartedAt","order":"ASCENDING"}]},
     {"collectionGroup":"deletionJobs","queryScope":"COLLECTION","fields":[{"fieldPath":"subjectUid","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"}]},
     {"collectionGroup":"pushDevices","queryScope":"COLLECTION","fields":[{"fieldPath":"patientUid","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"}]},
-    {"collectionGroup":"legalConsents","queryScope":"COLLECTION","fields":[{"fieldPath":"subjectUid","order":"ASCENDING"},{"fieldPath":"occurredAt","order":"DESCENDING"}]}
+    {"collectionGroup":"legalConsents","queryScope":"COLLECTION","fields":[{"fieldPath":"subjectUid","order":"ASCENDING"},{"fieldPath":"occurredAt","order":"DESCENDING"}]},
+    {"collectionGroup":"ocrJobs","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"updatedAt","order":"DESCENDING"}]},
+    {"collectionGroup":"deletionJobs","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"requestedAt","order":"DESCENDING"}]}
   ],
   "fieldOverrides": [
     {"collectionGroup":"intakes","fieldPath":"initialSymptomText","indexes":[]},

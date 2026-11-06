@@ -67,6 +67,9 @@ describe("createOcrJobForUpload（complete後フック）", () => {
     });
     expect(created).toBe(true);
     expect(deps.fakeOcrQueue.enqueued).toEqual([jobId]);
+    // FR-O04: jobId は uploadId の HMAC 擬名で、生の uploadId を露出しない
+    expect(jobId).not.toBe("up-1");
+    expect(jobId).toMatch(/^oj_[0-9a-f]{64}$/);
     const job = await getJob(deps, jobId);
     expect(job.status).toBe("queued");
     expect(job.patientUid).toBe(UID);

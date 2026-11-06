@@ -121,3 +121,15 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s infra/storage -p 'test
 - [世代前提条件](https://docs.cloud.google.com/storage/docs/request-preconditions)
 - [Firebase CLI / RTDB](https://firebase.google.com/docs/cli)
 - [public access prevention](https://docs.cloud.google.com/storage/docs/public-access-prevention)
+
+## 世代指定削除の安全性
+
+`services/api/src/storage.ts` は呼び出し元が世代番号を指定した削除に、
+SDKの `preconditionOpts.ifGenerationMatch` を付与する。世代番号は精度を
+失わないよう文字列のまま渡す。対象が置換されていれば412を呼び出し元へ返し、
+存在しない場合は従来通り成功扱いにする。退会ワーカーは412等の失敗対象を
+pendingStorageObjectsへ残す（`services/api/src/workers/deletionJob.ts`）。
+
+ローカル回帰テストは実SDKからloopback HTTP fixtureへ送るDELETEを検証し、
+GCS/実患者資産は使わない。Emulatorが世代条件を無視する可能性があるため、
+実GCSでの世代競合試験は上記受入確認に引き続き必要。

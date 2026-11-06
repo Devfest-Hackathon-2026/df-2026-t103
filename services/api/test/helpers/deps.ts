@@ -10,6 +10,7 @@ import {
   FakeAppCheckVerifier,
   FakeAuthAdmin,
   FakeAuthVerifier,
+  FakeLlmAdapter,
   FakeOcrEngine,
   FakeOcrTaskQueue,
   FakeStorageGateway,
@@ -26,6 +27,7 @@ export interface TestDeps extends Deps {
   fakeStorage: FakeStorageGateway;
   fakeOcrEngine: FakeOcrEngine;
   fakeOcrQueue: FakeOcrTaskQueue;
+  fakeLlm: FakeLlmAdapter;
 }
 
 export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
@@ -57,6 +59,11 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     ocrTasksTargetUrl: undefined,
     ocrTasksOidcSa: undefined,
     intakeDraftTtlDays: 7,
+    aiIntakeEnabled: false,
+    vertexAiApiKey: undefined,
+    vertexAiModel: "gemini-2.5-flash-lite",
+    vertexAiLocation: "asia-northeast1",
+    vertexAiTimeoutMs: 10_000,
     ...overrides,
   });
 }
@@ -73,6 +80,7 @@ export function makeTestDeps(
   const fakeStorage = new FakeStorageGateway();
   const fakeOcrEngine = new FakeOcrEngine();
   const fakeOcrQueue = new FakeOcrTaskQueue();
+  const fakeLlm = new FakeLlmAdapter();
   const logger = pino({ level: "silent" });
 
   const deps: TestDeps = {
@@ -86,6 +94,7 @@ export function makeTestDeps(
     contentScanner: new SignatureContentScanner(),
     ocrEngine: fakeOcrEngine,
     ocrQueue: fakeOcrQueue,
+    llmAdapter: fakeLlm,
     rateLimiter: new RateLimiter(clock),
     clock,
     logger,
@@ -95,6 +104,7 @@ export function makeTestDeps(
     fakeStorage,
     fakeOcrEngine,
     fakeOcrQueue,
+    fakeLlm,
   };
   deps.uploadCompletion = {
     onUploadCompleted: async (p) => {

@@ -177,8 +177,8 @@ export async function createIntake(
         questionGraphVersion: QUESTION_GRAPH_VERSION,
         safetyRulesetVersion: SAFETY_RULESET_VERSION,
         aiPolicyVersion: AI_POLICY_VERSION,
-        // 本番のAI承認設定（ADR-009）は procurement 待ち。既定は固定質問のみ。
-        aiEnabledForThisIntake: false,
+        // 本番のAI承認設定（ADR-009）。未承認の既定falseでは固定質問のみ。
+        aiEnabledForThisIntake: deps.config.aiIntakeEnabled,
         safetyFlags: [],
         expiresAt: Timestamp.fromMillis(
           now.getTime() + deps.config.intakeDraftTtlDays * 24 * 3600_000,

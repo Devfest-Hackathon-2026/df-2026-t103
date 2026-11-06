@@ -11,6 +11,8 @@ import { AdminAuthVerifier, createAppCheckVerifier } from "./auth/verifiers.js";
 import { createStorageGateway } from "./storage.js";
 import { SignatureContentScanner } from "./lib/contentScan.js";
 import { DummyOcrEngine } from "./engines/dummyOcr.js";
+import { DummyLlmAdapter } from "./engines/dummyLlm.js";
+import { VertexAiLlmAdapter } from "./engines/vertexLlm.js";
 import { CloudTasksOcrQueue } from "./tasks.js";
 import { createOcrJobForUpload } from "./services/ocr.js";
 import { OcrWorker } from "./workers/ocrJob.js";
@@ -52,6 +54,18 @@ async function main(): Promise<void> {
           },
         }
       : new CloudTasksOcrQueue(config),
+    // APIキーが未注入（Secret Manager未設定）の環境ではdummy。
+    // aiIntakeEnabled=false 既定では呼ばれず、呼ばれても固定質問へ戻る。
+    llmAdapter:
+      config.vertexAiApiKey !== undefined && config.vertexAiApiKey !== ""
+        ? new VertexAiLlmAdapter({
+            apiKey: config.vertexAiApiKey,
+            model: config.vertexAiModel,
+            location: config.vertexAiLocation,
+            projectId: config.projectId,
+            timeoutMs: config.vertexAiTimeoutMs,
+          })
+        : new DummyLlmAdapter(),
     rateLimiter: new RateLimiter(systemClock),
     clock: systemClock,
     logger,

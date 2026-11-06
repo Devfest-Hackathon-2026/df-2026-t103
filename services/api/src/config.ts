@@ -48,6 +48,23 @@ const envSchema = z.object({
 
   /** 下書き問診の保存日数（FR-I06 短期）。 */
   INTAKE_DRAFT_TTL_DAYS: z.coerce.number().int().positive().default(7),
+
+  /**
+   * 問診AIの本番承認フラグ（ADR-009）。未承認の既定falseでは
+   * 固定質問のみ発行する（FR-I10 代替動作が安全側既定）。
+   */
+  AI_INTAKE_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
+  /** Vertex AI APIキー（Secret Managerから注入）。 */
+  VERTEX_AI_API_KEY: z.string().optional(),
+  /** 採用モデル（安価・高効率を既定。変更は審査済み版で管理）。 */
+  VERTEX_AI_MODEL: z.string().default("gemini-2.5-flash-lite"),
+  /** リージョン（PHIは国内処理）。 */
+  VERTEX_AI_LOCATION: z.string().default("asia-northeast1"),
+  /** LLM呼出しのタイムアウトms。 */
+  VERTEX_AI_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 });
 
 export type AppConfig = Readonly<{
@@ -83,6 +100,11 @@ export type AppConfig = Readonly<{
   ocrTasksTargetUrl: string | undefined;
   ocrTasksOidcSa: string | undefined;
   intakeDraftTtlDays: number;
+  aiIntakeEnabled: boolean;
+  vertexAiApiKey: string | undefined;
+  vertexAiModel: string;
+  vertexAiLocation: string;
+  vertexAiTimeoutMs: number;
 }>;
 
 const DUMMY_SECRETS = new Set(["", "change-me-local-dev"]);
@@ -140,5 +162,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ocrTasksTargetUrl: parsed.OCR_TASKS_TARGET_URL,
     ocrTasksOidcSa: parsed.OCR_TASKS_OIDC_SA,
     intakeDraftTtlDays: parsed.INTAKE_DRAFT_TTL_DAYS,
+    aiIntakeEnabled: parsed.AI_INTAKE_ENABLED,
+    vertexAiApiKey: parsed.VERTEX_AI_API_KEY,
+    vertexAiModel: parsed.VERTEX_AI_MODEL,
+    vertexAiLocation: parsed.VERTEX_AI_LOCATION,
+    vertexAiTimeoutMs: parsed.VERTEX_AI_TIMEOUT_MS,
   });
 }

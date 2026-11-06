@@ -25,6 +25,10 @@ const envSchema = z.object({
   DELETION_GRACE_PERIOD_DAYS: z.coerce.number().int().min(0).default(30),
   DELETION_JOB_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
   DELETION_SCAN_BATCH_SIZE: z.coerce.number().int().positive().max(500).default(100),
+
+  UPLOAD_MAX_ACTIVE: z.coerce.number().int().positive().default(20),
+  UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().max(3600).default(900),
+  UPLOAD_DOC_TTL_DAYS: z.coerce.number().int().positive().default(30),
 });
 
 export type AppConfig = Readonly<{
@@ -44,6 +48,12 @@ export type AppConfig = Readonly<{
   deletionGracePeriodDays: number;
   deletionJobMaxAttempts: number;
   deletionScanBatchSize: number;
+  /** 有効（pending/uploaded かつ期限内）アップロードの患者当たり上限（FR-M01 枚数制限）。 */
+  uploadMaxActive: number;
+  /** 署名URLの有効秒数（短命URL）。 */
+  uploadUrlTtlSeconds: number;
+  /** uploadsドキュメントの保管日数（FR-M06）。 */
+  uploadDocTtlDays: number;
 }>;
 
 const DUMMY_SECRETS = new Set(["", "change-me-local-dev"]);
@@ -90,5 +100,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     deletionGracePeriodDays: parsed.DELETION_GRACE_PERIOD_DAYS,
     deletionJobMaxAttempts: parsed.DELETION_JOB_MAX_ATTEMPTS,
     deletionScanBatchSize: parsed.DELETION_SCAN_BATCH_SIZE,
+    uploadMaxActive: parsed.UPLOAD_MAX_ACTIVE,
+    uploadUrlTtlSeconds: parsed.UPLOAD_URL_TTL_SECONDS,
+    uploadDocTtlDays: parsed.UPLOAD_DOC_TTL_DAYS,
   });
 }

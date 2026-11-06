@@ -3,7 +3,13 @@ import type {
   AppCheckVerifier,
   AuthVerifier,
 } from "../../src/domain/types.js";
-import type { AuthAdmin, StorageDeleter } from "../../src/deps.js";
+import type {
+  AuthAdmin,
+  ContentScanner,
+  StorageGateway,
+  StoredObjectInfo,
+  UploadUrlInstruction,
+} from "../../src/deps.js";
 
 /** "token-<uid>" 形式のトークンを受理する検証フェイク。 */
 export class FakeAuthVerifier implements AuthVerifier {
@@ -103,13 +109,39 @@ export class FakeAuthAdmin implements AuthAdmin {
   }
 }
 
-export class FakeStorageDeleter implements StorageDeleter {
+interface SeededObject {
+  data: Uint8Array;
+  contentType: string;
+  generation: string;
+}
+
+/** インメモリ StorageGateway。seedObject で実オブジェクトを用意する。 */
+export class FakeStorageGateway implements StorageGateway {
   deleted: Array<{
     bucket: string;
     path: string;
     generation?: string | undefined;
   }> = [];
   failOn = new Set<string>(); // "bucket/path"
+  uploadUrlCalls: Array<{ bucket: string; objectPath: string }> = [];
+  private objects = new Map<string, SeededObject>();
+
+  private key(bucket: string, objectPath: string): string {
+    return `${bucket}/${objectPath}`;
+  }
+
+  seedObject(
+    bucket: string,
+    objectPath: string,
+    data: Uint8Array,
+    contentType: string,
+  ): void {
+    this.objects.set(this.key(bucket, objectPath), {
+      data,
+      contentType,
+      generation: `${Date.now()}-${this.objects.size}`,
+    });
+  }
 
   async deleteObject(
     bucket: string,
@@ -120,5 +152,59 @@ export class FakeStorageDeleter implements StorageDeleter {
       throw new Error("storage/delete failed");
     }
     this.deleted.push({ bucket, path: objectPath, generation });
+    this.objects.delete(this.key(bucket, objectPath));
+  }
+
+  async inspectObject(
+    bucket: string,
+    objectPath: string,
+  ): Promise<StoredObjectInfo | null> {
+    const obj = this.objects.get(this.key(bucket, objectPath));
+    if (!obj) return null;
+    return {
+      generation: obj.generation,
+      sizeBytes: obj.data.length,
+      contentType: obj.contentType,
+      md5HashBase64: null,
+    };
+  }
+
+  async createUploadUrl(params: {
+    bucket: string;
+    objectPath: string;
+    mimeType: string;
+    expiresAt: Date;
+  }): Promise<UploadUrlInstruction> {
+    this.uploadUrlCalls.push({ bucket: params.bucket, objectPath: params.objectPath });
+    return {
+      method: "PUT",
+      url: `https://storage.test/${params.bucket}/${params.objectPath}?sig=fake`,
+      headers: { "content-type": params.mimeType },
+      expiresAt: params.expiresAt.toISOString(),
+    };
+  }
+
+  async readObjectPrefix(
+    bucket: string,
+    objectPath: string,
+    maxBytes: number,
+  ): Promise<Uint8Array> {
+    const obj = this.objects.get(this.key(bucket, objectPath));
+    if (!obj) throw new Error("storage/object-not-found");
+    return obj.data.slice(0, maxBytes);
   }
 }
+
+export class FakeContentScanner implements ContentScanner {
+  verdict: "clean" | "rejected" = "clean";
+  reason: string | undefined;
+  calls = 0;
+
+  async scanUpload(): Promise<{ verdict: "clean" | "rejected"; reason?: string }> {
+    this.calls++;
+    return this.verdict === "rejected"
+      ? { verdict: "rejected", ...(this.reason !== undefined ? { reason: this.reason } : {}) }
+      : { verdict: "clean" };
+  }
+}
+

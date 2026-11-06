@@ -6,6 +6,8 @@ import type {
   OnboardingState,
   RegistrationOperationStatus,
   RegistrationSource,
+  UploadSourcePurpose,
+  UploadStatus,
 } from "./types.js";
 
 /** Timestamp は Timestamp（fake側も同型）として扱う。 */
@@ -106,6 +108,33 @@ export interface DeletionJobDoc {
     generation?: string;
   }>;
   overdueAlertedAt?: unknown;
+}
+
+/** 04_DB設計書 §5.7。Storage 上の原本オブジェクトへの参照。objectPath に PII を含めない。 */
+export interface UploadDoc {
+  patientUid: string;
+  storageBucket: string;
+  objectPath: string;
+  /** complete 時にサーバが確定した generation。未確定は未設定。 */
+  objectGeneration?: string;
+  /** init 時に申告された MIME。complete 時に実オブジェクトと照合する。 */
+  mimeType: string;
+  /** init 時に申告されたバイト数。complete 時に照合する。 */
+  bytes: number;
+  /** init 時に申告されたクライアント側 SHA-256(hex)。サーバ検証値ではない。 */
+  sha256: string;
+  status: UploadStatus;
+  sourcePurpose: UploadSourcePurpose;
+  /** 内容チェックフックの結果（SignatureContentScanner はマジックバイト照合）。 */
+  contentScanStatus?: "pending" | "passed" | "failed";
+  rejectedReason?: string;
+  /** Storage 側メタデータから取得した MD5(base64)。証跡用。 */
+  objectMd5HashBase64?: string;
+  completedAt?: unknown;
+  createdAt: unknown;
+  updatedAt: unknown;
+  /** 保管期間の明示（FR-M06）。期限を過ぎた pending/uploaded は利用・復旧不可。 */
+  expiresAt: unknown;
 }
 
 export interface AuditEventDoc {

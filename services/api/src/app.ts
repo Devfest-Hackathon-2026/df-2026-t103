@@ -14,6 +14,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerPublicRoutes } from "./routes/public.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerMeRoutes } from "./routes/me.js";
+import { registerUploadRoutes } from "./routes/uploads.js";
 import { registerInternalJobRoutes } from "./routes/internalJobs.js";
 
 /**
@@ -85,6 +86,7 @@ export function buildApp(deps: Deps): FastifyInstance {
     registerPublicRoutes(instance, deps);
     registerAuthRoutes(instance, deps);
     registerMeRoutes(instance, deps);
+    registerUploadRoutes(instance, deps);
     registerInternalJobRoutes(instance, deps);
   });
 

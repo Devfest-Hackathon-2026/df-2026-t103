@@ -26,14 +26,73 @@ export interface AuthAdmin {
   revokeRefreshTokens(uid: string): Promise<void>;
 }
 
-/** Cloud Storage のオブジェクト削除IF。 */
-export interface StorageDeleter {
+/** Storage 上の実オブジェクトの検証用メタ情報。 */
+export interface StoredObjectInfo {
+  generation: string;
+  sizeBytes: number;
+  contentType: string | undefined;
+  md5HashBase64: string | null;
+}
+
+/** uploads/init が返す短命アップロード指示。 */
+export interface UploadUrlInstruction {
+  method: "PUT";
+  url: string;
+  headers: Record<string, string>;
+  /** ISO8601。URLの有効期限。 */
+  expiresAt: string;
+}
+
+/** Cloud Storage(Firebase) アクセスIF。テストではインメモリ実装を注入する。 */
+export interface StorageGateway {
   /** 対象が存在しなくても成功として扱う。generation 指定時は一致を確認。 */
   deleteObject(
     bucket: string,
     objectPath: string,
     generation?: string,
   ): Promise<void>;
+  /** オブジェクトのメタ情報を取得。存在しなければ null。 */
+  inspectObject(
+    bucket: string,
+    objectPath: string,
+  ): Promise<StoredObjectInfo | null>;
+  /** 所有者スコープ済み objectPath への短命アップロードURLを発行する。 */
+  createUploadUrl(params: {
+    bucket: string;
+    objectPath: string;
+    mimeType: string;
+    expiresAt: Date;
+  }): Promise<UploadUrlInstruction>;
+  /** 内容チェック用に先頭バイトを読む（最大 maxBytes）。 */
+  readObjectPrefix(
+    bucket: string,
+    objectPath: string,
+    maxBytes: number,
+  ): Promise<Uint8Array>;
+}
+
+/**
+ * アップロード内容チェックフック（FR-M01, SEC-07）。
+ * ウイルススキャン等の外部検査は本IFの別実装として接続する。
+ */
+export interface ContentScanner {
+  scanUpload(params: {
+    bucket: string;
+    objectPath: string;
+    declaredMimeType: string;
+    readPrefix: (maxBytes: number) => Promise<Uint8Array>;
+  }): Promise<{ verdict: "clean" | "rejected"; reason?: string }>;
+}
+
+/**
+ * uploads complete 後の非同期処理フック（OCR起動など）。
+ * サービス層は存在すれば呼ぶ。内部で失敗しても complete 自体は成功させる。
+ */
+export interface UploadCompletionHook {
+  onUploadCompleted(params: {
+    uploadId: string;
+    patientUid: string;
+  }): Promise<void>;
 }
 
 export interface Deps {
@@ -42,7 +101,9 @@ export interface Deps {
   auth: AuthVerifier;
   authAdmin: AuthAdmin;
   appCheck: AppCheckVerifier;
-  storage: StorageDeleter;
+  storage: StorageGateway;
+  contentScanner: ContentScanner;
+  uploadCompletion?: UploadCompletionHook;
   rateLimiter: RateLimiter;
   clock: Clock;
   logger: FastifyBaseLogger;

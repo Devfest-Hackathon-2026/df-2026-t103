@@ -40,6 +40,15 @@ export type DeletionJobStatus =
   | "failed"
   | "cancelled";
 
+export type UploadStatus =
+  | "pending"
+  | "uploaded"
+  | "rejected"
+  | "expired"
+  | "deleted";
+
+export type UploadSourcePurpose = "prescription_photo" | "medication_notebook";
+
 export type DeletionStepStatus = "pending" | "running" | "succeeded" | "failed";
 
 export type RegistrationOperationStatus =

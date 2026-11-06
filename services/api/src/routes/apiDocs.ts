@@ -88,6 +88,36 @@ export const consentsResponseSchema = z.object({
   currentByType: z.record(z.string(), z.string()),
 });
 
+export const uploadInitResponseSchema = z.object({
+  uploadId: z.string(),
+  status: z.literal("pending"),
+  upload: z.object({
+    method: z.literal("PUT"),
+    url: z.string(),
+    headers: z.record(z.string(), z.string()),
+    expiresAt: z.string().describe("ISO8601"),
+  }),
+});
+
+export const uploadCompleteResponseSchema = z.object({
+  uploadId: z.string(),
+  status: z.string(),
+});
+
+export const uploadProcessingResponseSchema = z.object({
+  uploadId: z.string(),
+  status: z.string(),
+  ocrJob: z
+    .object({
+      jobId: z.string(),
+      status: z.string(),
+      errorCode: z.string().nullable(),
+      candidateCount: z.number(),
+    })
+    .nullable()
+    .describe("OCRジョブ。未起動時は null"),
+});
+
 export const jobRunResultSchema = z.object({
   jobId: z.string(),
   outcome: z.enum([

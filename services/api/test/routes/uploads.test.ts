@@ -439,9 +439,10 @@ describe("POST /v1/internal/jobs/upload-expiry-scan (#13)", () => {
       headers: { "x-internal-job-token": "test-internal-token" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ scanned: 1, expired: 1 });
+    expect(res.json()).toEqual({ scanned: 1, expired: 1, cleaned: 1 });
     const after = (await getUploadDoc(deps, uploadId))!;
     expect(after.status).toBe("expired");
+    expect(after.objectCleanup).toBe("done");
     // 実体削除ではなく tombstone: パスは空内容で占有され続ける
     expect(deps.fakeStorage.deleted).toHaveLength(0);
     expect(deps.fakeStorage.tombstoned.map((d) => d.path)).toContain(
@@ -459,9 +460,110 @@ describe("POST /v1/internal/jobs/upload-expiry-scan (#13)", () => {
       headers: { "x-internal-job-token": "test-internal-token" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ scanned: 0, expired: 0 });
+    expect(res.json()).toEqual({ scanned: 0, expired: 0, cleaned: 0 });
     const after = (await getUploadDoc(deps, init.json().uploadId))!;
     expect(after.status).toBe("pending");
+    await app.close();
+  });
+
+  it("終端docがlimitを消費せず後続の期限切れへ進む", async () => {
+    const { deps, app } = await setup();
+    // 既に終端（expired/cleanup済み）のdocを最古の expiresAt で置く
+    await deps.db.collection("uploads").doc("terminal-1").set({
+      patientUid: UID,
+      status: "expired",
+      objectCleanup: "done",
+      storageBucket: "b",
+      objectPath: "p-terminal",
+      mimeType: "image/jpeg",
+      bytes: 10,
+      sha256: SHA,
+      sourcePurpose: "prescription_photo",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      expiresAt: Timestamp.fromMillis(Date.now() - 7200_000),
+    });
+    const init = await initUpload(app, "i-exp2");
+    const uploadId = init.json().uploadId;
+    await deps.db
+      .doc(`uploads/${uploadId}`)
+      .update({ expiresAt: Timestamp.fromMillis(Date.now() - 1000) });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/internal/jobs/upload-expiry-scan",
+      headers: { "x-internal-job-token": "test-internal-token" },
+    });
+    expect(res.statusCode).toBe(200);
+    const after = (await getUploadDoc(deps, uploadId))!;
+    expect(after.status).toBe("expired");
+    await app.close();
+  });
+
+  it("tombstone 失敗時は pending のまま残り次回スキャンで再試行される", async () => {
+    const { deps, app } = await setup();
+    const init = await initUpload(app, "i-retry");
+    const uploadId = init.json().uploadId;
+    const doc = (await getUploadDoc(deps, uploadId))!;
+    await deps.db
+      .doc(`uploads/${uploadId}`)
+      .update({ expiresAt: Timestamp.fromMillis(Date.now() - 1000) });
+    deps.fakeStorage.failOn.add(`${doc.storageBucket}/${doc.objectPath}`);
+
+    const res1 = await app.inject({
+      method: "POST",
+      url: "/v1/internal/jobs/upload-expiry-scan",
+      headers: { "x-internal-job-token": "test-internal-token" },
+    });
+    expect(res1.json()).toEqual({ scanned: 1, expired: 1, cleaned: 0 });
+    expect((await getUploadDoc(deps, uploadId))!.objectCleanup).toBe(
+      "pending",
+    );
+
+    deps.fakeStorage.failOn.clear();
+    const res2 = await app.inject({
+      method: "POST",
+      url: "/v1/internal/jobs/upload-expiry-scan",
+      headers: { "x-internal-job-token": "test-internal-token" },
+    });
+    expect(res2.json()).toEqual({ scanned: 1, expired: 0, cleaned: 1 });
+    const after = (await getUploadDoc(deps, uploadId))!;
+    expect(after.objectCleanup).toBe("done");
+    expect(deps.fakeStorage.tombstoned.map((d) => d.path)).toContain(
+      doc.objectPath,
+    );
+    await app.close();
+  });
+
+  it("complete 時に期限切れだった doc の objectCleanup=pending も回収する", async () => {
+    const { deps, app } = await setup();
+    const init = await initUpload(app, "i-late");
+    const uploadId = init.json().uploadId;
+    const doc = (await getUploadDoc(deps, uploadId))!;
+    deps.fakeStorage.seedObject(
+      doc.storageBucket,
+      doc.objectPath,
+      JPEG_BYTES,
+      "image/jpeg",
+    );
+    await deps.db
+      .doc(`uploads/${uploadId}`)
+      .update({ expiresAt: Timestamp.fromMillis(Date.now() - 1000) });
+    const comp = await completeUpload(app, UID, uploadId, "c-late");
+    expect(comp.statusCode).toBe(412);
+    expect((await getUploadDoc(deps, uploadId))!.objectCleanup).toBe(
+      "pending",
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/internal/jobs/upload-expiry-scan",
+      headers: { "x-internal-job-token": "test-internal-token" },
+    });
+    expect(res.json()).toEqual({ scanned: 1, expired: 0, cleaned: 1 });
+    expect(deps.fakeStorage.tombstoned.map((d) => d.path)).toContain(
+      doc.objectPath,
+    );
     await app.close();
   });
 });

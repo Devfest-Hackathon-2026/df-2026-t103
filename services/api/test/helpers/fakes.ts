@@ -158,6 +158,9 @@ export class FakeStorageGateway implements StorageGateway {
   tombstoned: Array<{ bucket: string; path: string }> = [];
 
   async tombstoneObject(bucket: string, objectPath: string): Promise<void> {
+    if (this.failOn.has(`${bucket}/${objectPath}`)) {
+      throw new Error("storage/tombstone failed");
+    }
     this.tombstoned.push({ bucket, path: objectPath });
     const key = this.key(bucket, objectPath);
     const obj = this.objects.get(key);

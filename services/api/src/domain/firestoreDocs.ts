@@ -128,6 +128,12 @@ export interface UploadDoc {
   /** 内容チェックフックの結果（SignatureContentScanner はマジックバイト照合）。 */
   contentScanStatus?: "pending" | "passed" | "failed";
   rejectedReason?: string;
+  /**
+   * Storage オブジェクトの tombstone 化の進行。rejected/expired 化時に
+   * "pending" を立て、sweep が成功するまで再試行する（失敗しても
+   * 残置されないようにするためのリトライ状態）。
+   */
+  objectCleanup?: "pending" | "done";
   /** Storage 側メタデータから取得した MD5(base64)。証跡用。 */
   objectMd5HashBase64?: string;
   completedAt?: unknown;

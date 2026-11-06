@@ -43,6 +43,7 @@ export function registerInternalJobRoutes(
           200: z.object({
             scanned: z.number(),
             expired: z.number(),
+            cleaned: z.number(),
           }),
           ...errors(401, 403, 429, 500),
         },

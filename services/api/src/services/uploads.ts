@@ -169,9 +169,13 @@ export async function completeUpload(
   }
   const expiresAt = timestampToDate(upload.expiresAt);
   if (expiresAt && expiresAt.getTime() <= deps.clock.now().getTime()) {
-    await deps.db
-      .doc(`uploads/${params.uploadId}`)
-      .update({ status: "expired", updatedAt: FieldValue.serverTimestamp() });
+    // 既にオブジェクトが置かれている可能性があるため、sweep が
+    // tombstone できるよう objectCleanup=pending を残す。
+    await deps.db.doc(`uploads/${params.uploadId}`).update({
+      status: "expired",
+      objectCleanup: "pending",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
     throw ApiError.precondition(
       "アップロードの有効期限が切れています。もう一度やり直してください。",
     );
@@ -193,14 +197,22 @@ export async function completeUpload(
     // する（実体削除すると create-only URL が再び使えてしまうため占有維持）。
     const reject = async (reason: string, error: ApiError): Promise<never> => {
       await rejectUpload(deps, params.uploadId, reason);
-      await deps.storage
-        .tombstoneObject(upload.storageBucket, upload.objectPath)
-        .catch((err) =>
-          deps.logger.warn(
-            { err, uploadId: params.uploadId },
-            "rejected object cleanup failed",
-          ),
+      // tombstone 失敗時は objectCleanup=pending が残り sweep が再試行する
+      try {
+        await deps.storage.tombstoneObject(
+          upload.storageBucket,
+          upload.objectPath,
         );
+        await deps.db.doc(`uploads/${params.uploadId}`).update({
+          objectCleanup: "done",
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } catch (err) {
+        deps.logger.warn(
+          { err, uploadId: params.uploadId },
+          "rejected object cleanup failed",
+        );
+      }
       throw error;
     };
 
@@ -353,6 +365,8 @@ async function rejectUpload(
     status: "rejected",
     contentScanStatus: "failed",
     rejectedReason: reason,
+    // 呼び出し側が tombstone する。失敗したままなら sweep が再試行する。
+    objectCleanup: "pending",
     updatedAt: FieldValue.serverTimestamp(),
   });
 }
@@ -367,30 +381,61 @@ async function rejectUpload(
 export async function sweepExpiredUploads(
   deps: Deps,
   limit = 200,
-): Promise<{ scanned: number; expired: number }> {
+): Promise<{ scanned: number; expired: number; cleaned: number }> {
   const now = Timestamp.fromDate(deps.clock.now());
-  const docs = await queryDocs<UploadDoc>(
+  // 終端 doc が limit を消費しないよう、対象ステータスをクエリ条件に含める
+  // （pending/uploaded のみが expired 遷移の対象）。
+  const stale = await queryDocs<UploadDoc>(
     deps.db,
     "uploads",
-    [{ field: "expiresAt", op: "<=", value: now }],
-    { limit },
+    [
+      { field: "status", op: "in", value: ["pending", "uploaded"] },
+      { field: "expiresAt", op: "<=", value: now },
+    ],
+    { orderBy: [{ field: "expiresAt" }], limit },
   );
   let expired = 0;
-  for (const d of docs) {
-    const u = d.data;
-    if (u.status !== "pending" && u.status !== "uploaded") continue;
-    await deps.db
-      .doc(`uploads/${d.id}`)
-      .update({ status: "expired", updatedAt: now });
-    await deps.storage
-      .tombstoneObject(u.storageBucket, u.objectPath)
-      .catch((err) =>
-        deps.logger.warn(
-          { err, uploadId: d.id },
-          "expired object tombstone failed",
-        ),
-      );
+  for (const d of stale) {
+    await deps.db.doc(`uploads/${d.id}`).update({
+      status: "expired",
+      // tombstone 失敗に備えてリトライ状態を残す
+      objectCleanup: "pending",
+      updatedAt: now,
+    });
     expired++;
   }
-  return { scanned: docs.length, expired };
+  // tombstone 待ちを処理。失敗したものは pending のまま残り
+  // 次回スキャンで再試行される（complete/reject 経路で付いた pending も拾う）。
+  const pendingCleanup = await queryDocs<UploadDoc>(
+    deps.db,
+    "uploads",
+    [{ field: "objectCleanup", op: "==", value: "pending" }],
+    { limit },
+  );
+  let cleaned = 0;
+  for (const d of pendingCleanup) {
+    try {
+      await deps.storage.tombstoneObject(
+        d.data.storageBucket,
+        d.data.objectPath,
+      );
+      await deps.db
+        .doc(`uploads/${d.id}`)
+        .update({ objectCleanup: "done", updatedAt: now });
+      cleaned++;
+    } catch (err) {
+      deps.logger.warn(
+        { err, uploadId: d.id },
+        "expired object tombstone failed",
+      );
+    }
+  }
+  return {
+    scanned: new Set([
+      ...stale.map((d) => d.id),
+      ...pendingCleanup.map((d) => d.id),
+    ]).size,
+    expired,
+    cleaned,
+  };
 }

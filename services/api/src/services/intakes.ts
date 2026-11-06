@@ -105,6 +105,19 @@ function expired(deps: Deps, doc: IntakeDoc): boolean {
 }
 
 /**
+ * tx内で archived への遷移を commit したことを示す sentinel。
+ * txコールバック内で throw すると実Firestoreではtx全体が abort し
+ * archived 書込も巻き戻るため、マーカーを返してcommit後に投げる。
+ */
+const DRAFT_EXPIRED = { kind: "draft_expired" } as const;
+
+function draftExpiredError(): ApiError {
+  return ApiError.precondition(
+    "この下書きは保存期限を過ぎています。新しい問診を開始してください。",
+  );
+}
+
+/**
  * API-009 POST /intakes。
  * draft を revision=1 で作成（下書きは短期保存、FR-I06）。
  */
@@ -180,7 +193,7 @@ export async function submitSymptoms(
   const flags = checkRedFlags(text);
   const body = params.body;
 
-  return deps.db.runTransaction(async (tx) => {
+  const result = await deps.db.runTransaction(async (tx) => {
     const ref = deps.db.doc(`intakes/${params.intakeId}`);
     const snap = await tx.get(ref);
     const doc = snap.data() as IntakeDoc | undefined;
@@ -195,9 +208,7 @@ export async function submitSymptoms(
     }
     if (expired(deps, doc)) {
       tx.update(ref, { status: "archived", updatedAt: nowTs(deps) });
-      throw ApiError.precondition(
-        "この下書きは保存期限を過ぎています。新しい問診を開始してください。",
-      );
+      return DRAFT_EXPIRED;
     }
     // draft からの初回入力、または questioning 中の修正を許可
     if (doc.status !== "draft" && doc.status !== "questioning") {
@@ -217,6 +228,8 @@ export async function submitSymptoms(
       revision: doc.revision + 1,
     };
   });
+  if ("kind" in result) throw draftExpiredError();
+  return result;
 }
 
 /**
@@ -230,7 +243,7 @@ export async function saveAnswer(
 ): Promise<{ answerId: string; intakeRevision: number }> {
   const body = params.body;
   // 選択肢コードは当該質問の options に存在するものだけ（サービス側でも検査）
-  return deps.db.runTransaction(async (tx) => {
+  const result = await deps.db.runTransaction(async (tx) => {
     const intakeSnap = await tx.get(deps.db.doc(`intakes/${params.intakeId}`));
     const intake = intakeSnap.data() as IntakeDoc | undefined;
     if (!intakeSnap.exists || !intake || intake.patientUid !== params.uid) {
@@ -247,9 +260,7 @@ export async function saveAnswer(
         status: "archived",
         updatedAt: nowTs(deps),
       });
-      throw ApiError.precondition(
-        "この下書きは保存期限を過ぎています。新しい問診を開始してください。",
-      );
+      return DRAFT_EXPIRED;
     }
     if (intake.status !== "questioning" && intake.status !== "review") {
       throw ApiError.precondition(
@@ -311,6 +322,8 @@ export async function saveAnswer(
       intakeRevision: intake.revision + 1,
     };
   });
+  if ("kind" in result) throw draftExpiredError();
+  return result;
 }
 
 /**
@@ -417,7 +430,7 @@ export async function appendQuestion(
   },
 ): Promise<{ questionId: string; intakeRevision: number }> {
   const { question } = params;
-  return deps.db.runTransaction(async (tx) => {
+  const result = await deps.db.runTransaction(async (tx) => {
     const ref = deps.db.doc(`intakes/${params.intakeId}`);
     const snap = await tx.get(ref);
     const intake = snap.data() as IntakeDoc | undefined;
@@ -432,9 +445,7 @@ export async function appendQuestion(
     }
     if (expired(deps, intake)) {
       tx.update(ref, { status: "archived", updatedAt: nowTs(deps) });
-      throw ApiError.precondition(
-        "この下書きは保存期限を過ぎています。新しい問診を開始してください。",
-      );
+      return DRAFT_EXPIRED;
     }
     if (intake.status !== "questioning") {
       throw ApiError.precondition(
@@ -472,6 +483,8 @@ export async function appendQuestion(
     });
     return { questionId: qRef.id, intakeRevision: intake.revision + 1 };
   });
+  if ("kind" in result) throw draftExpiredError();
+  return result;
 }
 
 /**
@@ -488,7 +501,7 @@ export async function transitionIntake(
     extra?: Record<string, unknown>;
   },
 ): Promise<{ status: IntakeStatus; revision: number }> {
-  return deps.db.runTransaction(async (tx) => {
+  const result = await deps.db.runTransaction(async (tx) => {
     const ref = deps.db.doc(`intakes/${params.intakeId}`);
     const snap = await tx.get(ref);
     const doc = snap.data() as IntakeDoc | undefined;
@@ -503,9 +516,7 @@ export async function transitionIntake(
     }
     if (expired(deps, doc)) {
       tx.update(ref, { status: "archived", updatedAt: nowTs(deps) });
-      throw ApiError.precondition(
-        "この下書きは保存期限を過ぎています。新しい問診を開始してください。",
-      );
+      return DRAFT_EXPIRED;
     }
     assertIntakeTransition(doc.status, params.to);
     tx.update(ref, {
@@ -517,6 +528,8 @@ export async function transitionIntake(
     });
     return { status: params.to, revision: doc.revision + 1 };
   });
+  if ("kind" in result) throw draftExpiredError();
+  return result;
 }
 
 /** 問診の監査イベント（#11 の API 層から利用）。 */

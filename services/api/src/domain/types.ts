@@ -49,6 +49,21 @@ export type UploadStatus =
 
 export type UploadSourcePurpose = "prescription_photo" | "medication_notebook";
 
+export type OcrJobStatus = "queued" | "running" | "succeeded" | "failed";
+
+/**
+ * OCR失敗分類（02 §8, FR-O06）。engine_unavailable は再試行可能。
+ * page_limit_exceeded / upload_invalid は前処理時の終端失敗。
+ */
+export type OcrFailureCode =
+  | "not_prescription"
+  | "image_unclear"
+  | "indeterminate"
+  | "engine_unavailable"
+  | "page_limit_exceeded"
+  | "upload_invalid"
+  | "worker_interrupted";
+
 export type DeletionStepStatus = "pending" | "running" | "succeeded" | "failed";
 
 export type RegistrationOperationStatus =

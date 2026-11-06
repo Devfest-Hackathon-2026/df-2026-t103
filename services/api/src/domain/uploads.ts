@@ -47,3 +47,13 @@ export function matchesMagicBytes(
 export function isTerminalUploadStatus(status: UploadStatus): boolean {
   return status === "rejected" || status === "expired" || status === "deleted";
 }
+
+/**
+ * PDF ページ数の暫定カウント（`/Type /Page` 出現数）。
+ * 正確な解析ではないが OCR前処理の上限チェックには十分（02 §7 の暫定5頁）。
+ */
+export function countPdfPages(bytes: Uint8Array): number {
+  const text = new TextDecoder("latin1").decode(bytes);
+  const matches = text.match(/\/Type\s*\/Page[^s]/g);
+  return matches?.length ?? 0;
+}

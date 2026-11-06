@@ -10,6 +10,10 @@ import { RateLimiter } from "./lib/rateLimit.js";
 import { AdminAuthVerifier, createAppCheckVerifier } from "./auth/verifiers.js";
 import { createStorageGateway } from "./storage.js";
 import { SignatureContentScanner } from "./lib/contentScan.js";
+import { DummyOcrEngine } from "./engines/dummyOcr.js";
+import { CloudTasksOcrQueue } from "./tasks.js";
+import { createOcrJobForUpload } from "./services/ocr.js";
+import { OcrWorker } from "./workers/ocrJob.js";
 import { DEV_LEGAL_DOCUMENTS } from "./domain/legalDocuments.js";
 
 /** エミュレータ環境で appConfigs/publicLegalVersion が無ければ開発用文書をシードする。 */
@@ -39,9 +43,23 @@ async function main(): Promise<void> {
     appCheck: createAppCheckVerifier(config, firebase.appCheck),
     storage: createStorageGateway(firebase.storage, config),
     contentScanner: new SignatureContentScanner(),
+    ocrEngine: new DummyOcrEngine(),
+    // エミュレータは同プロセス内で即時実行、本番は Cloud Tasks
+    ocrQueue: config.emulator
+      ? {
+          enqueueOcrJob: async (jobId) => {
+            await new OcrWorker(deps).runJob(jobId);
+          },
+        }
+      : new CloudTasksOcrQueue(config),
     rateLimiter: new RateLimiter(systemClock),
     clock: systemClock,
     logger,
+  };
+  deps.uploadCompletion = {
+    onUploadCompleted: async (p) => {
+      await createOcrJobForUpload(deps, p);
+    },
   };
 
   if (config.emulator) {

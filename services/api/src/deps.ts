@@ -5,6 +5,7 @@ import type {
   AppCheckVerifier,
   AuthVerifier,
 } from "./domain/types.js";
+import type { OcrEngineResult } from "./domain/ocr.js";
 import type { FirestoreLike } from "./repos/helpers.js";
 import type { FastifyBaseLogger } from "fastify";
 
@@ -76,6 +77,8 @@ export interface StorageGateway {
     objectPath: string,
     maxBytes: number,
   ): Promise<Uint8Array>;
+  /** オブジェクト全体を読む（上限10MBの範囲内の利用を前提）。 */
+  readObject(bucket: string, objectPath: string): Promise<Uint8Array>;
 }
 
 /**
@@ -102,6 +105,26 @@ export interface UploadCompletionHook {
   }): Promise<void>;
 }
 
+/**
+ * OCRエンジンアダプタ（02 §8, ADR-010）。実エンジン未調達のため dummy を既定とし、
+ * 画像認識/OCRサービス確定後に本IFの実装として差し替える。
+ */
+export interface OcrEngine {
+  readonly name: string;
+  extract(params: {
+    mimeType: string;
+    readObject: () => Promise<Uint8Array>;
+  }): Promise<OcrEngineResult>;
+}
+
+/**
+ * OCRジョブの非同期起動IF。本番は Cloud Tasks（OIDC付きHTTPタスク）で
+ * /v1/internal/jobs/ocr/:jobId/run を呼ぶ。エミュレータは同プロセス内で即時実行。
+ */
+export interface OcrTaskQueue {
+  enqueueOcrJob(jobId: string): Promise<void>;
+}
+
 export interface Deps {
   config: AppConfig;
   db: FirestoreLike;
@@ -110,6 +133,8 @@ export interface Deps {
   appCheck: AppCheckVerifier;
   storage: StorageGateway;
   contentScanner: ContentScanner;
+  ocrEngine: OcrEngine;
+  ocrQueue: OcrTaskQueue;
   uploadCompletion?: UploadCompletionHook;
   rateLimiter: RateLimiter;
   clock: Clock;

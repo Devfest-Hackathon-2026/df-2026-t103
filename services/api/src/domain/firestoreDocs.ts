@@ -3,12 +3,15 @@ import type {
   ConsentType,
   DeletionJobStatus,
   DeletionStepStatus,
+  OcrFailureCode,
+  OcrJobStatus,
   OnboardingState,
   RegistrationOperationStatus,
   RegistrationSource,
   UploadSourcePurpose,
   UploadStatus,
 } from "./types.js";
+import type { OcrCandidate } from "./ocr.js";
 
 /** Timestamp は Timestamp（fake側も同型）として扱う。 */
 export interface AccountDoc {
@@ -141,6 +144,35 @@ export interface UploadDoc {
   updatedAt: unknown;
   /** 保管期間の明示（FR-M06）。期限を過ぎた pending/uploaded は利用・復旧不可。 */
   expiresAt: unknown;
+}
+
+/**
+ * 04_DB設計書 §5.8 ocrJobs。OCR結果は候補のみ保持し、
+ * 利用者確認まで confirmed/registered にはしない（VAL-013, FR-O04）。
+ */
+export interface OcrJobDoc {
+  uploadId: string;
+  patientUid: string;
+  status: OcrJobStatus;
+  /** 使用したエンジン実装名（dummy/vision等）。 */
+  engine: string;
+  attempt: number;
+  errorCode: OcrFailureCode | null;
+  /** 抽出候補。unconfirmed としてのみ存在する。 */
+  candidates: OcrCandidate[];
+  /** 証跡用 OCR生テキスト（上限で切り詰め）。 */
+  extractedText?: string;
+  extractedTextTruncated?: boolean;
+  /** 実行claimの所有トークン。結果書き込みは所有者のみ許可。 */
+  claimOwner?: string;
+  /** claimのリース期限。期限切れなら放棄とみなし回収可能。 */
+  claimExpiresAt?: unknown;
+  /** キュー投入状態。pending は enqueue 未完了（再投入で回収）。 */
+  dispatchState: "pending" | "enqueued";
+  createdAt: unknown;
+  startedAt?: unknown;
+  finishedAt?: unknown;
+  updatedAt: unknown;
 }
 
 export interface AuditEventDoc {

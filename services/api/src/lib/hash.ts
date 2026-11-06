@@ -1,4 +1,14 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
+
+/** 配送ハッシュ照合用の素のSHA-256（秘密鍵を使わず受信側で再計算可能）。 */
+export function sha256Hex(data: string): string {
+  return createHash("sha256").update(data, "utf8").digest("hex");
+}
 
 export function hmacSha256Hex(secret: string, data: string): string {
   return createHmac("sha256", secret).update(data, "utf8").digest("hex");

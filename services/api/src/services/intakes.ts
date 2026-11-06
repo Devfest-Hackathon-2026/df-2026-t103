@@ -26,8 +26,10 @@ import {
   validateSymptomText,
 } from "../domain/intake.js";
 import type {
+  AnswerState,
   IntakeStatus,
   QuestionGeneratedBy,
+  QuestionStatus,
 } from "../domain/types.js";
 import { ApiError, ErrorCodes } from "../lib/errors.js";
 import { requestHash, runIdempotent } from "../lib/idempotency.js";
@@ -40,6 +42,31 @@ import {
   questionRef,
 } from "../repos/intakes.js";
 
+export interface QuestionOut {
+  questionId: string;
+  stepIndex: number;
+  questionText: string;
+  topic: string;
+  options: Array<{ code: string; label: string }>;
+  generatedBy: QuestionGeneratedBy;
+  modelVersion: string | null;
+  questionRevision: number;
+  status: QuestionStatus;
+  createdAt: string | null;
+}
+
+export interface AnswerOut {
+  answerId: string;
+  questionId: string;
+  questionRevision: number;
+  stepIndex: number;
+  selectedCodes: string[];
+  freeText: string | null;
+  answerState: AnswerState;
+  answeredAt: string | null;
+  updatedAt: string | null;
+}
+
 export interface IntakeDetail {
   intakeId: string;
   status: IntakeStatus;
@@ -50,8 +77,8 @@ export interface IntakeDetail {
   questionCount: number;
   safetyFlags: string[];
   aiEnabledForThisIntake: boolean;
-  questions: Array<{ questionId: string; data: QuestionDoc }>;
-  answers: Array<{ answerId: string; data: AnswerDoc }>;
+  questions: QuestionOut[];
+  answers: AnswerOut[];
   createdAt: string | null;
   updatedAt: string | null;
   expiresAt: string | null;
@@ -209,9 +236,27 @@ export async function getIntakeDetail(
   ]);
   detail.questions = questions.map((q) => ({
     questionId: q.id,
-    data: q.data,
+    stepIndex: q.data.stepIndex,
+    questionText: q.data.questionText,
+    topic: q.data.topic,
+    options: q.data.options,
+    generatedBy: q.data.generatedBy,
+    modelVersion: q.data.modelVersion ?? null,
+    questionRevision: q.data.questionRevision,
+    status: q.data.status,
+    createdAt: toIso(q.data.createdAt),
   }));
-  detail.answers = answers.map((a) => ({ answerId: a.id, data: a.data }));
+  detail.answers = answers.map((a) => ({
+    answerId: a.id,
+    questionId: a.data.questionId,
+    questionRevision: a.data.questionRevision,
+    stepIndex: a.data.stepIndex,
+    selectedCodes: a.data.selectedCodes,
+    freeText: a.data.freeText ?? null,
+    answerState: a.data.answerState,
+    answeredAt: toIso(a.data.answeredAt),
+    updatedAt: toIso(a.data.updatedAt),
+  }));
   return detail;
 }
 

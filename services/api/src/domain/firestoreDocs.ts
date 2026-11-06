@@ -277,6 +277,53 @@ export interface AnswerDoc {
   updatedAt: unknown;
 }
 
+/** 04 §5.5 questionnaires。確定票メタ。 */
+export interface QuestionnaireDoc {
+  patientUid: string;
+  intakeId: string;
+  status: "finalized";
+  latestRevision: number;
+  reviewedAt: unknown;
+  finalizedAt: unknown;
+  createdAt: unknown;
+}
+
+/** 各トピックの回答要約（値の解釈を加えず原文/選択ラベルを保持）。 */
+export interface SummarySection {
+  /** 選択ラベル＋患者原文をつないだ表示値。未回答は null。 */
+  value: string | null;
+  /** 出所（answer:{questionId} / patient / patient_profile）。 */
+  source: string | null;
+  answerState: "answered" | "unknown" | "skipped" | "not_asked";
+}
+
+/** questionnaires/{id}/revisions/{rev} は immutable（04 §5.5）。 */
+export interface QuestionnaireRevisionDoc {
+  versionNumber: number;
+  patientUid: string;
+  schemaVersion: "1";
+  chiefComplaint: { value: string | null; source: string };
+  /** 出題済みトピックの要約（FR-I07: onset/frequency/severity/life_impact/…）。 */
+  sections: Record<string, SummarySection>;
+  bodyLocations: string[];
+  medicalHistorySnapshot: Array<{
+    conditionText: string;
+    source: string;
+  }>;
+  /** BR-05: confirmed=true の本人確認済み薬のみ（FR-M07 attach済み）。 */
+  medicationSnapshots: Array<{
+    medicationId: string;
+    displayName: string;
+    confirmed: true;
+  }>;
+  /** 未回答・分からない・スキップ・未出題のトピック（「なし」としない）。 */
+  unansweredTopics: string[];
+  /** 配送版との一致検証用ハッシュ（sha256）。 */
+  rawAnswerSnapshotHash: string;
+  summaryReviewConfirmedAt: unknown;
+  createdAt: unknown;
+}
+
 export interface AuditEventDoc {
   actorType: "patient" | "staff" | "platform" | "service";
   actorUidHash?: string;

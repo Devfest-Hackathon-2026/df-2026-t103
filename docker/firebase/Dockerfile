@@ -1,6 +1,6 @@
 FROM node:22-trixie-slim
 
-ARG FIREBASE_TOOLS_VERSION=14
+ARG FIREBASE_TOOLS_VERSION=15.35.0
 
 # エミュレータのJava要件は下限指定: firebase-tools@15 以降は Java 21+ 必須（21/25/26 など21以上なら動作）。
 # Debian trixie 公式で入手できる最新LTSの openjdk-25 を使い、将来の firebase-tools 更新にも対応する。

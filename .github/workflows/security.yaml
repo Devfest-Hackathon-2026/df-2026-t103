@@ -127,6 +127,13 @@ jobs:
           args=()
           if [[ -n "$TARGET" ]]; then args+=(--target "$TARGET"); fi
           docker build --file "$DOCKERFILE" "${args[@]}" --tag "local/$IMAGE:scan" .
+      - name: Smoke test Firebase emulators
+        if: matrix.image == 'firebase-emulator'
+        # Isolated demo ID: no real Firebase project or credentials are used.
+        run: >-
+          docker run --rm --entrypoint firebase local/firebase-emulator:scan
+          emulators:exec --project demo-mmr --only auth,firestore,database,storage
+          "echo emulator smoke passed"
       - name: Scan OS and application packages (critical fails)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

@@ -67,3 +67,23 @@ Issue完了・安全性検証済みとはしない。
 - [OSV source scan](https://github.com/google/osv-scanner/blob/v2.7.0/docs/scan-source.md)
 - [Dependabot options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
 - [Trivy Action v0.36.0](https://github.com/aquasecurity/trivy-action/tree/ed142fd0673e97e23eac54620cfb913e5ce36c25)
+
+## 初回スキャンで検出されたイメージ依存（2026-11-07）
+
+PR #158の初回CIでは次を検出した。閾値・ignore設定は変更しない。
+
+- API / 病院開発用のbookwormベース: `zlib1g` のCVE-2023-45853。
+  [Debian tracker](https://security-tracker.debian.org/tracker/CVE-2023-45853)
+  でtrixieの修正を確認し、両ベースを `node:22-trixie-slim` に統一する。
+- Firebase CLI 14: `tar` 6.2.1のCVE-2026-59873。
+  [修正版は7.5.19](https://github.com/isaacs/node-tar/security/advisories/GHSA-23hp-3jrh-7fpw)。
+  `tar ^7.5.21` を要求するFirebase CLI 15.35.0へ更新する。
+  CIはイメージ内でAuth / Firestore / RTDB / Storageの起動・終了も確認する。
+  互換性の問題はバージョンを戻して隠さず、この検証で検出する。
+- Firebase EmulatorのOpenJDK 25: CVE-2026-114820。
+  初回スキャンのDebianパッケージ `25.0.5+8-1~deb13u1` は
+  `affected`、Fixed Versionなし。ベース更新後も残る場合は上流の修正版を
+  確認するまでCI失敗を維持し、PRをマージしない。
+  [Debian tracker](https://security-tracker.debian.org/tracker/CVE-2026-114820)
+
+ベース/CLI更新だけで検出が解消したとはみなさず、変更後のCIを確認する。

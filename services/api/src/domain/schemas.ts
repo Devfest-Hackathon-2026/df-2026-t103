@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONSENT_TYPES } from "./types.js";
 import { UPLOAD_ALLOWED_MIME_TYPES } from "./uploads.js";
 import { BODY_LOCATIONS, INTAKE_SYMPTOM_MAX_CHARS } from "./intake.js";
 
@@ -24,13 +25,7 @@ const consentEntrySchema = z.object({
 /** 同意マップ: 既知の consentType のみ受理する。省略可能（partial）。 */
 export const consentMapSchema = z
   .partialRecord(
-    z.enum([
-      "terms_of_service",
-      "privacy_policy_ack",
-      "health_data_collection",
-      "hospital_disclosure",
-      "optional_analytics",
-    ]),
+    z.enum(CONSENT_TYPES),
     consentEntrySchema,
   )
   .refine((m) => Object.keys(m).length > 0, {

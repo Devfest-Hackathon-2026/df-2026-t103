@@ -10,8 +10,10 @@ import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { getLegalDocuments } from "../repos/legalConfig.js";
 import { getActiveMemberships } from "../repos/facilities.js";
 import type { ConsentType, MembershipRole } from "../domain/types.js";
+import type { LegalDocumentSet } from "../domain/legalDocuments.js";
 
 export type AccessTier =
+  | "none"
   | "public"
   | "internal"
   | "authenticated"
@@ -48,12 +50,31 @@ export async function enforceAccess(
   deps: Deps,
   req: FastifyRequest,
 ): Promise<void> {
-  const access = req.routeOptions.config.access;
-  if (!access || access.tier === "public") {
-    if (access?.tier === "public") {
-      await checkAppCheck(deps, req);
-      consumeRate(deps, req, access.rateRule ?? RateRules.register, clientIp(req));
+  // 未登録パスは 404 ハンドラへ。not-found コンテキストでは
+  // routeOptions.url/config が undefined になり得るため先に判定する
+  if (req.is404) return;
+  const access = req.routeOptions.config?.access;
+  if (!access) {
+    // 実際にマッチした業務ルート（/v1, /v1/*）でアクセス階層の宣言漏れが
+    // あれば fail-closed。swagger UI 等プラグイン提供ルート（/docs 等）
+    // の到達は許す。
+    const url = req.routeOptions.url;
+    if (url === "/v1" || url?.startsWith("/v1/")) {
+      throw new ApiError(
+        500,
+        ErrorCodes.INTERNAL,
+        "ルートのアクセス設定がありません。",
+      );
     }
+    return;
+  }
+
+  // none: LB/監視 scope（認証・App Check・レートなし）を明示宣言した経路。
+  if (access.tier === "none") return;
+
+  if (access.tier === "public") {
+    await checkAppCheck(deps, req);
+    consumeRate(deps, req, access.rateRule ?? RateRules.register, clientIp(req));
     return;
   }
 
@@ -194,25 +215,61 @@ export async function evaluateConsents(
   const uid = req.requestContext.auth?.uid;
   if (!uid) return { current: false, missing: [] };
 
-  const legalDocs =
-    req.requestContext.legalDocs !== undefined
-      ? req.requestContext.legalDocs
-      : await getLegalDocuments(deps.db);
+  let legalDocs: LegalDocumentSet | null | undefined;
+  try {
+    legalDocs =
+      req.requestContext.legalDocs !== undefined
+        ? req.requestContext.legalDocs
+        : await getLegalDocuments(deps.db);
+  } catch (err) {
+    throw new ApiError(
+      503,
+      ErrorCodes.UPSTREAM_UNAVAILABLE,
+      "同意文書の取得に失敗しました。",
+      { retryable: true, cause: err },
+    );
+  }
   req.requestContext.legalDocs = legalDocs;
   if (!legalDocs) {
     throw new ApiError(500, ErrorCodes.INTERNAL, "同意文書の設定が見つかりません。");
   }
 
-  const granted = await latestConsentsByType(
-    deps.db,
-    uid,
-    legalDocs.requiredConsents,
-  );
-  const missing: ConsentType[] = [];
+  // 必須種別の文書/メタ欠落は設定不備。ユーザーの未同意（412）ではなく
+  // サーバ障害として検知できるよう 500 とする（公開経路の 503 と同義）。
+  // 同意クエリ発行前に検証し、設定不備時の無駄な read を省く
+  const requiredVersions = new Map<ConsentType, string>();
   for (const type of legalDocs.requiredConsents) {
     const required = legalDocs.documents[type];
+    if (!required?.version || !required?.documentHash) {
+      throw new ApiError(
+        500,
+        ErrorCodes.INTERNAL,
+        "同意文書の設定が不完全です。",
+      );
+    }
+    requiredVersions.set(type, required.version);
+  }
+
+  // 同意履歴の読取も Firestore 一時障害として 503 retryable に分類する
+  let granted: Awaited<ReturnType<typeof latestConsentsByType>>;
+  try {
+    granted = await latestConsentsByType(
+      deps.db,
+      uid,
+      legalDocs.requiredConsents,
+    );
+  } catch (err) {
+    throw new ApiError(
+      503,
+      ErrorCodes.UPSTREAM_UNAVAILABLE,
+      "同意履歴の取得に失敗しました。",
+      { retryable: true, cause: err },
+    );
+  }
+  const missing: ConsentType[] = [];
+  for (const type of legalDocs.requiredConsents) {
     const consent = granted.get(type);
-    if (!required || !consent || consent.documentVersion !== required.version) {
+    if (!consent || consent.documentVersion !== requiredVersions.get(type)) {
       missing.push(type);
     }
   }

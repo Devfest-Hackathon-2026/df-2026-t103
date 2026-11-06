@@ -19,7 +19,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: Deps): void {
         body: registerBodySchema,
         response: {
           201: registerResponseSchema,
-          ...errors(400, 409, 412, 429, 500),
+          ...errors(400, 401, 409, 412, 429, 500, 503),
         },
         tags: ["auth"],
         summary: "メール新規登録（Idempotency-Key 必須）",

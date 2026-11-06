@@ -45,7 +45,17 @@ export async function recordOnboardingConsents(
     onboardingConsentsBodySchema.safeParse(params.body),
   );
 
-  const legalDocs = await getLegalDocuments(deps.db);
+  let legalDocs;
+  try {
+    legalDocs = await getLegalDocuments(deps.db);
+  } catch (err) {
+    throw new ApiError(
+      503,
+      ErrorCodes.UPSTREAM_UNAVAILABLE,
+      "同意文書の取得に失敗しました。",
+      { retryable: true, cause: err },
+    );
+  }
   if (!legalDocs) {
     throw new ApiError(500, ErrorCodes.INTERNAL, "同意文書の設定が見つかりません。");
   }

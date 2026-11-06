@@ -42,7 +42,7 @@ export function registerUploadRoutes(app: FastifyInstance, deps: Deps): void {
         body: uploadInitBodySchema,
         response: {
           201: uploadInitResponseSchema,
-          ...errors(400, 401, 403, 409, 412, 413, 429),
+          ...errors(400, 401, 403, 409, 412, 413, 429, 500, 503),
         },
         tags: ["uploads"],
         summary: "アップロード開始（短命署名URL発行・Idempotency-Key 必須）",
@@ -73,7 +73,7 @@ export function registerUploadRoutes(app: FastifyInstance, deps: Deps): void {
         body: emptyBodySchema.nullish(),
         response: {
           200: uploadCompleteResponseSchema,
-          ...errors(400, 401, 403, 404, 409, 412, 413, 429),
+          ...errors(400, 401, 403, 404, 409, 412, 413, 429, 500, 503),
         },
         tags: ["uploads"],
         summary: "アップロード完了（サーバ側で実オブジェクトを検証）",
@@ -101,7 +101,7 @@ export function registerUploadRoutes(app: FastifyInstance, deps: Deps): void {
         params: z.object({ uploadId: z.string().min(1).max(200) }),
         response: {
           200: uploadProcessingResponseSchema,
-          ...errors(401, 403, 404),
+          ...errors(401, 403, 404, 412, 429, 500, 503),
         },
         tags: ["uploads"],
         summary: "OCR処理状態の照会（非PHIステータスのみ返却）",

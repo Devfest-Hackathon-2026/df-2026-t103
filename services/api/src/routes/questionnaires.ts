@@ -39,7 +39,7 @@ export function registerQuestionnaireRoutes(
       schema: {
         response: {
           200: questionnaireListResponseSchema,
-          ...errors(401, 403),
+          ...errors(401, 403, 412, 429, 500, 503),
         },
         tags: ["questionnaires"],
         summary: "本人の過去問診票一覧",
@@ -59,7 +59,7 @@ export function registerQuestionnaireRoutes(
         querystring: revisionQuery,
         response: {
           200: questionnaireDetailResponseSchema,
-          ...errors(401, 403, 404),
+          ...errors(401, 403, 404, 412, 429, 500, 503),
         },
         tags: ["questionnaires"],
         summary: "問診票取得（不変revision・履歴ハッシュ付き）",

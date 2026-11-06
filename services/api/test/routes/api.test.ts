@@ -20,28 +20,600 @@ async function setup(): Promise<{ deps: TestDeps; app: FastifyInstance }> {
 }
 
 describe("GET /healthz", () => {
-  it("200 を返す（認証不要）", async () => {
+  it("200 + 依存状態 ok を返す（認証不要）", async () => {
     const { app } = await setup();
     const res = await app.inject({ method: "GET", url: "/healthz" });
     expect(res.statusCode).toBe(200);
-    expect(res.json().status).toBe("ok");
+    const body = res.json();
+    expect(body.status).toBe("ok");
+    expect(body.checks.firestore).toBe("ok");
+    expect(body.checkedAt).toBeTruthy();
     expect(res.headers["x-request-id"]).toBeTruthy();
+    await app.close();
+  });
+
+  it("Firestore 障害時は 503 + degraded", async () => {
+    const deps = makeTestDeps();
+    // Firestore プローブが必ず失敗するよう db を差し替える
+    deps.db = {
+      doc: () => ({
+        get: () => Promise.reject(new Error("firestore down")),
+      }),
+    } as unknown as TestDeps["db"];
+    const app = buildTestApp(deps);
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.statusCode).toBe(503);
+    const body = res.json();
+    expect(body.status).toBe("degraded");
+    expect(body.checks.firestore).toBe("error");
+    await app.close();
+  });
+
+  it("Firestore がハングしてもプローブタイムアウトで 503 になる", async () => {
+    const deps = makeTestDeps({ healthzProbeTimeoutMs: 30 });
+    deps.db = {
+      doc: () => ({ get: () => new Promise(() => {}) }),
+    } as unknown as TestDeps["db"];
+    const app = buildTestApp(deps);
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().checks.firestore).toBe("error");
+    await app.close();
+  });
+
+  it("App Check enforce 下でも認証なしで到達できる（LB想定）", async () => {
+    const deps = makeTestDeps({ appCheckMode: "enforce" });
+    const app = buildTestApp(deps);
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("プローブ対象ドキュメントが無くても read が成立すれば ok", async () => {
+    const deps = makeTestDeps();
+    // seedLegalDocuments なし: appConfigs/publicLegalVersion は存在しない
+    const app = buildTestApp(deps);
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().checks.firestore).toBe("ok");
+    await app.close();
+  });
+
+  it("プローブ結果を短期キャッシュし期限後に再プローブする", async () => {
+    const deps = makeTestDeps({ healthzProbeCacheMs: 5_000 });
+    let probeCount = 0;
+    const origDoc = deps.db.doc.bind(deps.db);
+    deps.db.doc = ((path: string) => {
+      if (path === "appConfigs/publicLegalVersion") probeCount++;
+      return origDoc(path);
+    }) as typeof deps.db.doc;
+    const app = buildTestApp(deps);
+
+    const r1 = await app.inject({ method: "GET", url: "/healthz" });
+    expect(r1.statusCode).toBe(200);
+    expect(r1.headers["cache-control"]).toBe("no-store");
+    expect(r1.json().service).toBe("mmr-api");
+    const r2 = await app.inject({ method: "GET", url: "/healthz" });
+    expect(r2.statusCode).toBe(200);
+    expect(probeCount).toBe(1);
+
+    // キャッシュ期限経過で再プローブ
+    deps.clock.advanceMs(5_001);
+    const r3 = await app.inject({ method: "GET", url: "/healthz" });
+    expect(r3.statusCode).toBe(200);
+    expect(probeCount).toBe(2);
+    await app.close();
+  });
+
+  it("キャッシュ期限後は回復を検知して 200 に戻る", async () => {
+    const deps = makeTestDeps({ healthzProbeCacheMs: 1_000 });
+    let fail = true;
+    deps.db = {
+      doc: () => ({
+        get: () =>
+          fail ? Promise.reject(new Error("down")) : Promise.resolve({}),
+      }),
+    } as unknown as TestDeps["db"];
+    const app = buildTestApp(deps);
+    const r1 = await app.inject({ method: "GET", url: "/healthz" });
+    expect(r1.statusCode).toBe(503);
+    fail = false;
+    // キャッシュ内はまだ degraded
+    const r2 = await app.inject({ method: "GET", url: "/healthz" });
+    expect(r2.statusCode).toBe(503);
+    deps.clock.advanceMs(1_001);
+    const r3 = await app.inject({ method: "GET", url: "/healthz" });
+    expect(r3.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("同時到着は進行中プローブを共有し Firestore read は1回になる", async () => {
+    const deps = makeTestDeps();
+    let probeCount = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    deps.db = {
+      doc: () => ({
+        get: async () => {
+          probeCount++;
+          await gate;
+          return { exists: false };
+        },
+      }),
+    } as unknown as TestDeps["db"];
+    const app = buildTestApp(deps);
+    // プローブが解決しない間に並行リクエストを発行する
+    const pending = Promise.all(
+      Array.from({ length: 5 }, () =>
+        app.inject({ method: "GET", url: "/healthz" }),
+      ),
+    );
+    // 全ハンドラが inflight に張り付くまで1マイクロタスク回す
+    await new Promise((r) => setImmediate(r));
+    release();
+    const results = await pending;
+    expect(results.every((r) => r.statusCode === 200)).toBe(true);
+    expect(probeCount).toBe(1);
     await app.close();
   });
 });
 
 describe("GET /v1/public/legal-documents", () => {
-  it("現行文書セットを返す", async () => {
-    const { app } = await setup();
+  it("現行文書セット（版・ハッシュ・必須一覧）を返す", async () => {
+    const { deps, app } = await setup();
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(200);
+    // 版ローテーションの伝播を経路キャッシュが遅らせないよう no-store
+    expect(res.headers["cache-control"]).toBe("no-store");
+    const body = res.json();
+    expect(body.requiredConsents).toContain("terms_of_service");
+    // 再同意検知に必要なメタ: 必須同意の全種別に現行版+正式ハッシュがある
+    for (const type of body.requiredConsents) {
+      const doc = body.documents[type];
+      expect(doc?.version, `${type}.version`).toBeTruthy();
+      expect(doc?.documentHash, `${type}.documentHash`).toMatch(/^sha256:/);
+      expect(doc?.publishedAt, `${type}.publishedAt`).toBeTruthy();
+    }
+    expect(body.updatedAt).toBe(deps.clock.now().toISOString());
+    // 再同意検知に使う hospital_disclosure も現行版として公開される
+    expect(body.documents.hospital_disclosure.version).toBeTruthy();
+    await app.close();
+  });
+
+  it("文書未設定なら 503 + retryable", async () => {
+    const deps = makeTestDeps();
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error.code).toBe("UPSTREAM_UNAVAILABLE");
+    expect(res.json().error.retryable).toBe(true);
+    await app.close();
+  });
+
+  it("Firestore 読取自体が失敗しても 503 UPSTREAM_UNAVAILABLE + Retry-After", async () => {
+    const deps = makeTestDeps();
+    deps.db = {
+      doc: () => ({ get: () => Promise.reject(new Error("down")) }),
+    } as unknown as TestDeps["db"];
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error.code).toBe("UPSTREAM_UNAVAILABLE");
+    expect(res.json().error.retryable).toBe(true);
+    expect(res.headers["retry-after"]).toBeTruthy();
+    await app.close();
+  });
+
+  it("読取失敗も短期キャッシュされ回復後も TTL 内は 503 のまま", async () => {
+    const deps = makeTestDeps();
+    let readCount = 0;
+    let fail = true;
+    deps.db = {
+      doc: () => ({
+        get: async () => {
+          readCount++;
+          if (fail) throw new Error("down");
+          return { exists: false, data: () => undefined };
+        },
+      }),
+    } as unknown as TestDeps["db"];
+    const app = buildTestApp(deps);
+    const r1 = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(r1.statusCode).toBe(503);
+    expect(readCount).toBe(1);
+    // 障害解消後もキャッシュ内は失敗を返す（read 連打しない）
+    fail = false;
+    const r2 = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(r2.statusCode).toBe(503);
+    expect(readCount).toBe(1);
+    // TTL 経過で再読 → 回復を検知
+    deps.clock.advanceMs(10_001);
+    const r3 = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(r3.statusCode).toBe(503); // 文書未設定なので引き続き 503 だが read は走る
+    expect(readCount).toBe(2);
+    await app.close();
+  });
+
+  it("同時到着は進行中 read を共有し Firestore read は1回になる", async () => {
+    const deps = makeTestDeps();
+    let readCount = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    deps.db = {
+      doc: () => ({
+        get: async () => {
+          readCount++;
+          await gate;
+          return { exists: false, data: () => undefined };
+        },
+      }),
+    } as unknown as TestDeps["db"];
+    const app = buildTestApp(deps);
+    const pending = Promise.all(
+      Array.from({ length: 5 }, () =>
+        app.inject({
+          method: "GET",
+          url: "/v1/public/legal-documents",
+        }),
+      ),
+    );
+    await new Promise((r) => setImmediate(r));
+    release();
+    const results = await pending;
+    expect(results.every((r) => r.statusCode === 503)).toBe(true);
+    expect(readCount).toBe(1);
+    await app.close();
+  });
+
+  it("requiredConsents が配列でない壊れた設定でも 503（500にならない）", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: "terms_of_service",
+      documents: {},
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("文書エントリの余計なキーは応答に含めない", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service"],
+      documents: {
+        terms_of_service: {
+          version: "2026-11-01",
+          documentHash: "sha256:abc",
+          publishedAt: "2026-11-01T00:00:00Z",
+          internalNote: "法務レビュー中",
+        },
+      },
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(200);
+    const doc = res.json().documents.terms_of_service;
+    expect(doc.version).toBe("2026-11-01");
+    expect(doc.documentHash).toBe("sha256:abc");
+    expect(doc.internalNote).toBeUndefined();
+    await app.close();
+  });
+
+  it("documents が壊れた値でも 503（500にならない）", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service"],
+      documents: "not-an-object",
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("requiredConsents にプロトタイプ名が混ざっても誤判定しない", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service", "toString"],
+      documents: {
+        terms_of_service: {
+          version: "2026-11-01",
+          documentHash: "sha256:abc",
+          publishedAt: "2026-11-01T00:00:00Z",
+        },
+      },
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    // toString の文書が無いので設定不備として 503
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("publishedAt が Timestamp 型でも ISO に正規化される", async () => {
+    const { Timestamp } = await import("firebase-admin/firestore");
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service"],
+      documents: {
+        terms_of_service: {
+          version: "2026-11-01",
+          documentHash: "sha256:abc",
+          publishedAt: Timestamp.fromDate(new Date("2026-11-01T00:00:00Z")),
+        },
+      },
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().documents.terms_of_service.publishedAt).toBe(
+      "2026-11-01T00:00:00.000Z",
+    );
+    await app.close();
+  });
+
+  it("requiredConsents に非文字列・未知種別が混ざっていても 503", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service", 123],
+      documents: {
+        terms_of_service: {
+          version: "2026-11-01",
+          documentHash: "sha256:abc",
+          publishedAt: "2026-11-01T00:00:00Z",
+        },
+      },
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("未知の同意種別が必須に含まれていても 503", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service", "terms_of_sarvice"],
+      documents: {
+        terms_of_service: {
+          version: "2026-11-01",
+          documentHash: "sha256:abc",
+          publishedAt: "2026-11-01T00:00:00Z",
+        },
+        terms_of_sarvice: {
+          version: "2026-11-01",
+          documentHash: "sha256:abc",
+          publishedAt: "2026-11-01T00:00:00Z",
+        },
+      },
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("非必須文書のメタ不備はその文書だけ落として 200", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service"],
+      documents: {
+        terms_of_service: {
+          version: "2026-11-01",
+          documentHash: "sha256:abc",
+          publishedAt: "2026-11-01T00:00:00Z",
+        },
+        hospital_disclosure: { version: "", documentHash: "" },
+      },
+    });
+    const app = buildTestApp(deps);
     const res = await app.inject({
       method: "GET",
       url: "/v1/public/legal-documents",
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.requiredConsents).toContain("terms_of_service");
     expect(body.documents.terms_of_service.version).toBe("2026-11-01");
+    expect(body.documents.hospital_disclosure).toBeUndefined();
     await app.close();
+  });
+
+  it("必須同意一覧が空なら設定不備として 503", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      documents: {},
+      requiredConsents: [],
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("必須種別の版・ハッシュが欠落していても 503", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service"],
+      documents: { terms_of_service: { version: "2026-11-01" } },
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("publicRead レート制限を超えると 429", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    const app = buildTestApp(deps);
+    let last = 0;
+    for (let i = 0; i < 61; i++) {
+      const res = await app.inject({
+        method: "GET",
+        url: "/v1/public/legal-documents",
+      });
+      last = res.statusCode;
+    }
+    expect(last).toBe(429);
+    await app.close();
+  });
+
+  it("XFF 経由でクライアントIP単位のレートバケットになる", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    const app = buildTestApp(deps);
+    // 同一ソケット・異なるXFFで送信。trustProxy が効いていれば
+    // XFF 最終エントリがバケットキーになり、A で枯渇しても B は通る
+    let last = 0;
+    for (let i = 0; i < 61; i++) {
+      const res = await app.inject({
+        method: "GET",
+        url: "/v1/public/legal-documents",
+        remoteAddress: "10.0.0.1",
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      });
+      last = res.statusCode;
+    }
+    expect(last).toBe(429);
+    const other = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+      remoteAddress: "10.0.0.1",
+      headers: { "x-forwarded-for": "203.0.113.20" },
+    });
+    expect(other.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("App Check enforce 時はトークン必須・有効トークンで 200", async () => {
+    const deps = makeTestDeps({ appCheckMode: "enforce" });
+    await seedLegalDocuments(deps);
+    const app = buildTestApp(deps);
+    const denied = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(denied.statusCode).toBe(401);
+    expect(denied.json().error.code).toBe("APP_CHECK_FAILED");
+    const ok = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+      headers: { "x-firebase-appcheck": "valid-appcheck" },
+    });
+    expect(ok.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("法務文書の読取は短期キャッシュされ期限後に再読する", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    let readCount = 0;
+    const origDoc = deps.db.doc.bind(deps.db);
+    deps.db.doc = ((path: string) => {
+      if (path === "appConfigs/publicLegalVersion") readCount++;
+      return origDoc(path);
+    }) as typeof deps.db.doc;
+    const app = buildTestApp(deps);
+    const r1 = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(r1.statusCode).toBe(200);
+    const r2 = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(r2.statusCode).toBe(200);
+    expect(readCount).toBe(1);
+    // キャッシュTTL(10秒)経過で再読
+    deps.clock.advanceMs(10_001);
+    const r3 = await app.inject({
+      method: "GET",
+      url: "/v1/public/legal-documents",
+    });
+    expect(r3.statusCode).toBe(200);
+    expect(readCount).toBe(2);
+    await app.close();
+  });
+});
+
+describe("アクセス階層の宣言漏れ", () => {
+  it("未登録の /v1/* パスは 500 でなく 404 を返す", async () => {
+    const { app } = await setup();
+    const res = await app.inject({ method: "GET", url: "/v1/does-not-exist" });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("/v1/* の未宣言ルートは fail-closed、プラグイン系経路は許可", async () => {
+    const { enforceAccess } = await import("../../src/auth/gates.js");
+    const deps = makeTestDeps();
+    const businessReq = {
+      is404: false,
+      routeOptions: { config: {}, url: "/v1/future" },
+      url: "/v1/future",
+    } as unknown as Parameters<typeof enforceAccess>[1];
+    await expect(enforceAccess(deps, businessReq)).rejects.toMatchObject({
+      statusCode: 500,
+    });
+    const pluginReq = {
+      is404: false,
+      routeOptions: { config: {}, url: "/docs/json" },
+      url: "/docs/json",
+    } as unknown as Parameters<typeof enforceAccess>[1];
+    await expect(
+      enforceAccess(deps, pluginReq),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -293,6 +865,109 @@ describe("PATCH /v1/me/profile", () => {
     await app.close();
   });
 
+  it("法務設定が壊れていると同意ゲートは fail-closed（500）", async () => {
+    const deps = makeTestDeps();
+    // requiredConsents が配列でない壊れた設定。getLegalDocuments は
+    // 未設定扱い（undefined）を返し、evaluateConsents は 500 で閉じる
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: "terms_of_service",
+      documents: {},
+    });
+    await seedAccount(deps, UID, {
+      accountStatus: "onboarding_pending",
+      onboardingState: "profile_pending",
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/me/profile",
+      headers: authHeader(UID),
+      payload: { familyName: "田中" },
+    });
+    expect(res.statusCode).toBe(500);
+    await app.close();
+  });
+
+  it("必須種別の文書が欠落していても同意ゲートは fail-closed（500）", async () => {
+    const deps = makeTestDeps();
+    // requiredConsents 自体は正しいが文書が無い → ユーザー起因でなく
+    // 設定不備として 500（412 で「再同意しても直らない」状態にしない）
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service"],
+      documents: {},
+    });
+    await seedAccount(deps, UID, {
+      accountStatus: "onboarding_pending",
+      onboardingState: "profile_pending",
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/me/profile",
+      headers: authHeader(UID),
+      payload: { familyName: "田中" },
+    });
+    expect(res.statusCode).toBe(500);
+    await app.close();
+  });
+
+  it("法務設定の読取自体が失敗した場合は同意ゲートも 503 retryable", async () => {
+    const deps = makeTestDeps();
+    await seedAccount(deps, UID, {
+      accountStatus: "onboarding_pending",
+      onboardingState: "profile_pending",
+    });
+    // 法務設定の read のみ失敗させ（他の doc read は生かす）、
+    // 一時障害が 500 INTERNAL ではなく 503 UPSTREAM_UNAVAILABLE に分類されることを検証
+    const realDoc = deps.db.doc.bind(deps.db);
+    deps.db.doc = ((path: string) =>
+      path === "appConfigs/publicLegalVersion"
+        ? { get: () => Promise.reject(new Error("down")) }
+        : realDoc(path)) as TestDeps["db"]["doc"];
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/me/profile",
+      headers: authHeader(UID),
+      payload: { familyName: "田中" },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error.code).toBe("UPSTREAM_UNAVAILABLE");
+    expect(res.json().error.retryable).toBe(true);
+    await app.close();
+  });
+
+  it("同意履歴の読取失敗も同意ゲートは 503 retryable", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    await seedAccount(deps, UID, {
+      accountStatus: "onboarding_pending",
+      onboardingState: "profile_pending",
+    });
+    // legalConsents クエリのみ失敗させ、法務設定 read は正常に通す
+    const realCollection = deps.db.collection.bind(deps.db);
+    deps.db.collection = ((name: string) => {
+      if (name !== "legalConsents") return realCollection(name);
+      const failing: Record<string, unknown> = {};
+      failing.where = () => failing;
+      failing.orderBy = () => failing;
+      failing.limit = () => failing;
+      failing.get = () => Promise.reject(new Error("down"));
+      return failing;
+    }) as TestDeps["db"]["collection"];
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/me/profile",
+      headers: authHeader(UID),
+      payload: { familyName: "田中" },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error.code).toBe("UPSTREAM_UNAVAILABLE");
+    expect(res.json().error.retryable).toBe(true);
+    await app.close();
+  });
+
   it("バリデーションエラーは 400 + fieldErrors", async () => {
     const deps = makeTestDeps();
     await seedLegalDocuments(deps);
@@ -362,6 +1037,14 @@ describe("POST /v1/auth/register", () => {
       last = res.statusCode;
     }
     expect(last).toBe(429);
+    const final = await app.inject({
+      method: "POST",
+      url: "/v1/auth/register",
+      headers: { "idempotency-key": "reg-final" },
+      payload: { ...payload, email: "final@example.com" },
+    });
+    expect(final.statusCode).toBe(429);
+    expect(final.headers["retry-after"]).toBeTruthy();
     await app.close();
   });
 });
@@ -447,6 +1130,28 @@ describe("POST /v1/me/deletion-request → cancel → status", () => {
 });
 
 describe("POST /v1/onboarding/consents", () => {
+  it("法務設定が壊れていると同意提出も 503/500 で拒否される", async () => {
+    const deps = makeTestDeps();
+    // 必須種別の文書が欠落した設定（validateConsentSubmission → 500）
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      requiredConsents: ["terms_of_service"],
+      documents: {},
+    });
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/onboarding/consents",
+      headers: { ...authHeader("u-broken"), "idempotency-key": "oc-broken" },
+      payload: {
+        consents: {
+          terms_of_service: { accepted: true, documentVersion: "2026-11-01" },
+        },
+      },
+    });
+    expect(res.statusCode).toBe(500);
+    await app.close();
+  });
+
   it("現行同意の記録で profile_pending に進む", async () => {
     const deps = makeTestDeps();
     await seedLegalDocuments(deps);
@@ -488,6 +1193,7 @@ describe("GET /docs (OpenAPI)", () => {
     expect(spec.openapi).toMatch(/^3\./);
     for (const p of [
       "/healthz",
+      "/v1/public/legal-documents",
       "/v1/auth/register",
       "/v1/me",
       "/v1/me/deletion-request",

@@ -124,7 +124,17 @@ export async function registerEmail(
   // 既存操作がある場合は予約時の版セット(legalVersionSet)でピン検証する。
   // 文書版の更新をまたいだ再試行が「版不一致412」で恒久的に詰まないよう、
   // 予約済み版を現行版より優先する（新規必須種別が追加された場合のみ現行を要求）。
-  const legalDocs = await getLegalDocuments(deps.db);
+  let legalDocs;
+  try {
+    legalDocs = await getLegalDocuments(deps.db);
+  } catch (err) {
+    throw new ApiError(
+      503,
+      ErrorCodes.UPSTREAM_UNAVAILABLE,
+      "同意文書の取得に失敗しました。",
+      { retryable: true, cause: err },
+    );
+  }
   if (!legalDocs) {
     throw new ApiError(500, ErrorCodes.INTERNAL, "同意文書の設定が見つかりません。");
   }

@@ -63,7 +63,7 @@ export function registerIntakeRoutes(
         body: intakeCreateSchema,
         response: {
           201: intakeCreateResponseSchema,
-          ...errors(400, 401, 403, 409, 429),
+          ...errors(400, 401, 403, 409, 412, 429, 500, 503),
         },
         tags: ["intakes"],
         summary: "問診下書き作成（status=draft, revision=1）",
@@ -89,7 +89,7 @@ export function registerIntakeRoutes(
         params: intakeIdParam,
         response: {
           200: intakeDetailResponseSchema,
-          ...errors(401, 403, 404),
+          ...errors(401, 403, 404, 412, 429, 500, 503),
         },
         tags: ["intakes"],
         summary: "問診状態取得（中断再開用スナップショット付き）",
@@ -114,7 +114,7 @@ export function registerIntakeRoutes(
         body: intakeSymptomsSchema,
         response: {
           200: intakeStateResponseSchema,
-          ...errors(400, 401, 403, 404, 409, 412),
+          ...errors(400, 401, 403, 404, 409, 412, 429, 500, 503),
         },
         tags: ["intakes"],
         summary: "初期症状・身体部位保存（draft→questioning）",
@@ -141,7 +141,7 @@ export function registerIntakeRoutes(
         body: intakeNextQuestionSchema,
         response: {
           200: nextQuestionResponseSchema,
-          ...errors(400, 401, 403, 404, 409, 412, 429),
+          ...errors(400, 401, 403, 404, 409, 412, 429, 500, 503),
         },
         tags: ["intakes"],
         summary: "次質問生成（スナップショット永続化後に返却）",
@@ -166,7 +166,7 @@ export function registerIntakeRoutes(
         body: intakeAnswerSchema,
         response: {
           200: answerSaveResponseSchema,
-          ...errors(400, 401, 403, 404, 409, 412),
+          ...errors(400, 401, 403, 404, 409, 412, 429, 500, 503),
         },
         tags: ["intakes"],
         summary: "回答保存（患者原文をそのまま保持, FR-I05）",
@@ -191,7 +191,7 @@ export function registerIntakeRoutes(
         body: intakeAnswerPatchSchema,
         response: {
           200: answerSaveResponseSchema,
-          ...errors(400, 401, 403, 404, 409, 412),
+          ...errors(400, 401, 403, 404, 409, 412, 429, 500, 503),
         },
         tags: ["intakes"],
         summary: "回答修正（分岐再評価のため後続質問を無効化）",
@@ -217,7 +217,7 @@ export function registerIntakeRoutes(
         body: intakeSummarySchema,
         response: {
           200: summaryResponseSchema,
-          ...errors(400, 401, 403, 404, 409, 412),
+          ...errors(400, 401, 403, 404, 409, 412, 429, 500, 503),
         },
         tags: ["intakes"],
         summary: "レビュー用要約（未回答は未回答のまま表示, FR-I07）",
@@ -242,7 +242,7 @@ export function registerIntakeRoutes(
         body: intakeFinalizeSchema,
         response: {
           200: finalizeResponseSchema,
-          ...errors(400, 401, 403, 404, 409, 412),
+          ...errors(400, 401, 403, 404, 409, 412, 429, 500, 503),
         },
         tags: ["intakes"],
         summary: "確定revision生成（immutable questionnaire snapshot）",

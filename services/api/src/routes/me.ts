@@ -49,7 +49,7 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
         },
       },
       schema: {
-        response: { 200: meResponseSchema, ...errors(401, 403, 500) },
+        response: { 200: meResponseSchema, ...errors(401, 403, 429, 500, 503) },
         tags: ["me"],
         summary: "アカウント状態・同意状態・完了度",
         security: [{ bearerAuth: [] }],
@@ -64,7 +64,7 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
     {
       config: { access: { tier: "consented" } },
       schema: {
-        response: { 200: profileResponseSchema, ...errors(401, 403, 404, 412) },
+        response: { 200: profileResponseSchema, ...errors(401, 403, 404, 412, 429) },
         tags: ["me"],
         summary: "プロフィール取得（現行同意必須）",
         security: [{ bearerAuth: [] }],
@@ -82,7 +82,7 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
         body: profilePatchSchema,
         response: {
           200: profileResponseSchema,
-          ...errors(400, 401, 403, 412),
+          ...errors(400, 401, 403, 412, 429, 500, 503),
         },
         tags: ["me"],
         summary: "プロフィール更新（現行同意必須）",
@@ -103,7 +103,7 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
         body: onboardingConsentsBodySchema,
         response: {
           200: onboardingResponseSchema,
-          ...errors(400, 401, 403, 409, 412, 429),
+          ...errors(400, 401, 403, 409, 412, 429, 500, 503),
         },
         tags: ["me"],
         summary: "同意記録（Idempotency-Key 必須）",
@@ -130,7 +130,7 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
     {
       config: { access: { tier: "authenticated" } },
       schema: {
-        response: { 200: consentsResponseSchema, ...errors(401, 403) },
+        response: { 200: consentsResponseSchema, ...errors(401, 403, 429) },
         tags: ["me"],
         summary: "同意履歴と現行版マッピング",
         security: [{ bearerAuth: [] }],
@@ -236,7 +236,7 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
         access: { tier: "authenticated", allowPendingDeletion: true },
       },
       schema: {
-        response: { 200: deletionStatusSchema, ...errors(401, 403) },
+        response: { 200: deletionStatusSchema, ...errors(401, 403, 429) },
         tags: ["me"],
         summary: "退会申請の状態照会",
         security: [{ bearerAuth: [] }],
@@ -248,7 +248,14 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
 
 function toIso(value: unknown): string | undefined {
   if (value && typeof value === "object" && "toDate" in value) {
-    return (value as { toDate(): Date }).toDate().toISOString();
+    try {
+      const d = (value as { toDate(): unknown }).toDate();
+      return d instanceof Date && !Number.isNaN(d.getTime())
+        ? d.toISOString()
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
   return undefined;
 }

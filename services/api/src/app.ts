@@ -32,6 +32,12 @@ import { registerStaffRoutes } from "./routes/staff.js";
 export function buildApp(deps: Deps): FastifyInstance {
   const app = Fastify({
     loggerInstance: deps.logger.child({ component: "http" }),
+    // Cloud Run/GFE が唯一のイングレスという前提で、直近1ホップだけ信頼し
+    // レート制限のキーを実クライアントIPにする。前提: GFE以外から
+    // 到達不可（直接接続可能な経路があると XFF 最終エントリを偽装して
+    // IP単位レート制限を回避できる）。ホップ数のみの信頼は Fastify v5 が
+    // fail-closed 化したため関数形式で同等の 1 ホップ信頼を明示する。
+    trustProxy: (_addr: string, hop: number) => hop === 0,
     // X-Request-Id を genReqId で解決し req.id と一体化する。
     // ログ（requestId=request.id）と応答ヘッダ・エラー本文が同一IDで相関できる。
     genReqId: (req) => {

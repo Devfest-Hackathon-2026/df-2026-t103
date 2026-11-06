@@ -71,6 +71,21 @@ const envSchema = z.object({
   VERTEX_AI_LOCATION: z.string().default("asia-northeast1"),
   /** LLM呼出しのタイムアウトms。 */
   VERTEX_AI_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+
+  /** /healthz の Firestore プローブ最長待機ms（ADR-0013）。LB超過を防ぐ上限付き。 */
+  HEALTHZ_PROBE_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(30_000)
+    .default(2_000),
+  /** プローブ結果のキャッシュms。0不可（無効化は課金read直結を招くため）。 */
+  HEALTHZ_PROBE_CACHE_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(60_000)
+    .default(5_000),
 });
 
 export type AppConfig = Readonly<{
@@ -111,6 +126,8 @@ export type AppConfig = Readonly<{
   vertexAiModel: string;
   vertexAiLocation: string;
   vertexAiTimeoutMs: number;
+  healthzProbeTimeoutMs: number;
+  healthzProbeCacheMs: number;
   googlePlacesApiKey: string | undefined;
   placesMaxResults: number;
 }>;
@@ -230,6 +247,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     vertexAiModel: parsed.VERTEX_AI_MODEL,
     vertexAiLocation: parsed.VERTEX_AI_LOCATION,
     vertexAiTimeoutMs: parsed.VERTEX_AI_TIMEOUT_MS,
+    healthzProbeTimeoutMs: parsed.HEALTHZ_PROBE_TIMEOUT_MS,
+    healthzProbeCacheMs: parsed.HEALTHZ_PROBE_CACHE_MS,
     googlePlacesApiKey: parsed.GOOGLE_PLACES_API_KEY,
     placesMaxResults: parsed.PLACES_MAX_RESULTS,
   });

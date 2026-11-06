@@ -3,6 +3,7 @@ import { z } from "zod";
 /**
  * OpenAPI 応答スキーマ。ドキュメント用途のため loose object で定義し、
  * 実応答の追加フィールドを剥がさない（serializer の安全側）。
+ * 例外: 法務文書の公開面はフィールドを契約で precise に固定する。
  */
 
 export const apiErrorSchema = z
@@ -27,13 +28,24 @@ export function errors(
 }
 
 export const healthResponseSchema = z.object({
-  status: z.string().describe("ok"),
-  service: z.string().describe("mmr-api"),
+  status: z.enum(["ok", "degraded"]),
+  service: z.literal("mmr-api"),
   emulator: z.boolean(),
+  checks: z.object({
+    firestore: z.enum(["ok", "error"]),
+  }),
+  checkedAt: z.string().describe("ISO8601"),
 });
 
 export const legalDocumentsResponseSchema = z.object({
-  documents: z.record(z.string(), z.unknown()),
+  documents: z.record(
+    z.string(),
+    z.object({
+      version: z.string(),
+      documentHash: z.string(),
+      publishedAt: z.string(),
+    }),
+  ),
   requiredConsents: z.array(z.string()),
   updatedAt: z.string().nullable(),
 });

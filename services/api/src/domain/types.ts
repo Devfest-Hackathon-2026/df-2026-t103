@@ -13,12 +13,18 @@ export type OnboardingState =
   | "profile_pending"
   | "completed";
 
-export type ConsentType =
-  | "terms_of_service"
-  | "privacy_policy_ack"
-  | "health_data_collection"
-  | "hospital_disclosure"
-  | "optional_analytics";
+export const CONSENT_TYPES = [
+  "terms_of_service",
+  "privacy_policy_ack",
+  "health_data_collection",
+  "hospital_disclosure",
+  "optional_analytics",
+] as const;
+
+export type ConsentType = (typeof CONSENT_TYPES)[number];
+
+/** 既知の同意種別かの判定用（CONSENT_TYPES の Set 化。全モジュールで共有）。 */
+export const CONSENT_TYPE_SET: ReadonlySet<string> = new Set(CONSENT_TYPES);
 
 export type RegistrationSource =
   | "email_registration"

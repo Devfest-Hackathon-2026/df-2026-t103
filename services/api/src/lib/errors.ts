@@ -164,6 +164,11 @@ export function sendError(
   let apiError: ApiError;
   const clientStatus = fastifyClientErrorStatus(err);
   if (isApiError(err)) {
+    // 意図した 5xx（UPSTREAM_UNAVAILABLE・設定不備 INTERNAL 等）も運用検知の
+    // ためログに残す。4xx は正常系エラーのため記録しない
+    if (err.statusCode >= 500) {
+      request.log.warn({ err }, "handled server error");
+    }
     apiError = err;
   } else if (hasZodFastifySchemaValidationErrors(err)) {
     // fastify-type-provider-zod の validatorCompiler が返すルートスキーマ検証エラー

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'firebase_bootstrap.dart';
+import 'patient_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,9 +17,7 @@ class PatientApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'もしもし問診 患者アプリ',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
-      ),
+      theme: buildPatientTheme(),
       home: const DemoPlaceholderScreen(),
     );
   }

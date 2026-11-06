@@ -1,41 +1,56 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:patient/main.dart';
 
 void main() {
-  testWidgets('デモ準備画面にタイトルと未実装である旨が表示される', (WidgetTester tester) async {
+  testWidgets('サービスの説明と利用開始できない理由を表示する', (tester) async {
+    final semantics = tester.ensureSemantics();
     await tester.pumpWidget(const PatientApp());
 
-    // アプリタイトルが表示されていること（MaterialApp.title は描画面ではなく
-    // OS タブ用の文書タイトルなので、画面上は AppBar の Text が 1 件）。
-    expect(find.text('もしもし問診 患者アプリ'), findsOneWidget);
-    expect(find.text('雛形デモ'), findsOneWidget);
-
-    // 機能未実装であることが画面上で明示されていること。
-    expect(find.text('この患者アプリの機能は未実装です。'), findsOneWidget);
+    expect(find.text('もしもし問診へようこそ'), findsOneWidget);
+    expect(find.text('医療機関に伝える患者情報の整理を支援するサービスです。'), findsOneWidget);
+    expect(find.text('診断・治療・受診予約は行いません。'), findsOneWidget);
+    expect(find.textContaining('認証・同意・利用開始後の画面が未実装'), findsOneWidget);
+    expect(
+      tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+      isNull,
+    );
+    expect(
+      tester.getSemantics(find.byType(FilledButton)),
+      matchesSemantics(label: '利用開始', isButton: true, hasEnabledState: true),
+    );
+    await tester.tap(find.byType(FilledButton));
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.byType(WelcomeScreen), findsOneWidget);
+    semantics.dispose();
   });
 
-  testWidgets('文字拡大してもレイアウトが崩れない（overflow しない）', (WidgetTester tester) async {
+  testWidgets('狭い画面と200%文字倍率でもスクロールして内容を確認できる', (tester) async {
+    tester.view.physicalSize = const Size(320, 480);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     tester.platformDispatcher.textScaleFactorTestValue = 2.0;
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     await tester.pumpWidget(const PatientApp());
 
-    final context = tester.element(find.text('この患者アプリの機能は未実装です。'));
+    final context = tester.element(find.text('診断・治療・受診予約は行いません。'));
     expect(MediaQuery.textScalerOf(context).scale(20), 40);
     expect(Theme.of(context).textTheme.bodyMedium?.fontSize, 20);
 
-    // 例外（RenderFlex overflow など）が発生しないこと。
     expect(tester.takeException(), isNull);
-
-    // 拡大後も未実装の文言が表示されていること。
-    expect(find.text('この患者アプリの機能は未実装です。'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('利用開始'), 200);
+    expect(find.textContaining('認証・同意・利用開始後の画面が未実装'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('患者テーマの文字サイズと配色が適用される', (WidgetTester tester) async {
     await tester.pumpWidget(const PatientApp());
 
-    final context = tester.element(find.text('この患者アプリの機能は未実装です。'));
+    final context = tester.element(find.text('診断・治療・受診予約は行いません。'));
     final theme = Theme.of(context);
     expect(theme.textTheme.bodySmall?.fontSize, 20);
     expect(theme.textTheme.bodyMedium?.fontSize, 20);
@@ -50,7 +65,7 @@ void main() {
     );
     final body = tester.widget<RichText>(
       find.descendant(
-        of: find.text('この患者アプリの機能は未実装です。'),
+        of: find.text('診断・治療・受診予約は行いません。'),
         matching: find.byType(RichText),
       ),
     );

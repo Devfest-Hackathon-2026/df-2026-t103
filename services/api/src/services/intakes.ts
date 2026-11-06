@@ -1,4 +1,8 @@
-import { Timestamp, type DocumentData } from "firebase-admin/firestore";
+import {
+  Timestamp,
+  type DocumentData,
+  type Transaction,
+} from "firebase-admin/firestore";
 import type { Deps } from "../deps.js";
 import type {
   AnswerDoc,
@@ -115,6 +119,37 @@ function draftExpiredError(): ApiError {
   return ApiError.precondition(
     "この下書きは保存期限を過ぎています。新しい問診を開始してください。",
   );
+}
+
+/**
+ * 分岐変更で不要になった後続の active/answered 質問を無効化し、
+ * 旧分岐の回答を除去する（04 §5.4）。
+ * questions は tx 内でいかなる書込より先に取得して渡すこと
+ * （Firestore tx は read を write より前に要求する）。
+ */
+function invalidateDownstream(
+  tx: Transaction,
+  deps: Deps,
+  intakeId: string,
+  afterStepIndex: number,
+  questions: { docs: ReadonlyArray<{ id: string; data(): unknown }> },
+): boolean {
+  let invalidated = false;
+  for (const qs of questions.docs) {
+    const q = qs.data() as QuestionDoc;
+    if (
+      q.stepIndex > afterStepIndex &&
+      (q.status === "active" || q.status === "answered")
+    ) {
+      tx.update(questionRef(deps.db, intakeId, qs.id), {
+        status: "invalidated",
+      });
+      // 無効化した分岐の回答は現在ブランチから除外する
+      tx.delete(answerRef(deps.db, intakeId, qs.id));
+      invalidated = true;
+    }
+  }
+  return invalidated;
 }
 
 /**
@@ -294,6 +329,16 @@ export async function saveAnswer(
         ]);
       }
     }
+    // 既回答の置換は分岐変更になり得るため patchAnswer と同様に後続を再評価する。
+    // read は全て write より先に実行する（Firestore tx の制約）。
+    const existingSnap = await tx.get(
+      answerRef(deps.db, params.intakeId, body.questionId),
+    );
+    const downstream = existingSnap.exists
+      ? await tx.get(
+          deps.db.collection(`intakes/${params.intakeId}/questions`),
+        )
+      : null;
     const now = nowTs(deps);
     const answerDoc: AnswerDoc = {
       questionId: body.questionId,
@@ -313,10 +358,24 @@ export async function saveAnswer(
     tx.update(questionRef(deps.db, params.intakeId, body.questionId), {
       status: "answered",
     });
-    tx.update(deps.db.doc(`intakes/${params.intakeId}`), {
+    const intakeUpdate: Record<string, unknown> = {
       revision: intake.revision + 1,
       updatedAt: now,
-    });
+    };
+    if (
+      downstream !== null &&
+      invalidateDownstream(
+        tx,
+        deps,
+        params.intakeId,
+        question.stepIndex,
+        downstream,
+      ) &&
+      intake.status === "review"
+    ) {
+      intakeUpdate.status = "questioning";
+    }
+    tx.update(deps.db.doc(`intakes/${params.intakeId}`), intakeUpdate);
     return {
       answerId: body.questionId,
       intakeRevision: intake.revision + 1,
@@ -397,28 +456,21 @@ export async function patchAnswer(
     }
     if (body.freeText !== undefined) update.freeText = body.freeText;
     if (body.answerState !== undefined) update.answerState = body.answerState;
-    tx.update(aRef, update);
 
-    // 回答編集で分岐が変わり得るため、当該回答より後の active/answered 質問を
-    // 無効化し、その回答を除去する（旧分岐の回答が残存しないようにする）
+    // 回答編集で分岐が変わり得るため後続質問を再評価する。
+    // Firestore tx は read を write より先に要求するため、
+    // 質問一覧の取得は aRef への書込前に行う。
     const qAll = await tx.get(
       deps.db.collection(`intakes/${params.intakeId}/questions`),
     );
-    let invalidatedAny = false;
-    for (const qs of qAll.docs) {
-      const q = qs.data() as QuestionDoc;
-      if (
-        q.stepIndex > answer.stepIndex &&
-        (q.status === "active" || q.status === "answered")
-      ) {
-        tx.update(questionRef(deps.db, params.intakeId, qs.id), {
-          status: "invalidated",
-        });
-        // 無効化した分岐の回答は現在ブランチから除外する
-        tx.delete(answerRef(deps.db, params.intakeId, qs.id));
-        invalidatedAny = true;
-      }
-    }
+    tx.update(aRef, update);
+    const invalidatedAny = invalidateDownstream(
+      tx,
+      deps,
+      params.intakeId,
+      answer.stepIndex,
+      qAll,
+    );
     const intakeUpdate: Record<string, unknown> = {
       revision: intake.revision + 1,
       updatedAt: now,

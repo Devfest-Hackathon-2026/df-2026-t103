@@ -10,7 +10,10 @@ import {
   transitionIntake,
 } from "../../src/services/intakes.js";
 import type { ApiError } from "../../src/lib/errors.js";
-import type { IntakeDoc } from "../../src/domain/firestoreDocs.js";
+import type {
+  IntakeDoc,
+  QuestionDoc,
+} from "../../src/domain/firestoreDocs.js";
 
 const UID = "patient-1";
 
@@ -446,6 +449,77 @@ describe("intake domain (#9)", () => {
     const q2doc = detail.questions.find((x) => x.questionId === q2.questionId);
     expect(q2doc?.data.status).toBe("invalidated");
     // 旧分岐の回答は除去される（現在ブランチに残存しない）
+    const a2doc = await deps.memDb
+      .doc(`intakes/${intakeId}/answers/${q2.questionId}`)
+      .get();
+    expect(a2doc.exists).toBe(false);
+  });
+
+  it("saveAnswer で既回答を置換した場合も後続分岐を再評価する", async () => {
+    const deps = makeTestDeps();
+    const intakeId = await makeQuestioning(deps);
+    const q1 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: 2,
+      question: {
+        questionText: "q1",
+        topic: "t1",
+        options: [{ code: "A", label: "a" }],
+        generatedBy: "fixed_template",
+      },
+    });
+    const q2 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: q1.intakeRevision,
+      question: {
+        questionText: "q2",
+        topic: "t2",
+        options: [{ code: "B", label: "b" }],
+        generatedBy: "llm",
+      },
+    });
+    const a1 = await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: q1.questionId,
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        answerState: "answered",
+        expectedIntakeRevision: q2.intakeRevision,
+      },
+    });
+    const a2 = await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: q2.questionId,
+        questionRevision: 1,
+        selectedCodes: ["B"],
+        answerState: "answered",
+        expectedIntakeRevision: a1.intakeRevision,
+      },
+    });
+    // POST /answers で既回答の q1 を再度送信（PATCH と同等の置換）
+    await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: q1.questionId,
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        answerState: "answered",
+        expectedIntakeRevision: a2.intakeRevision,
+      },
+    });
+    const q2doc = (
+      await deps.memDb
+        .doc(`intakes/${intakeId}/questions/${q2.questionId}`)
+        .get()
+    ).data() as QuestionDoc | undefined;
+    expect(q2doc?.status).toBe("invalidated");
     const a2doc = await deps.memDb
       .doc(`intakes/${intakeId}/answers/${q2.questionId}`)
       .get();

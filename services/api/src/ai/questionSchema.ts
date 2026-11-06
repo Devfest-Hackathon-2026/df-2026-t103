@@ -16,7 +16,15 @@ export const llmQuestionSchema = z.object({
   /** 収集トピック（snake_case）。重複検査に使う。 */
   topic: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),
   /** 原則3選択肢。「分からない」は呼出側で補完する。 */
-  options: z.array(llmOptionSchema).min(2).max(4),
+  options: z
+    .array(llmOptionSchema)
+    .min(2)
+    .max(4)
+    // コード重複は採用しない（回答保存はコードのみで、後続解釈が壊れる。VAL-006）
+    .refine(
+      (opts) => new Set(opts.map((o) => o.code)).size === opts.length,
+      "選択肢コードが重複しています",
+    ),
 });
 
 export const llmOutputSchema = z.object({

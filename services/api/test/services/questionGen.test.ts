@@ -409,6 +409,21 @@ describe("llmOutputSchema (#10)", () => {
         ],
       }).success,
     ).toBe(false);
+    // 選択肢コード重複は拒否（回答はコードのみ保存され解釈が壊れる。VAL-006）
+    expect(
+      llmOutputSchema.safeParse({
+        questions: [
+          {
+            questionText: "質問文は十分な長さ",
+            topic: "valid_topic",
+            options: [
+              { code: "A", label: "はい" },
+              { code: "A", label: "いいえ" },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 });
 

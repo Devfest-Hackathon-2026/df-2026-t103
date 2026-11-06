@@ -53,7 +53,8 @@ export function createStorageGateway(
           `http://${publicEmulatorHost}/upload/storage/v1/b/` +
           `${encodeURIComponent(params.bucket)}/o` +
           `?uploadType=media&name=${encodeURIComponent(params.objectPath)}` +
-          // 本番と同じく新規作成のみ許可（既存オブジェクトの上書きを拒否）
+          // Emulator の GCS 互換 API は前提条件を無視する場合がある。
+          // 本番の署名付き URL と同等の上書き防止を、この URL に依存しない。
           `&ifGenerationMatch=0`;
         return {
           method: "POST",

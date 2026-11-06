@@ -34,6 +34,14 @@ make down     # 全停止
 - 両方ともコミット禁止。本番・stgはGCP Secret Managerを使用
 - 詳細は [docs/07_環境構築手順書](docs/07_環境構築手順書.md) §4 と [ADR-0002](docs/adr/0002_ローカルのシークレット管理.md)
 
+### API の Firebase 接続
+
+- ローカルは `demo-mmr-dev` 等の `demo-` プロジェクト ID と、`FIREBASE_AUTH_EMULATOR_HOST`、`FIRESTORE_EMULATOR_HOST`、`FIREBASE_STORAGE_EMULATOR_HOST`、`FIREBASE_DATABASE_EMULATOR_HOST` の全４つを設定する。API 側エミュレータ接続先は `localhost`・`127.0.0.1`・Compose の `firebase` のいずれかとポートに限定する。Compose はこれらを設定済み。Storage のクライアント向けアドレスは `FIREBASE_STORAGE_EMULATOR_PUBLIC_HOST` で別指定でき、内部接続先が `firebase` の場合は必須。エミュレータのアップロード URL に使う公開ホストは `localhost`・`127.0.0.1` と有効ポート（1〜65535）に限定する。現行 Compose の既定値は `localhost:9199`。
+- 本番は実プロジェクト ID を `FIREBASE_PROJECT_ID` または `GCLOUD_PROJECT` に設定し、上記エミュレータ変数をすべて未設定にする。両方のプロジェクト ID を指定する場合は一致が必要。`NODE_ENV=production` では実際の `SERVER_HMAC_SECRET` も必須。
+- 片方だけの Auth/Firestore を含む部分エミュレータ構成、実プロジェクトとエミュレータの組み合わせ、エミュレータなしの demo プロジェクトは起動時に拒否する。旧名 `DATABASE_EMULATOR_HOST` は使用せず、Admin SDK が使用する `FIREBASE_DATABASE_EMULATOR_HOST` を使う。
+- これらは設定の整合性検査であり、指定先の実在・安全性や、Firebase 以外の外部サービスへの接続を保証するものではない。ローカルに本番資格情報や実患者データを置かない。
+- Storage Emulator のメディアアップロードは、`ifGenerationMatch=0` を付けても既存オブジェクトの上書きを拒否しない場合がある。実際に使う Emulator で検証し、デモでは使い捨てデータを使う。本番の署名 URL の新規作成制約が Emulator でも検証できたとはみなさない。
+
 ## ドキュメント
 
 - [docs/01_要件定義書](docs/01_要件定義書.md) / [02_システム設計書](docs/02_システム設計書.md) / [03_機能仕様書](docs/03_機能仕様書.md) / [04_DB設計書](docs/04_DB設計書.md) / [05_コスト試算表](docs/05_コスト試算表.md) / [06_医療安全_セキュリティ_運用設計書](docs/06_医療安全_セキュリティ_運用設計書.md)

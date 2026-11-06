@@ -328,14 +328,16 @@ export async function saveAnswer(
 
 /**
  * API-014 PATCH /intakes/{id}/answers/{answerId}（answerId=questionId）。
- * 回答編集は後続の active 質問を無効化する（分岐の再評価、04 §5.4）。
+ * 回答編集は後続の active/answered 質問を無効化し、その回答を除去する
+ * （分岐の再評価、04 §5.4）。review 中に無効化が起きた場合は questioning
+ * へ戻し、代替質問を出題できる経路を残す。
  */
 export async function patchAnswer(
   deps: Deps,
   params: { uid: string; intakeId: string; answerId: string; body: IntakeAnswerPatchBody },
 ): Promise<{ answerId: string; intakeRevision: number }> {
   const body = params.body;
-  return deps.db.runTransaction(async (tx) => {
+  const result = await deps.db.runTransaction(async (tx) => {
     const intakeSnap = await tx.get(deps.db.doc(`intakes/${params.intakeId}`));
     const intake = intakeSnap.data() as IntakeDoc | undefined;
     if (!intakeSnap.exists || !intake || intake.patientUid !== params.uid) {
@@ -346,6 +348,13 @@ export async function patchAnswer(
         ErrorCodes.REVISION_CONFLICT,
         "他の端末で更新されています。最新の状態を取得してください。",
       );
+    }
+    if (expired(deps, intake)) {
+      tx.update(deps.db.doc(`intakes/${params.intakeId}`), {
+        status: "archived",
+        updatedAt: nowTs(deps),
+      });
+      return DRAFT_EXPIRED;
     }
     if (intake.status !== "questioning" && intake.status !== "review") {
       throw ApiError.precondition(
@@ -390,24 +399,43 @@ export async function patchAnswer(
     if (body.answerState !== undefined) update.answerState = body.answerState;
     tx.update(aRef, update);
 
-    // 回答編集で分岐が変わり得るため、当該回答より後の active 質問を無効化
-    const questions = await listQuestions(deps.db, params.intakeId);
-    for (const q of questions) {
-      if (q.data.stepIndex > answer.stepIndex && q.data.status === "active") {
-        tx.update(questionRef(deps.db, params.intakeId, q.id), {
+    // 回答編集で分岐が変わり得るため、当該回答より後の active/answered 質問を
+    // 無効化し、その回答を除去する（旧分岐の回答が残存しないようにする）
+    const qAll = await tx.get(
+      deps.db.collection(`intakes/${params.intakeId}/questions`),
+    );
+    let invalidatedAny = false;
+    for (const qs of qAll.docs) {
+      const q = qs.data() as QuestionDoc;
+      if (
+        q.stepIndex > answer.stepIndex &&
+        (q.status === "active" || q.status === "answered")
+      ) {
+        tx.update(questionRef(deps.db, params.intakeId, qs.id), {
           status: "invalidated",
         });
+        // 無効化した分岐の回答は現在ブランチから除外する
+        tx.delete(answerRef(deps.db, params.intakeId, qs.id));
+        invalidatedAny = true;
       }
     }
-    tx.update(deps.db.doc(`intakes/${params.intakeId}`), {
+    const intakeUpdate: Record<string, unknown> = {
       revision: intake.revision + 1,
       updatedAt: now,
-    });
+    };
+    // review 中に後続質問が無効化されたら questioning へ戻す
+    // （review のままでは代替質問を出題できず finalization へ進めない）
+    if (invalidatedAny && intake.status === "review") {
+      intakeUpdate.status = "questioning";
+    }
+    tx.update(deps.db.doc(`intakes/${params.intakeId}`), intakeUpdate);
     return {
       answerId: params.answerId,
       intakeRevision: intake.revision + 1,
     };
   });
+  if ("kind" in result) throw draftExpiredError();
+  return result;
 }
 
 /**

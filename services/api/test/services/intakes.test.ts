@@ -383,6 +383,130 @@ describe("intake domain (#9)", () => {
     expect(q2doc?.data.status).toBe("invalidated");
   });
 
+  it("回答済みの後続質問も無効化し、その回答を除去する", async () => {
+    const deps = makeTestDeps();
+    const intakeId = await makeQuestioning(deps);
+    const q1 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: 2,
+      question: {
+        questionText: "q1",
+        topic: "t1",
+        options: [{ code: "A", label: "a" }],
+        generatedBy: "fixed_template",
+      },
+    });
+    const q2 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: q1.intakeRevision,
+      question: {
+        questionText: "q2",
+        topic: "t2",
+        options: [{ code: "B", label: "b" }],
+        generatedBy: "llm",
+      },
+    });
+    const a1 = await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: q1.questionId,
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        answerState: "answered",
+        expectedIntakeRevision: q2.intakeRevision,
+      },
+    });
+    const a2 = await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: q2.questionId,
+        questionRevision: 1,
+        selectedCodes: ["B"],
+        answerState: "answered",
+        expectedIntakeRevision: a1.intakeRevision,
+      },
+    });
+    // 先の回答を編集 → 後続の回答済み質問(q2)も無効化され回答は除去される
+    await patchAnswer(deps, {
+      uid: UID,
+      intakeId,
+      answerId: q1.questionId,
+      body: {
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        freeText: "訂正",
+        expectedIntakeRevision: a2.intakeRevision,
+      },
+    });
+    const detail = await getIntakeDetail(deps, { uid: UID, intakeId });
+    const q2doc = detail.questions.find((x) => x.questionId === q2.questionId);
+    expect(q2doc?.data.status).toBe("invalidated");
+    // 旧分岐の回答は除去される（現在ブランチに残存しない）
+    const a2doc = await deps.memDb
+      .doc(`intakes/${intakeId}/answers/${q2.questionId}`)
+      .get();
+    expect(a2doc.exists).toBe(false);
+  });
+
+  it("review 中の編集で質問が無効化されたら questioning へ戻す", async () => {
+    const deps = makeTestDeps();
+    const intakeId = await makeQuestioning(deps);
+    const q1 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: 2,
+      question: {
+        questionText: "q1",
+        topic: "t1",
+        options: [{ code: "A", label: "a" }],
+        generatedBy: "fixed_template",
+      },
+    });
+    const q2 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: q1.intakeRevision,
+      question: {
+        questionText: "q2",
+        topic: "t2",
+        options: [],
+        generatedBy: "llm",
+      },
+    });
+    const a1 = await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: q1.questionId,
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        answerState: "answered",
+        expectedIntakeRevision: q2.intakeRevision,
+      },
+    });
+    // review へ遷移させてから先の回答を編集する
+    await deps.memDb.doc(`intakes/${intakeId}`).update({ status: "review" });
+    await patchAnswer(deps, {
+      uid: UID,
+      intakeId,
+      answerId: q1.questionId,
+      body: {
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        freeText: "訂正",
+        expectedIntakeRevision: a1.intakeRevision,
+      },
+    });
+    const doc = (await deps.memDb.doc(`intakes/${intakeId}`).get()).data() as
+      | IntakeDoc
+      | undefined;
+    expect(doc?.status).toBe("questioning");
+  });
+
   it("resume: answers persist across getIntakeDetail reads (FR-I06)", async () => {
     const deps = makeTestDeps();
     const intakeId = await makeQuestioning(deps);

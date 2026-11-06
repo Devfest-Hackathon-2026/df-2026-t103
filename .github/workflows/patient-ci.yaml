@@ -1,0 +1,39 @@
+name: patient-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patient-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patient:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        working-directory: apps/patient
+        run: flutter pub get
+
+      - name: flutter analyze
+        working-directory: apps/patient
+        run: flutter analyze
+
+      - name: flutter test
+        working-directory: apps/patient
+        run: flutter test

@@ -62,4 +62,6 @@ export const RateRules = {
   deletionRequest: { limit: 10, windowMs: 60_000 },
   authenticatedDefault: { limit: 240, windowMs: 60_000 },
   internalJob: { limit: 60, windowMs: 60_000 },
+  uploadInit: { limit: 20, windowMs: 60_000 },
+  uploadComplete: { limit: 30, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;

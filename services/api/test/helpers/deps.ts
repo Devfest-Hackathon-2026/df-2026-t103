@@ -4,11 +4,12 @@ import type { AppConfig } from "../../src/config.js";
 import { ManualClock } from "../../src/lib/clock.js";
 import { RateLimiter } from "../../src/lib/rateLimit.js";
 import { MemoryFirestore } from "./memoryFirestore.js";
+import { SignatureContentScanner } from "../../src/lib/contentScan.js";
 import {
   FakeAppCheckVerifier,
   FakeAuthAdmin,
   FakeAuthVerifier,
-  FakeStorageDeleter,
+  FakeStorageGateway,
 } from "./fakes.js";
 
 export { ManualClock };
@@ -19,7 +20,7 @@ export interface TestDeps extends Deps {
   fakeAuth: FakeAuthVerifier;
   fakeAuthAdmin: FakeAuthAdmin;
   fakeAppCheck: FakeAppCheckVerifier;
-  fakeStorage: FakeStorageDeleter;
+  fakeStorage: FakeStorageGateway;
 }
 
 export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
@@ -30,6 +31,7 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     logLevel: "silent",
     projectId: "demo-mmr-dev",
     storageBucket: "demo-mmr-dev.appspot.com",
+    storageEmulatorPublicHost: "localhost:9199",
     databaseUrl: undefined,
     emulator: true,
     hmacSecret: "test-hmac-secret",
@@ -40,6 +42,9 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     deletionGracePeriodDays: 30,
     deletionJobMaxAttempts: 5,
     deletionScanBatchSize: 100,
+    uploadMaxActive: 20,
+    uploadUrlTtlSeconds: 900,
+    uploadDocTtlDays: 30,
     ...overrides,
   });
 }
@@ -53,7 +58,7 @@ export function makeTestDeps(
   const fakeAuth = new FakeAuthVerifier();
   const fakeAuthAdmin = new FakeAuthAdmin();
   const fakeAppCheck = new FakeAppCheckVerifier();
-  const fakeStorage = new FakeStorageDeleter();
+  const fakeStorage = new FakeStorageGateway();
   const logger = pino({ level: "silent" });
 
   return {
@@ -64,6 +69,7 @@ export function makeTestDeps(
     authAdmin: fakeAuthAdmin,
     appCheck: fakeAppCheck,
     storage: fakeStorage,
+    contentScanner: new SignatureContentScanner(),
     rateLimiter: new RateLimiter(clock),
     clock,
     logger,

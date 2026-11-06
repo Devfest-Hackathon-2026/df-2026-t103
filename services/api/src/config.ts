@@ -12,6 +12,12 @@ const envSchema = z.object({
   FIRESTORE_EMULATOR_HOST: z.string().optional(),
   FIREBASE_AUTH_EMULATOR_HOST: z.string().optional(),
   FIREBASE_STORAGE_EMULATOR_HOST: z.string().optional(),
+  /**
+   * クライアントが署名URLでアクセスする側の Storage Emulator ホスト。
+   * Docker Compose では FIREBASE_STORAGE_EMULATOR_HOST は内部DNS名
+   * （firebase:9199）でブラウザから解決不能なため、公開側を別途設定する。
+   */
+  FIREBASE_STORAGE_EMULATOR_PUBLIC_HOST: z.string().optional(),
   FIREBASE_DATABASE_EMULATOR_HOST: z.string().optional(),
   DATABASE_EMULATOR_HOST: z.string().optional(), // legacy name
   DATABASE_URL: z.string().optional(),
@@ -25,6 +31,10 @@ const envSchema = z.object({
   DELETION_GRACE_PERIOD_DAYS: z.coerce.number().int().min(0).default(30),
   DELETION_JOB_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
   DELETION_SCAN_BATCH_SIZE: z.coerce.number().int().positive().max(500).default(100),
+
+  UPLOAD_MAX_ACTIVE: z.coerce.number().int().positive().default(20),
+  UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().max(3600).default(900),
+  UPLOAD_DOC_TTL_DAYS: z.coerce.number().int().positive().default(30),
 });
 
 export type AppConfig = Readonly<{
@@ -34,6 +44,8 @@ export type AppConfig = Readonly<{
   logLevel: string;
   projectId: string;
   storageBucket: string;
+  /** クライアント向けの Storage Emulator 公開ホスト（署名URL生成用）。 */
+  storageEmulatorPublicHost: string | undefined;
   databaseUrl: string | undefined;
   emulator: boolean;
   hmacSecret: string;
@@ -44,6 +56,12 @@ export type AppConfig = Readonly<{
   deletionGracePeriodDays: number;
   deletionJobMaxAttempts: number;
   deletionScanBatchSize: number;
+  /** 有効（pending/uploaded かつ期限内）アップロードの患者当たり上限（FR-M01 枚数制限）。 */
+  uploadMaxActive: number;
+  /** 署名URLの有効秒数（短命URL）。 */
+  uploadUrlTtlSeconds: number;
+  /** uploadsドキュメントの保管日数（FR-M06）。 */
+  uploadDocTtlDays: number;
 }>;
 
 const DUMMY_SECRETS = new Set(["", "change-me-local-dev"]);
@@ -77,6 +95,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     projectId,
     storageBucket:
       parsed.FIREBASE_STORAGE_BUCKET ?? `${projectId}.appspot.com`,
+    storageEmulatorPublicHost: parsed.FIREBASE_STORAGE_EMULATOR_PUBLIC_HOST,
     databaseUrl: parsed.DATABASE_URL,
     emulator,
     hmacSecret: parsed.SERVER_HMAC_SECRET,
@@ -90,5 +109,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     deletionGracePeriodDays: parsed.DELETION_GRACE_PERIOD_DAYS,
     deletionJobMaxAttempts: parsed.DELETION_JOB_MAX_ATTEMPTS,
     deletionScanBatchSize: parsed.DELETION_SCAN_BATCH_SIZE,
+    uploadMaxActive: parsed.UPLOAD_MAX_ACTIVE,
+    uploadUrlTtlSeconds: parsed.UPLOAD_URL_TTL_SECONDS,
+    uploadDocTtlDays: parsed.UPLOAD_DOC_TTL_DAYS,
   });
 }

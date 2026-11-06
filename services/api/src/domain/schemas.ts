@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { UPLOAD_ALLOWED_MIME_TYPES } from "./uploads.js";
 
 const KANA_PATTERN = /^[ァ-ヶー・\s]+$/u;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -170,3 +171,23 @@ export const REQUIRED_PROFILE_FIELDS = [
 ] as const;
 
 export const emptyBodySchema = z.object({}).strict();
+
+/**
+ * API-019 POST /uploads/init。拡張子ではなく MIME・容量・SHA-256 を申告させる。
+ * 実ファイルとの一致は complete 時にサーバが検証する（クライアント申告を信用しない）。
+ */
+export const uploadInitBodySchema = z
+  .object({
+    fileName: z.string().trim().min(1).max(200).optional(),
+    mimeType: z.enum(UPLOAD_ALLOWED_MIME_TYPES),
+    // 上限超過はサービス層で 413 FILE_TOO_LARGE を返す（03 §4.2）
+    bytes: z.number().int().min(1, "ファイルが空です。"),
+    sha256: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[0-9a-f]{64}$/, "SHA-256 の形式が不正です。"),
+    sourcePurpose: z.enum(["prescription_photo", "medication_notebook"]),
+  })
+  .strict();
+export type UploadInitBody = z.infer<typeof uploadInitBodySchema>;

@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Deps } from "../deps.js";
 import { ApiError, assertParsed } from "../lib/errors.js";
 import { DeletionWorker } from "../workers/deletionJob.js";
+import { sweepExpiredUploads } from "../services/uploads.js";
 import { errors, jobRunResultSchema, scanResultSchema } from "./apiDocs.js";
 
 /**
@@ -30,6 +31,27 @@ export function registerInternalJobRoutes(
       },
     },
     async () => worker.scanDueJobs(),
+  );
+
+  // 保持期限切れアップロードのスイープ（Scheduler → 本エンドポイント）
+  typed.post(
+    "/v1/internal/jobs/upload-expiry-scan",
+    {
+      config: { access: { tier: "internal" } },
+      schema: {
+        response: {
+          200: z.object({
+            scanned: z.number(),
+            expired: z.number(),
+            cleaned: z.number(),
+          }),
+          ...errors(401, 403, 429, 500),
+        },
+        tags: ["internal"],
+        summary: "期限切れ uploads の expired 化・実体除去（Scheduler呼び出し）",
+      },
+    },
+    async () => sweepExpiredUploads(deps),
   );
 
   // 単一ジョブ実行（Tasks の invoke target 想定。冪等）

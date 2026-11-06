@@ -415,3 +415,53 @@ describe("GET /v1/uploads/:id/processing (API-021)", () => {
     await app.close();
   });
 });
+
+describe("POST /v1/internal/jobs/upload-expiry-scan (#13)", () => {
+  it("期限切れ pending を expired 化し実体を tombstone にする", async () => {
+    const { deps, app } = await setup();
+    const init = await initUpload(app, "i-exp");
+    const uploadId = init.json().uploadId;
+    const doc = (await getUploadDoc(deps, uploadId))!;
+    deps.fakeStorage.seedObject(
+      doc.storageBucket,
+      doc.objectPath,
+      JPEG_BYTES,
+      "image/jpeg",
+    );
+    // 期限切れにする
+    await deps.db
+      .doc(`uploads/${uploadId}`)
+      .update({ expiresAt: Timestamp.fromMillis(Date.now() - 1000) });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/internal/jobs/upload-expiry-scan",
+      headers: { "x-internal-job-token": "test-internal-token" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ scanned: 1, expired: 1 });
+    const after = (await getUploadDoc(deps, uploadId))!;
+    expect(after.status).toBe("expired");
+    // 実体削除ではなく tombstone: パスは空内容で占有され続ける
+    expect(deps.fakeStorage.deleted).toHaveLength(0);
+    expect(deps.fakeStorage.tombstoned.map((d) => d.path)).toContain(
+      doc.objectPath,
+    );
+    await app.close();
+  });
+
+  it("期限内・非activeのアップロードは対象外", async () => {
+    const { deps, app } = await setup();
+    const init = await initUpload(app, "i-live");
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/internal/jobs/upload-expiry-scan",
+      headers: { "x-internal-job-token": "test-internal-token" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ scanned: 0, expired: 0 });
+    const after = (await getUploadDoc(deps, init.json().uploadId))!;
+    expect(after.status).toBe("pending");
+    await app.close();
+  });
+});

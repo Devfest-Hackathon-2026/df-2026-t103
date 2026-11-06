@@ -18,6 +18,7 @@ import { ApiError, ErrorCodes } from "../lib/errors.js";
 import { requestHash, runIdempotent } from "../lib/idempotency.js";
 import { audit, auditUidHash } from "../lib/audit.js";
 import { activeUploadsQuery, getUpload } from "../repos/uploads.js";
+import { queryDocs } from "../repos/helpers.js";
 
 export interface InitUploadResult {
   uploadId: string;
@@ -354,4 +355,42 @@ async function rejectUpload(
     rejectedReason: reason,
     updatedAt: FieldValue.serverTimestamp(),
   });
+}
+
+/**
+ * 保持期限切れの pending/uploaded アップロードを expired に遷移させ、
+ * 実体を tombstone 化する（Scheduler → /v1/internal/jobs/upload-expiry-scan）。
+ * complete されず放置されたオブジェクトが期限後も残らないようにする（FR-M06）。
+ * rejected 化と同様に実体削除ではなく tombstone: create-only URL が
+ * 有効期限内に残っていても generation は占有されたままになる。
+ */
+export async function sweepExpiredUploads(
+  deps: Deps,
+  limit = 200,
+): Promise<{ scanned: number; expired: number }> {
+  const now = Timestamp.fromDate(deps.clock.now());
+  const docs = await queryDocs<UploadDoc>(
+    deps.db,
+    "uploads",
+    [{ field: "expiresAt", op: "<=", value: now }],
+    { limit },
+  );
+  let expired = 0;
+  for (const d of docs) {
+    const u = d.data;
+    if (u.status !== "pending" && u.status !== "uploaded") continue;
+    await deps.db
+      .doc(`uploads/${d.id}`)
+      .update({ status: "expired", updatedAt: now });
+    await deps.storage
+      .tombstoneObject(u.storageBucket, u.objectPath)
+      .catch((err) =>
+        deps.logger.warn(
+          { err, uploadId: d.id },
+          "expired object tombstone failed",
+        ),
+      );
+    expired++;
+  }
+  return { scanned: docs.length, expired };
 }

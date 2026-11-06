@@ -12,6 +12,12 @@ const envSchema = z.object({
   FIRESTORE_EMULATOR_HOST: z.string().optional(),
   FIREBASE_AUTH_EMULATOR_HOST: z.string().optional(),
   FIREBASE_STORAGE_EMULATOR_HOST: z.string().optional(),
+  /**
+   * クライアントが署名URLでアクセスする側の Storage Emulator ホスト。
+   * Docker Compose では FIREBASE_STORAGE_EMULATOR_HOST は内部DNS名
+   * （firebase:9199）でブラウザから解決不能なため、公開側を別途設定する。
+   */
+  FIREBASE_STORAGE_EMULATOR_PUBLIC_HOST: z.string().optional(),
   FIREBASE_DATABASE_EMULATOR_HOST: z.string().optional(),
   DATABASE_EMULATOR_HOST: z.string().optional(), // legacy name
   DATABASE_URL: z.string().optional(),
@@ -38,6 +44,8 @@ export type AppConfig = Readonly<{
   logLevel: string;
   projectId: string;
   storageBucket: string;
+  /** クライアント向けの Storage Emulator 公開ホスト（署名URL生成用）。 */
+  storageEmulatorPublicHost: string | undefined;
   databaseUrl: string | undefined;
   emulator: boolean;
   hmacSecret: string;
@@ -87,6 +95,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     projectId,
     storageBucket:
       parsed.FIREBASE_STORAGE_BUCKET ?? `${projectId}.appspot.com`,
+    storageEmulatorPublicHost: parsed.FIREBASE_STORAGE_EMULATOR_PUBLIC_HOST,
     databaseUrl: parsed.DATABASE_URL,
     emulator,
     hmacSecret: parsed.SERVER_HMAC_SECRET,

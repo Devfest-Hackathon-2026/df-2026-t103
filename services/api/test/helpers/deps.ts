@@ -31,6 +31,7 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     logLevel: "silent",
     projectId: "demo-mmr-dev",
     storageBucket: "demo-mmr-dev.appspot.com",
+    storageEmulatorPublicHost: "localhost:9199",
     databaseUrl: undefined,
     emulator: true,
     hmacSecret: "test-hmac-secret",

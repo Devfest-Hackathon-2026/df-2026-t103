@@ -14,6 +14,9 @@ export function createStorageGateway(
 ): StorageGateway {
   const emulatorHost =
     process.env.FIREBASE_STORAGE_EMULATOR_HOST ?? "localhost:9199";
+  // クライアントが解決できる公開側ホスト。Compose では emulatorHost は
+  // 内部DNS名(firebase:9199)のためブラウザから到達不能。公開側を分離する。
+  const publicEmulatorHost = config.storageEmulatorPublicHost ?? emulatorHost;
 
   return {
     async deleteObject(bucket, objectPath, generation) {
@@ -40,7 +43,7 @@ export function createStorageGateway(
       if (config.emulator) {
         // Storage Emulator の GCS JSON API 互換アップロードエンドポイント。
         const url =
-          `http://${emulatorHost}/upload/storage/v1/b/` +
+          `http://${publicEmulatorHost}/upload/storage/v1/b/` +
           `${encodeURIComponent(params.bucket)}/o` +
           `?uploadType=media&name=${encodeURIComponent(params.objectPath)}`;
         return {

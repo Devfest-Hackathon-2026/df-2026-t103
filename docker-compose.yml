@@ -71,6 +71,8 @@ services:
       FIRESTORE_EMULATOR_HOST: firebase:8080
       FIREBASE_AUTH_EMULATOR_HOST: firebase:9099
       FIREBASE_STORAGE_EMULATOR_HOST: firebase:9199
+      # 署名URLのクライアント到達側ホスト（ブラウザはCompose内部DNS名を解決できない）
+      FIREBASE_STORAGE_EMULATOR_PUBLIC_HOST: localhost:9199
       FIREBASE_DATABASE_EMULATOR_HOST: firebase:9000
     ports:
       - "8080:8080"

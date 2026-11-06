@@ -120,3 +120,8 @@ gcloud artifacts repositories create api \
   --repository-format docker \
   --description "moshimoshimonshin API container images"
 ```
+
+## Storage / RTDB（#36）
+
+[単一プロジェクトの設定案生成・適用・検証手順](storage/README.md)。
+保管日数と公開originの確定前はクラウドへ適用しない。

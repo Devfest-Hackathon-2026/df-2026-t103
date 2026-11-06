@@ -2,6 +2,12 @@ import type { Deps } from "../deps.js";
 import type { QuestionnaireRevisionDoc } from "../domain/firestoreDocs.js";
 import { ApiError } from "../lib/errors.js";
 import {
+  audit,
+  auditResourceHash,
+  auditUidHash,
+} from "../lib/audit.js";
+import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
+import {
   getQuestionnaire,
   listQuestionnairesByPatient,
   listRevisions,
@@ -102,7 +108,12 @@ function serializeRevision(
  */
 export async function getQuestionnaireDetail(
   deps: Deps,
-  params: { uid: string; questionnaireId: string; revision?: number },
+  params: {
+    uid: string;
+    questionnaireId: string;
+    revision?: number;
+    requestId?: string;
+  },
 ): Promise<QuestionnaireDetail> {
   const doc = await getQuestionnaire(deps.db, params.questionnaireId);
   if (doc === undefined || doc.patientUid !== params.uid) {
@@ -112,6 +123,16 @@ export async function getQuestionnaireDetail(
   if (version < 1 || version > doc.latestRevision) {
     throw ApiError.notFound("指定された版が見つかりません。");
   }
+  // 閲覧監査: 所有・版検証を通過した読み取りのみ記録
+  await audit(deps, {
+    actorType: "patient",
+    actorUidHash: auditUidHash(deps, params.uid),
+    action: AUDIT_ACTIONS.INTAKE_READ,
+    resourceType: "questionnaires",
+    resourceIdHash: auditResourceHash(deps, params.questionnaireId),
+    ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
+    outcome: "ok",
+  });
   const [revSnap, allRevisions] = await Promise.all([
     getDoc<QuestionnaireRevisionDoc>(
       deps.db,

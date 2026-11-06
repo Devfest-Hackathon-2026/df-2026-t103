@@ -535,3 +535,149 @@ describe("intake routes (#11, API-009〜016)", () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+describe("監査イベント（#22）", () => {
+  it("GET /intakes/{id} は INTAKE_READ を HMAC済み識別子付きで記録する", async () => {
+    const { deps, app } = await setup();
+    const { intakeId } = await createIntake(app);
+    const res = await app.inject({
+      method: "GET",
+      url: `/v1/intakes/${intakeId}`,
+      headers: authHeader(UID),
+    });
+    expect(res.statusCode).toBe(200);
+
+    const audits = await deps.memDb
+      .collection("auditEvents")
+      .where("action", "==", "INTAKE_READ")
+      .get();
+    expect(audits.size).toBe(1);
+    const ev = audits.docs[0]!.data()!;
+    expect(ev.actorType).toBe("patient");
+    expect(ev.resourceType).toBe("intakes");
+    expect(ev.outcome).toBe("ok");
+    // 生ID・生UIDを含まない（HMAC化）
+    expect(ev.resourceIdHash).not.toBe(intakeId);
+    expect(ev.resourceIdHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(ev.actorUidHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(ev.actorUidHash).not.toBe(UID);
+    // 相関IDが伝搬している
+    expect(ev.requestId).toBeTruthy();
+    // PHI 非含有（症状テキスト等が混入しない）
+    expect(JSON.stringify(ev)).not.toContain("頭痛");
+  });
+
+  it("他人の問診は404で INTAKE_READ を記録しない", async () => {
+    const { deps, app } = await setup();
+    const { intakeId } = await createIntake(app);
+    const res = await app.inject({
+      method: "GET",
+      url: `/v1/intakes/${intakeId}`,
+      headers: authHeader(OTHER),
+    });
+    expect(res.statusCode).toBe(404);
+    const audits = await deps.memDb
+      .collection("auditEvents")
+      .where("action", "==", "INTAKE_READ")
+      .get();
+    expect(audits.size).toBe(0);
+  });
+
+  it("POST /finalize は INTAKE_FINALIZED を記録する", async () => {
+    const { deps, app } = await setup();
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const sum = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/summary`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+    const srev = (sum.json() as { intakeRevision: number }).intakeRevision;
+    const fin = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/finalize`,
+      headers: { ...authHeader(UID), ...idem("fin-audit") },
+      payload: { expectedIntakeRevision: srev, summaryReviewConfirmed: true },
+    });
+    expect(fin.statusCode).toBe(200);
+    const qid = (fin.json() as { questionnaireId: string }).questionnaireId;
+
+    const audits = await deps.memDb
+      .collection("auditEvents")
+      .where("action", "==", "INTAKE_FINALIZED")
+      .get();
+    expect(audits.size).toBe(1);
+    const ev = audits.docs[0]!.data()!;
+    expect(ev.resourceType).toBe("questionnaires");
+    expect(ev.resourceIdHash).not.toBe(qid);
+    expect(ev.resourceIdHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("finalize の冪等リプレイは INTAKE_FINALIZED を二重発行しない", async () => {
+    const { deps, app } = await setup();
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const sum = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/summary`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+    const srev = (sum.json() as { intakeRevision: number }).intakeRevision;
+    const payload = {
+      expectedIntakeRevision: srev,
+      summaryReviewConfirmed: true,
+    };
+    for (let i = 0; i < 2; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/intakes/${intakeId}/finalize`,
+        headers: { ...authHeader(UID), ...idem("fin-replay") },
+        payload,
+      });
+      expect(res.statusCode).toBe(200);
+    }
+    const audits = await deps.memDb
+      .collection("auditEvents")
+      .where("action", "==", "INTAKE_FINALIZED")
+      .get();
+    expect(audits.size).toBe(1);
+  });
+
+  it("GET /questionnaires/{id} は INTAKE_READ を記録し PHI を含まない", async () => {
+    const { deps, app } = await setup();
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const sum = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/summary`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+    const srev = (sum.json() as { intakeRevision: number }).intakeRevision;
+    const fin = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/finalize`,
+      headers: { ...authHeader(UID), ...idem("fin-audit2") },
+      payload: { expectedIntakeRevision: srev, summaryReviewConfirmed: true },
+    });
+    const qid = (fin.json() as { questionnaireId: string }).questionnaireId;
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/v1/questionnaires/${qid}`,
+      headers: authHeader(UID),
+    });
+    expect(res.statusCode).toBe(200);
+    const audits = await deps.memDb
+      .collection("auditEvents")
+      .where("action", "==", "INTAKE_READ")
+      .where("resourceType", "==", "questionnaires")
+      .get();
+    expect(audits.size).toBe(1);
+    const ev = audits.docs[0]!.data()!;
+    expect(ev.resourceIdHash).not.toBe(qid);
+    expect(JSON.stringify(ev)).not.toContain("頭痛");
+  });
+});

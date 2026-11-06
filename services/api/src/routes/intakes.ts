@@ -100,6 +100,7 @@ export function registerIntakeRoutes(
       getIntakeDetail(deps, {
         uid: uidOf(req),
         intakeId: req.params.intakeId,
+        requestId: req.requestContext.requestId,
       }),
   );
 
@@ -254,6 +255,7 @@ export function registerIntakeRoutes(
         intakeId: req.params.intakeId,
         body: req.body,
         idempotencyKey: requireIdempotencyKey(req),
+        requestId: req.requestContext.requestId,
       }),
   );
 }

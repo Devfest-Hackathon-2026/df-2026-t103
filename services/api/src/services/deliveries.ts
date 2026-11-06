@@ -1,7 +1,7 @@
 import { Timestamp, type DocumentData } from "firebase-admin/firestore";
 import type { Deps } from "../deps.js";
 import type { DeliveryCreateBody } from "../domain/schemas.js";
-import type { DeliveryDoc } from "../domain/firestoreDocs.js";
+import type { AuditEventDoc, DeliveryDoc } from "../domain/firestoreDocs.js";
 import { ApiError } from "../lib/errors.js";
 import {
   idempotencyKeyHash,
@@ -9,7 +9,14 @@ import {
   runIdempotent,
 } from "../lib/idempotency.js";
 import { randomId, sha256Hex, canonicalJson } from "../lib/hash.js";
-import { audit, auditUidHash, auditInTransaction } from "../lib/audit.js";
+import {
+  audit,
+  auditUidHash,
+  auditResourceHash,
+  auditInTransaction,
+  logAuditEvent,
+} from "../lib/audit.js";
+import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { deliveryRef, getDelivery } from "../repos/deliveries.js";
 import type { QuestionnaireRevisionDoc } from "../domain/firestoreDocs.js";
 
@@ -43,17 +50,21 @@ export async function createDelivery(
     senderUid: string;
     body: DeliveryCreateBody;
     idempotencyKey: string;
+    requestId?: string;
   },
 ): Promise<DeliveryCreateResult> {
   const { senderUid, body, idempotencyKey } = params;
   const reqHash = requestHash(deps, body);
 
-  const { result } = await runIdempotent<DeliveryCreateResult>(deps, {
+  const committedAudits: AuditEventDoc[] = [];
+  const { result, replayed } = await runIdempotent<DeliveryCreateResult>(deps, {
     namespace: IDEMPOTENCY_NS,
     key: idempotencyKey,
     principal: senderUid,
     requestHash: reqHash,
     execute: async (tx) => {
+      // tx リトライ時にロールバック済みイベントが残らないよう各試行でリセット
+      committedAudits.length = 0;
       // 1. 問診票の所有権と確定版の確認
       const qSnap = await tx.get(
         deps.db.doc(`questionnaires/${body.questionnaireId}`),
@@ -131,7 +142,9 @@ export async function createDelivery(
         patientIdentitySnapshot: {},
         questionnaireSnapshot: snapshot,
         snapshotSha256,
-        status: "created",
+        // 施設側コピーは同期的に作成されるため作成=配送済み（created→delivered はtx内で完結）
+        status: "delivered",
+        deliveredAt: now,
         idempotencyKeyHash: keyHash,
         facilityRetentionPolicyVersion: "v1",
         createdAt: now,
@@ -139,26 +152,31 @@ export async function createDelivery(
       tx.create(deliveryRef(deps.db, deliveryId), deliveryDoc as unknown as DocumentData);
 
       // 6. 監査イベント（PHI・本文を含めない）
-      auditInTransaction(tx, deps, {
-        actorType: "patient",
-        actorUidHash: auditUidHash(deps, senderUid),
-        action: "DELIVERY_CREATED",
-        resourceType: "delivery",
-        resourceIdHash: auditUidHash(deps, deliveryId),
-        facilityId: body.facilityId,
-        decision: "allow",
-      });
+      committedAudits.push(
+        auditInTransaction(tx, deps, {
+          actorType: "patient",
+          actorUidHash: auditUidHash(deps, senderUid),
+          action: AUDIT_ACTIONS.DELIVERY_CREATED,
+          resourceType: "delivery",
+          resourceIdHash: auditResourceHash(deps, deliveryId),
+          facilityId: body.facilityId,
+          decision: "allow",
+          ...(params.requestId ? { requestId: params.requestId } : {}),
+        }),
+      );
 
       return { deliveryId, status: "created" as const };
     },
   });
 
+  // 冪等リプレイでは二重にシンクへ流さない
+  if (!replayed) for (const e of committedAudits) logAuditEvent(deps, e);
   return result;
 }
 
 export async function getDeliveryForSender(
   deps: Deps,
-  params: { senderUid: string; deliveryId: string },
+  params: { senderUid: string; deliveryId: string; requestId?: string },
 ): Promise<DeliveryGetResult> {
   const { senderUid, deliveryId } = params;
   const doc = await getDelivery(deps.db, deliveryId);
@@ -170,11 +188,12 @@ export async function getDeliveryForSender(
   await audit(deps, {
     actorType: "patient",
     actorUidHash: auditUidHash(deps, senderUid),
-    action: "DELIVERY_VIEWED",
+    action: AUDIT_ACTIONS.DELIVERY_VIEWED,
     resourceType: "delivery",
-    resourceIdHash: auditUidHash(deps, deliveryId),
+    resourceIdHash: auditResourceHash(deps, deliveryId),
     facilityId: doc.facilityId,
     decision: "allow",
+    ...(params.requestId ? { requestId: params.requestId } : {}),
   });
 
   return {

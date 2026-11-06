@@ -52,6 +52,23 @@ export async function findAbandonedJobs(
   return rows.map((r) => ({ id: r.id, data: r.data }));
 }
 
+/**
+ * 終端失敗したジョブを列挙する。failed は再実行されないが、
+ * SLO-07 の期限超過アラート対象（未完了=未削除）として拾う。
+ */
+export async function findFailedJobs(
+  db: FirestoreLike,
+  limit: number,
+): Promise<Array<{ id: string; data: DeletionJobDoc }>> {
+  const rows = await queryDocs<DeletionJobDoc>(
+    db,
+    "deletionJobs",
+    [{ field: "status", op: "==", value: "failed" }],
+    { limit },
+  );
+  return rows.map((r) => ({ id: r.id, data: r.data }));
+}
+
 export async function findOpenJobForSubject(
   db: FirestoreLike,
   uid: string,

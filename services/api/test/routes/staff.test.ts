@@ -41,4 +41,100 @@ describe("staff management", () => {
     expect((await app.inject({ method: "POST", url: `/v1/hospitals/${facilityId}/staff-invitations`, headers: authHeader("staff"), payload: { email: "x@example.com", role: "facility_staff" } })).statusCode).toBe(403);
     await app.close();
   });
+
+  it("招待発行で STAFF_INVITED 監査が記録される（メールは含めない）", async () => {
+    const { app, deps } = await setup();
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/hospitals/${facilityId}/staff-invitations`,
+      headers: authHeader("admin"),
+      payload: { email: "auditee@example.com", role: "facility_clinician" },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const audits = await deps.db.collection("auditEvents").get();
+    const events = audits.docs
+      .map((d) => d.data())
+      .filter((e) => e["action"] === "STAFF_INVITED");
+    expect(events).toHaveLength(1);
+    expect(events[0]!["resourceType"]).toBe("facilityInvitation");
+    expect(events[0]!["facilityId"]).toBe(facilityId);
+    // 招待先メールアドレスは監査に残さない
+    expect(JSON.stringify(events[0])).not.toContain("auditee@example.com");
+    await app.close();
+  });
+
+  it("メンバーシップ失効で MEMBERSHIP_REVOKED、ロール変更で STAFF_MEMBERSHIP_UPDATED", async () => {
+    const { app, deps } = await setup();
+    const base = `/v1/hospitals/${facilityId}/memberships`;
+
+    const roleRes = await app.inject({
+      method: "PATCH",
+      url: `${base}/staff`,
+      headers: authHeader("admin"),
+      payload: { role: "facility_clinician" },
+    });
+    expect(roleRes.statusCode).toBe(200);
+
+    const revRes = await app.inject({
+      method: "PATCH",
+      url: `${base}/staff`,
+      headers: authHeader("admin"),
+      payload: { status: "revoked" },
+    });
+    expect(revRes.statusCode).toBe(200);
+
+    const audits = await deps.db.collection("auditEvents").get();
+    const events = audits.docs.map((d) => d.data());
+    const updates = events.filter((e) => e["action"] === "STAFF_MEMBERSHIP_UPDATED");
+    const revoked = events.filter((e) => e["action"] === "MEMBERSHIP_REVOKED");
+    expect(updates).toHaveLength(1);
+    expect(revoked).toHaveLength(1);
+    expect((revoked[0]!["details"] as { status?: string }).status).toBe("revoked");
+    await app.close();
+  });
+
+  it("変更のない PATCH は監査を発行しない", async () => {
+    const { app, deps } = await setup();
+    const base = `/v1/hospitals/${facilityId}/memberships`;
+
+    // revoked へ遷移（MEMBERSHIP_REVOKED が1件）
+    await app.inject({
+      method: "PATCH",
+      url: `${base}/staff`,
+      headers: authHeader("admin"),
+      payload: { status: "revoked" },
+    });
+    // 同一 status の繰り返し PATCH は遷移なし
+    const res = await app.inject({
+      method: "PATCH",
+      url: `${base}/staff`,
+      headers: authHeader("admin"),
+      payload: { status: "revoked" },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const audits = await deps.db.collection("auditEvents").get();
+    const events = audits.docs
+      .map((d) => d.data())
+      .filter(
+        (e) =>
+          e["action"] === "STAFF_MEMBERSHIP_UPDATED" ||
+          e["action"] === "MEMBERSHIP_REVOKED",
+      );
+    expect(events).toHaveLength(1);
+    expect(events[0]!["action"]).toBe("MEMBERSHIP_REVOKED");
+    // revokedAt は2回目で上書きされない（失効遷移時のみ打刻）
+    const member = await deps.db.doc("facilityMemberships/staff").get();
+    const firstRevokedAt = member.data()!["revokedAt"];
+    await app.inject({
+      method: "PATCH",
+      url: `${base}/staff`,
+      headers: authHeader("admin"),
+      payload: { role: "facility_clinician" },
+    });
+    const after = await deps.db.doc("facilityMemberships/staff").get();
+    expect(after.data()!["revokedAt"]).toEqual(firstRevokedAt);
+    await app.close();
+  });
 });

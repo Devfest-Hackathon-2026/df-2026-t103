@@ -133,6 +133,66 @@ describe("hospital receive routes (#18, API-031〜033)", () => {
       const body = res.json() as { deliveries: Array<Record<string, unknown>> };
       expect(body.deliveries[0]).not.toHaveProperty("senderUid");
     });
+
+    it("nextCursor で次ページを取得できる", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      const base = Date.parse("2026-01-10T00:00:00Z");
+      for (let i = 0; i < 3; i++) {
+        await seedDelivery(deps, `d-page-${i}`, FACILITY_A, {
+          deliveredAt: Timestamp.fromMillis(base - i * 1000),
+          createdAt: Timestamp.fromMillis(base - i * 1000),
+        });
+      }
+
+      const page1 = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries?limit=2`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(page1.statusCode).toBe(200);
+      const p1 = page1.json() as {
+        deliveries: Array<{ deliveryId: string }>;
+        nextCursor: string | null;
+      };
+      expect(p1.deliveries.map((d) => d.deliveryId)).toEqual([
+        "d-page-0",
+        "d-page-1",
+      ]);
+      expect(p1.nextCursor).toBe("d-page-1");
+
+      const page2 = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries?limit=2&cursor=${p1.nextCursor}`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(page2.statusCode).toBe(200);
+      const p2 = page2.json() as {
+        deliveries: Array<{ deliveryId: string }>;
+        nextCursor: string | null;
+      };
+      expect(p2.deliveries.map((d) => d.deliveryId)).toEqual(["d-page-2"]);
+      expect(p2.nextCursor).toBeNull();
+    });
+
+    it("失効したカーソルは空ページを返す", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      await seedDelivery(deps, "d-any", FACILITY_A);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries?cursor=nonexistent`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as {
+        deliveries: unknown[];
+        nextCursor: string | null;
+      };
+      expect(body.deliveries).toHaveLength(0);
+      expect(body.nextCursor).toBeNull();
+    });
   });
 
   describe("GET /v1/hospitals/:facilityId/deliveries/:deliveryId", () => {
@@ -265,6 +325,96 @@ describe("hospital receive routes (#18, API-031〜033)", () => {
       });
       expect(res.statusCode).toBe(200);
       expect((res.json() as { status: string }).status).toBe("acknowledged");
+    });
+
+    it("受領確認で DELIVERY_ACKNOWLEDGED 監査が記録される", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      await seedDelivery(deps, "d-ack-audit", FACILITY_A);
+
+      await app.inject({
+        method: "POST",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries/d-ack-audit/acknowledge`,
+        headers: authHeader(STAFF_A),
+      });
+
+      const audits = await deps.db.collection("auditEvents").get();
+      const events = audits.docs
+        .map((d) => d.data())
+        .filter((e) => e["action"] === "DELIVERY_ACKNOWLEDGED");
+      expect(events).toHaveLength(1);
+      expect(events[0]!["decision"]).toBe("allow");
+      expect(events[0]!["facilityId"]).toBe(FACILITY_A);
+      // 生IDは保存しない
+      expect(events[0]!["resourceIdHash"]).not.toBe("d-ack-audit");
+    });
+
+    it("冪等な再受領は元の acknowledgedAt を返し監査を重複発行しない", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      const originalAck = Timestamp.fromDate(new Date("2026-01-02T03:04:05Z"));
+      await seedDelivery(deps, "d-ack-idem", FACILITY_A, {
+        status: "acknowledged",
+        acknowledgedAt: originalAck,
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries/d-ack-idem/acknowledge`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { acknowledgedAt: string };
+      expect(body.acknowledgedAt).toBe("2026-01-02T03:04:05.000Z");
+
+      const audits = await deps.db.collection("auditEvents").get();
+      const events = audits.docs
+        .map((d) => d.data())
+        .filter((e) => e["action"] === "DELIVERY_ACKNOWLEDGED");
+      expect(events).toHaveLength(0);
+    });
+
+    it("終端状態（revoked/failed）への受領確認は409で監査も発行しない", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      await seedDelivery(deps, "d-ack-rev", FACILITY_A, { status: "revoked" });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries/d-ack-rev/acknowledge`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(409);
+
+      // 終端状態が acknowledged に書き換わっていないこと
+      const snap = await deps.db.doc("deliveries/d-ack-rev").get();
+      expect(snap.data()!["status"]).toBe("revoked");
+      const audits = await deps.db.collection("auditEvents").get();
+      const events = audits.docs
+        .map((d) => d.data())
+        .filter((e) => e["action"] === "DELIVERY_ACKNOWLEDGED");
+      expect(events).toHaveLength(0);
+    });
+
+    it("他院deliveryの受領確認拒否も deny 監査が記録される（E2E-004）", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      await seedDelivery(deps, "d-ack-deny", FACILITY_B);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries/d-ack-deny/acknowledge`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(404);
+
+      const audits = await deps.db.collection("auditEvents").get();
+      const events = audits.docs
+        .map((d) => d.data())
+        .filter(
+          (e) => e["action"] === "DELIVERY_ACKNOWLEDGED" && e["decision"] === "deny",
+        );
+      expect(events).toHaveLength(1);
     });
 
     it("他院のdeliveryは404", async () => {

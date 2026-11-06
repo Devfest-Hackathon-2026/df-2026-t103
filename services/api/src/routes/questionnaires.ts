@@ -73,6 +73,7 @@ export function registerQuestionnaireRoutes(
         ...(req.query.revision !== undefined
           ? { revision: req.query.revision }
           : {}),
+        requestId: req.requestContext.requestId,
       }),
   );
 }

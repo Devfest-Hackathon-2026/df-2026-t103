@@ -303,6 +303,15 @@ describe("OcrWorker.runJob", () => {
     expect(job.status).toBe("failed");
     expect(job.errorCode).toBe("worker_interrupted");
     expect(deps.fakeOcrEngine.calls).toBe(0);
+    // claim tx 内で終端化した経路でも OCR_JOB_FAILED が記録される
+    const audits = await deps.memDb
+      .collection("auditEvents")
+      .where("action", "==", "OCR_JOB_FAILED")
+      .get();
+    expect(audits.size).toBe(1);
+    const ev = audits.docs[0]!.data()!;
+    expect((ev.details as { errorCode?: string } | undefined)?.errorCode).toBe("worker_interrupted");
+    expect(ev.resourceIdHash).not.toBe(jobId);
   });
 
   it("claim 失効後の遅延完了は結果を上書きしない", async () => {

@@ -65,6 +65,29 @@ describe("認証ガード", () => {
     await app.close();
   });
 
+  it("不正トークンは AUTH_FAIL 監査を記録する（UID不明・決定=deny）", async () => {
+    const { deps, app } = await setup();
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: "Bearer garbage" },
+    });
+    expect(res.statusCode).toBe(401);
+    const audits = await deps.memDb
+      .collection("auditEvents")
+      .where("action", "==", "AUTH_FAIL")
+      .get();
+    expect(audits.size).toBe(1);
+    const ev = audits.docs[0]!.data()!;
+    expect(ev.actorType).toBe("patient");
+    // トークンが信用できないため actorUidHash は付けない
+    expect(ev.actorUidHash).toBeUndefined();
+    expect(ev.decision).toBe("deny");
+    expect(ev.requestId).toBeTruthy();
+    expect(JSON.stringify(ev)).not.toContain("garbage");
+    await app.close();
+  });
+
   it("失効ユーザーは 401", async () => {
     const { deps, app } = await setup();
     deps.fakeAuth.revoked.add(UID);

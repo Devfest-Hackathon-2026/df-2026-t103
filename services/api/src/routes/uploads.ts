@@ -55,6 +55,7 @@ export function registerUploadRoutes(app: FastifyInstance, deps: Deps): void {
         uid: uidOf(req),
         body: req.body,
         idempotencyKey,
+        requestId: req.requestContext.requestId,
       });
       return reply.status(201).send(result);
     },

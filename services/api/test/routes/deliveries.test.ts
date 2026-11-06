@@ -257,7 +257,8 @@ describe("delivery routes (#17, API-029/030)", () => {
       facilityId: string;
     };
     expect(body.deliveryId).toBe(deliveryId);
-    expect(body.status).toBe("created");
+    // 施設側コピーは作成=配送済み（created→delivered はtx内で完結）
+    expect(body.status).toBe("delivered");
     expect(body.facilityId).toBe(FAC_ID);
   });
 
@@ -290,5 +291,48 @@ describe("delivery routes (#17, API-029/030)", () => {
       headers: authHeader(UID),
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it("配送作成で DELIVERY_CREATED 監査が記録され requestId が伝搬する", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-audit-1" },
+      payload: deliveryPayload(qid),
+    });
+    expect(res.statusCode).toBe(202);
+    const { deliveryId } = res.json() as { deliveryId: string };
+
+    const audits = await deps.db.collection("auditEvents").get();
+    const events = audits.docs
+      .map((d) => d.data())
+      .filter((e) => e["action"] === "DELIVERY_CREATED");
+    expect(events).toHaveLength(1);
+    expect(events[0]!["facilityId"]).toBe(FAC_ID);
+    expect(events[0]!["requestId"]).toBeTruthy();
+    // 生IDは保存しない
+    expect(events[0]!["resourceIdHash"]).not.toBe(deliveryId);
+    expect(events[0]!["actorUidHash"]).not.toBe(UID);
+  });
+
+  it("冪等リプレイでは DELIVERY_CREATED 監査を重複発行しない", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+
+    const headers = { ...authHeader(UID), "idempotency-key": "dlv-audit-idem" };
+    const payload = deliveryPayload(qid);
+    await app.inject({ method: "POST", url: "/v1/deliveries", headers, payload });
+    await app.inject({ method: "POST", url: "/v1/deliveries", headers, payload });
+
+    const audits = await deps.db.collection("auditEvents").get();
+    const events = audits.docs
+      .map((d) => d.data())
+      .filter((e) => e["action"] === "DELIVERY_CREATED");
+    expect(events).toHaveLength(1);
   });
 });

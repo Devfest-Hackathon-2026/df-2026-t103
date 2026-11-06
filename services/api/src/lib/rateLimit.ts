@@ -65,4 +65,6 @@ export const RateRules = {
   uploadInit: { limit: 20, windowMs: 60_000 },
   uploadComplete: { limit: 30, windowMs: 60_000 },
   intakeNextQuestion: { limit: 30, windowMs: 60_000 },
+  /** 認証失敗監査の書込上限（トークンSpamによるコスト増幅を抑止）。 */
+  authFailAudit: { limit: 30, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;

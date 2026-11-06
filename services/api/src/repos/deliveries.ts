@@ -1,4 +1,8 @@
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import {
+  FieldValue,
+  Timestamp,
+  type DocumentSnapshot,
+} from "firebase-admin/firestore";
 import type { DeliveryDoc, FacilityDoc } from "../domain/firestoreDocs.js";
 import { getDoc, queryDocs } from "./helpers.js";
 import type { FirestoreLike } from "./helpers.js";
@@ -66,6 +70,26 @@ export async function listDeliveriesByFacility(
   opts?: { cursor?: string; limit?: number },
 ): Promise<DeliveryListResult> {
   const pageSize = opts?.limit ?? 20;
+
+  // カーソルは直前ページ末尾の deliveryId。そのスナップショットで startAfter し、
+  // ソート値が同一のドキュメント間でも一意に分割できるようにする。
+  // 失効・他院のカーソルは空ページを返し、ページネーションを安全に打ち切る。
+  let startAfterDoc: DocumentSnapshot | undefined;
+  if (opts?.cursor) {
+    const curSnap = await db.doc(`deliveries/${opts.cursor}`).get();
+    const cur = curSnap.data() as DeliveryDoc | undefined;
+    if (
+      !curSnap.exists ||
+      !cur ||
+      cur.facilityId !== facilityId ||
+      cur.deliveredAt == null ||
+      cur.createdAt == null
+    ) {
+      return { items: [], nextCursor: null };
+    }
+    startAfterDoc = curSnap;
+  }
+
   const rows = await queryDocs<DeliveryDoc>(
     db,
     "deliveries",
@@ -75,6 +99,7 @@ export async function listDeliveriesByFacility(
         { field: "deliveredAt", direction: "desc" },
         { field: "createdAt", direction: "desc" },
       ],
+      ...(startAfterDoc ? { startAfterDoc } : {}),
       limit: pageSize + 1,
     },
   );
@@ -120,23 +145,45 @@ export async function acknowledgeDelivery(
   deliveryId: string,
   staffUid: string,
   now: Date,
-): Promise<{ alreadyAcknowledged: boolean }> {
+): Promise<{
+  found: boolean;
+  alreadyAcknowledged: boolean;
+  /** failed/revoked の終端状態では受領確認できない。 */
+  terminal: boolean;
+  acknowledgedAt: unknown;
+}> {
+  let found = false;
   let alreadyAcknowledged = false;
+  let terminal = false;
+  let acknowledgedAt: unknown = null;
   await db.runTransaction(async (tx) => {
+    // tx リトライ時に前試行の結果が残らないよう各試行でリセット
+    found = false;
+    alreadyAcknowledged = false;
+    terminal = false;
+    acknowledgedAt = null;
     const ref = deliveriesCollection(db).doc(deliveryId);
     const snap = await tx.get(ref);
     if (!snap.exists) return;
+    found = true;
     const data = snap.data() as DeliveryDoc;
     if (data.status === "acknowledged") {
       alreadyAcknowledged = true;
+      acknowledgedAt = data.acknowledgedAt ?? null;
       return;
     }
+    if (data.status === "failed" || data.status === "revoked") {
+      // 終端状態への受領確認は状態機械違反（02 §9）
+      terminal = true;
+      return;
+    }
+    acknowledgedAt = Timestamp.fromDate(now);
     tx.update(ref, {
       status: "acknowledged",
-      acknowledgedAt: Timestamp.fromDate(now),
+      acknowledgedAt,
       receivedByStaffUid: staffUid,
       updatedAt: FieldValue.serverTimestamp(),
     });
   });
-  return { alreadyAcknowledged };
+  return { found, alreadyAcknowledged, terminal, acknowledgedAt };
 }

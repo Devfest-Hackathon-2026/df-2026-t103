@@ -11,7 +11,14 @@ import type {
 import { initialSteps } from "../domain/deletion.js";
 import { ApiError } from "../lib/errors.js";
 import { requestHash, runIdempotent } from "../lib/idempotency.js";
-import { auditInTransaction, auditUidHash } from "../lib/audit.js";
+import {
+  auditInTransaction,
+  auditResourceHash,
+  auditUidHash,
+  logAuditEvent,
+} from "../lib/audit.js";
+import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
+import type { AuditEventDoc } from "../domain/firestoreDocs.js";
 import { getAccount } from "../repos/accounts.js";
 import { getDeletionJob } from "../repos/deletionJobs.js";
 
@@ -97,12 +104,15 @@ export async function requestDeletion(
 ): Promise<DeletionStatusBody> {
   const graceMs = deps.config.deletionGracePeriodDays * 24 * 3600_000;
 
+  const committedAudits: AuditEventDoc[] = [];
   const { result, replayed } = await runIdempotent<DeletionStatusBody>(deps, {
     namespace: "deletion_request",
     key: params.idempotencyKey,
     principal: params.uid,
     requestHash: requestHash(deps, {}),
     execute: async (tx) => {
+      // Firestore の競合再試行で push が重複しないよう都度リセットする
+      committedAudits.length = 0;
       const accountRef = deps.db.doc(`accounts/${params.uid}`);
       const accountSnap = await tx.get(accountRef);
       if (!accountSnap.exists) {
@@ -162,15 +172,17 @@ export async function requestDeletion(
         updatedAt: FieldValue.serverTimestamp(),
       });
 
-      auditInTransaction(tx, deps, {
-        actorType: "patient",
-        actorUidHash: auditUidHash(deps, params.uid),
-        action: "ACCOUNT_DELETION_REQUESTED",
-        resourceType: "deletionJobs",
-        resourceIdHash: jobRef.id,
-        requestId: params.requestId,
-        outcome: "scheduled",
-      });
+      committedAudits.push(
+        auditInTransaction(tx, deps, {
+          actorType: "patient",
+          actorUidHash: auditUidHash(deps, params.uid),
+          action: AUDIT_ACTIONS.ACCOUNT_DELETION_REQUESTED,
+          resourceType: "deletionJobs",
+          resourceIdHash: auditResourceHash(deps, jobRef.id),
+          requestId: params.requestId,
+          outcome: "scheduled",
+        }),
+      );
 
       return {
         status: "pending_deletion" as const,
@@ -182,6 +194,10 @@ export async function requestDeletion(
       };
     },
   });
+
+  // コミット確定後にシンク転送用ログを出す（冪等リプレイでは execute が
+  // 走らないため二重出力しない）
+  for (const e of committedAudits) logAuditEvent(deps, e);
 
   // トークン失効はトランザクション外でベストエフォート実行。
   // 冪等リプレイ（応答喪失後の再送・取消後の再送）では、失効成功が
@@ -203,7 +219,7 @@ export async function requestDeletion(
         );
     } catch (err) {
       deps.logger.warn(
-        { err, uid: auditUidHash(deps, params.uid) },
+        { err, uidHash: auditUidHash(deps, params.uid) },
         "revokeRefreshTokens failed",
       );
     }
@@ -219,12 +235,15 @@ export async function cancelDeletion(
   deps: Deps,
   params: { uid: string; idempotencyKey: string; requestId: string },
 ): Promise<DeletionStatusBody> {
+  const committedAudits: AuditEventDoc[] = [];
   const { result } = await runIdempotent<DeletionStatusBody>(deps, {
     namespace: "deletion_cancel",
     key: params.idempotencyKey,
     principal: params.uid,
     requestHash: requestHash(deps, {}),
     execute: async (tx) => {
+      // Firestore の競合再試行で push が重複しないよう都度リセットする
+      committedAudits.length = 0;
       const accountRef = deps.db.doc(`accounts/${params.uid}`);
       const accountSnap = await tx.get(accountRef);
       if (!accountSnap.exists) {
@@ -275,15 +294,17 @@ export async function cancelDeletion(
       });
       tx.update(jobRef, { status: "cancelled", cancelledAt: ts });
 
-      auditInTransaction(tx, deps, {
-        actorType: "patient",
-        actorUidHash: auditUidHash(deps, params.uid),
-        action: "ACCOUNT_DELETION_CANCELLED",
-        resourceType: "deletionJobs",
-        resourceIdHash: jobRef.id,
-        requestId: params.requestId,
-        outcome: "cancelled",
-      });
+      committedAudits.push(
+        auditInTransaction(tx, deps, {
+          actorType: "patient",
+          actorUidHash: auditUidHash(deps, params.uid),
+          action: AUDIT_ACTIONS.ACCOUNT_DELETION_CANCELLED,
+          resourceType: "deletionJobs",
+          resourceIdHash: auditResourceHash(deps, jobRef.id),
+          requestId: params.requestId,
+          outcome: "cancelled",
+        }),
+      );
 
       return {
         status: "cancelled" as const,
@@ -292,6 +313,8 @@ export async function cancelDeletion(
       };
     },
   });
+
+  for (const e of committedAudits) logAuditEvent(deps, e);
 
   return result;
 }

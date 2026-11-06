@@ -15,7 +15,8 @@ import { FIXED_TOPICS } from "../engines/fixedQuestions.js";
 import { ApiError, ErrorCodes } from "../lib/errors.js";
 import { canonicalJson, sha256Hex } from "../lib/hash.js";
 import { requestHash, runIdempotent } from "../lib/idempotency.js";
-import { audit, auditUidHash } from "../lib/audit.js";
+import { audit, auditResourceHash, auditUidHash } from "../lib/audit.js";
+import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { getProfile } from "../repos/accounts.js";
 import {
   getIntake,
@@ -280,6 +281,7 @@ export async function finalizeIntake(
     intakeId: string;
     body: IntakeFinalizeBody;
     idempotencyKey: string;
+    requestId?: string;
   },
 ): Promise<{
   intakeId: string;
@@ -312,7 +314,7 @@ export async function finalizeIntake(
     }),
   );
 
-  const { result } = await runIdempotent<
+  const { result, replayed } = await runIdempotent<
     | { questionnaireId: string; questionnaireRevision: number }
     | typeof DRAFT_EXPIRED
   >(deps, {
@@ -400,13 +402,17 @@ export async function finalizeIntake(
     },
   });
   if ("kind" in result) throw draftExpiredError();
-  await audit(deps, {
-    actorType: "patient",
-    actorUidHash: auditUidHash(deps, params.uid),
-    action: "intake.finalized",
-    resourceType: "questionnaires",
-    resourceIdHash: result.questionnaireId,
-  });
+  // 冪等リプレイでは確定が起きていないため監査も発行しない
+  if (!replayed) {
+    await audit(deps, {
+      actorType: "patient",
+      actorUidHash: auditUidHash(deps, params.uid),
+      action: AUDIT_ACTIONS.INTAKE_FINALIZED,
+      resourceType: "questionnaires",
+      resourceIdHash: auditResourceHash(deps, result.questionnaireId),
+      ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
+    });
+  }
   return {
     intakeId: params.intakeId,
     questionnaireId: result.questionnaireId,

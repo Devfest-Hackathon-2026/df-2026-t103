@@ -5,6 +5,8 @@ import type { ConsentState } from "./context.js";
 import { ApiError, ErrorCodes } from "../lib/errors.js";
 import { RateRules, type RateLimitRule } from "../lib/rateLimit.js";
 import { getAccount, latestConsentsByType } from "../repos/accounts.js";
+import { audit } from "../lib/audit.js";
+import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { getLegalDocuments } from "../repos/legalConfig.js";
 import { getActiveMemberships } from "../repos/facilities.js";
 import type { ConsentType, MembershipRole } from "../domain/types.js";
@@ -68,6 +70,31 @@ export async function enforceAccess(
   }
   const token = await deps.auth.verifyIdToken(header.slice(7).trim(), true);
   if (!token) {
+    // 提示されたトークンの検証失敗は認証イベントとして監査に残す
+    // （Bearer 未提示は雑音として記録しない）。UIDは検証不能なため省略。
+    // 未認証段階のためレート制御前に書き込まれる点を踏まえ、監査書込自体を
+    // IP単位で制限し、トークンSpamによる書込コスト増幅を抑止する
+    // （制限超過時は401応答のみで監査は落とす）。
+    // req.ip は trustProxy 設定次第ではプロキシ共有IPとなるため、
+    // その場合は全体バケットとして上限のみ機能する
+    let throttled = false;
+    try {
+      deps.rateLimiter.consume(
+        `auth_fail:${clientIp(req)}`,
+        RateRules.authFailAudit,
+      );
+    } catch {
+      throttled = true;
+    }
+    if (!throttled) {
+      await audit(deps, {
+        actorType: "patient",
+        action: AUDIT_ACTIONS.AUTH_FAIL,
+        decision: "deny",
+        requestId: req.requestContext.requestId,
+        details: { clientClass: "bearer", resultCode: "token_invalid" },
+      });
+    }
     throw ApiError.unauthenticated("認証情報が無効または期限切れです。");
   }
   req.requestContext.auth = token;

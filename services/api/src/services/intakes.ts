@@ -33,7 +33,12 @@ import type {
 } from "../domain/types.js";
 import { ApiError, ErrorCodes } from "../lib/errors.js";
 import { requestHash, runIdempotent } from "../lib/idempotency.js";
-import { audit, auditUidHash } from "../lib/audit.js";
+import {
+  audit,
+  auditResourceHash,
+  auditUidHash,
+} from "../lib/audit.js";
+import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import {
   answerRef,
   getIntake,
@@ -226,9 +231,19 @@ export async function createIntake(
  */
 export async function getIntakeDetail(
   deps: Deps,
-  params: { uid: string; intakeId: string },
+  params: { uid: string; intakeId: string; requestId?: string },
 ): Promise<IntakeDetail> {
   const doc = await getOwnedIntake(deps, params.uid, params.intakeId);
+  // 閲覧監査: 所有確認を通過した読み取りのみ記録（他人の票は404秘匿のまま）
+  await audit(deps, {
+    actorType: "patient",
+    actorUidHash: auditUidHash(deps, params.uid),
+    action: AUDIT_ACTIONS.INTAKE_READ,
+    resourceType: "intakes",
+    resourceIdHash: auditResourceHash(deps, params.intakeId),
+    ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
+    outcome: "ok",
+  });
   const detail = toDetail(params.intakeId, doc);
   const [questions, answers] = await Promise.all([
     listQuestions(deps.db, params.intakeId),
@@ -687,28 +702,6 @@ export async function transitionIntake(
   });
   if ("kind" in result) throw draftExpiredError();
   return result;
-}
-
-/** 問診の監査イベント（#11 の API 層から利用）。 */
-export async function auditIntake(
-  deps: Deps,
-  params: {
-    uid: string;
-    action: string;
-    intakeId: string;
-    requestId?: string;
-    outcome?: string;
-  },
-): Promise<void> {
-  await audit(deps, {
-    actorType: "patient",
-    actorUidHash: auditUidHash(deps, params.uid),
-    action: params.action,
-    resourceType: "intakes",
-    resourceIdHash: params.intakeId,
-    ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
-    ...(params.outcome !== undefined ? { outcome: params.outcome } : {}),
-  });
 }
 
 function nowTs(deps: Deps): Timestamp {

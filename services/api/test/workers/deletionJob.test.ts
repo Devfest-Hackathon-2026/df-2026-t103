@@ -12,6 +12,7 @@ async function seedJob(
   deps: TestDeps,
   opts: {
     executeAfterMs?: number;
+    requestedAtMs?: number;
     status?: DeletionJobDoc["status"];
     attemptCount?: number;
     uid?: string;
@@ -21,7 +22,9 @@ async function seedJob(
   const ref = deps.db.collection("deletionJobs").doc();
   const job: DeletionJobDoc = {
     subjectUid: uid,
-    requestedAt: Timestamp.fromDate(deps.clock.now()),
+    requestedAt: Timestamp.fromMillis(
+      opts.requestedAtMs ?? deps.clock.now().getTime(),
+    ),
     executeAfter: Timestamp.fromMillis(
       opts.executeAfterMs ?? deps.clock.now().getTime() - 1000,
     ),
@@ -212,8 +215,10 @@ describe("DeletionWorker.scanDueJobs", () => {
   it("期限+24h超過のジョブはアラートを記録してから実行する", async () => {
     const deps = makeTestDeps();
     await seedPatientData(deps);
+    // アンカーは requestedAt + 猶予30日。それ+24h超過で overdue
     const jobId = await seedJob(deps, {
-      executeAfterMs: deps.clock.now().getTime() - 25 * 3600_000,
+      requestedAtMs: deps.clock.now().getTime() - 32 * 24 * 3600_000,
+      executeAfterMs: deps.clock.now().getTime() - 1000,
     });
     const r = await new DeletionWorker(deps).scanDueJobs();
     expect(r.scanned).toBe(1);
@@ -221,7 +226,32 @@ describe("DeletionWorker.scanDueJobs", () => {
     expect(job.overdueAlertedAt).toBeDefined();
     const audits = await deps.db
       .collection("auditEvents")
-      .where("outcome", "==", "overdue_alert")
+      .where("action", "==", "DELETION_JOB_OVERDUE")
+      .get();
+    expect(audits.size).toBe(1);
+  });
+
+  it("終端失敗ジョブも当初予定時刻基準で期限超過アラートされる", async () => {
+    const deps = makeTestDeps();
+    await seedPatientData(deps);
+    // 申請から猶予+24h超過。リトライで executeAfter が未来へ前進した
+    // 状態を模倣（従来のアンカーでは永遠にアラートされない経路）
+    const jobId = await seedJob(deps, {
+      requestedAtMs: deps.clock.now().getTime() - 32 * 24 * 3600_000,
+      executeAfterMs: deps.clock.now().getTime() + 3600_000,
+      status: "failed",
+      attemptCount: 5,
+    });
+    const r = await new DeletionWorker(deps).scanDueJobs();
+    // failed は再実行対象ではない（already_terminal）がアラートは残る
+    expect(
+      r.results.filter((x) => x.jobId === jobId && x.outcome !== "already_terminal"),
+    ).toHaveLength(0);
+    const job = (await deps.db.doc(`deletionJobs/${jobId}`).get()).data()!;
+    expect(job.overdueAlertedAt).toBeDefined();
+    const audits = await deps.db
+      .collection("auditEvents")
+      .where("action", "==", "DELETION_JOB_OVERDUE")
       .get();
     expect(audits.size).toBe(1);
   });
@@ -275,6 +305,33 @@ describe("放置 running ジョブの回収", () => {
     // スキャンにも拾われない（重複実行しない）
     const scan = await new DeletionWorker(deps).scanDueJobs();
     expect(scan.executed).toBe(0);
+  });
+
+  it("attempt上限の放置 running は claim_abandoned で終端化し失敗監査を残す", async () => {
+    const deps = makeTestDeps({ deletionJobMaxAttempts: 2 });
+    await seedPatientData(deps);
+    const jobId = await seedJob(deps);
+    await deps.db.doc(`deletionJobs/${jobId}`).update({
+      status: "running",
+      attemptCount: 2,
+      lastStartedAt: Timestamp.fromMillis(
+        deps.clock.now().getTime() - CLAIM_TTL_MS - 1000,
+      ),
+    });
+    const r = await new DeletionWorker(deps).runJob(jobId);
+    expect(r.outcome).toBe("already_terminal");
+    const job = (await deps.db.doc(`deletionJobs/${jobId}`).get()).data()!;
+    expect(job.status).toBe("failed");
+    expect(job.lastErrorCode).toBe("claim_abandoned");
+    const audits = await deps.db
+      .collection("auditEvents")
+      .where("action", "==", "ACCOUNT_DELETION_FAILED")
+      .get();
+    expect(audits.size).toBe(1);
+    const ev = audits.docs[0]!.data()!;
+    expect(ev.outcome).toBe("failed_terminal");
+    expect(ev.details?.errorClass).toBe("claim_abandoned");
+    expect(ev.resourceIdHash).not.toBe(jobId);
   });
 });
 

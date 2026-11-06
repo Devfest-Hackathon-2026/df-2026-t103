@@ -16,7 +16,8 @@ import {
 } from "../domain/uploads.js";
 import { ApiError, ErrorCodes } from "../lib/errors.js";
 import { requestHash, runIdempotent } from "../lib/idempotency.js";
-import { audit, auditUidHash } from "../lib/audit.js";
+import { audit, auditResourceHash, auditUidHash } from "../lib/audit.js";
+import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { activeUploadsQuery, getUpload } from "../repos/uploads.js";
 import { queryDocs } from "../repos/helpers.js";
 import { latestOcrJobForUpload } from "../repos/ocrJobs.js";
@@ -56,7 +57,12 @@ function timestampToDate(value: unknown): Date | undefined {
  */
 export async function initUpload(
   deps: Deps,
-  params: { uid: string; body: UploadInitBody; idempotencyKey: string },
+  params: {
+    uid: string;
+    body: UploadInitBody;
+    idempotencyKey: string;
+    requestId?: string;
+  },
 ): Promise<InitUploadResult> {
   const { body } = params;
   if (body.bytes > UPLOAD_MAX_BYTES) {
@@ -67,7 +73,7 @@ export async function initUpload(
     );
   }
 
-  const { result } = await runIdempotent<{ uploadId: string }>(deps, {
+  const { result, replayed } = await runIdempotent<{ uploadId: string }>(deps, {
     namespace: "upload_init",
     key: params.idempotencyKey,
     principal: params.uid,
@@ -131,10 +137,12 @@ export async function initUpload(
   await audit(deps, {
     actorType: "patient",
     actorUidHash: auditUidHash(deps, params.uid),
-    action: "UPLOAD_INIT",
+    action: AUDIT_ACTIONS.UPLOAD_INIT,
     resourceType: "uploads",
-    resourceIdHash: result.uploadId,
-    outcome: "created",
+    resourceIdHash: auditResourceHash(deps, result.uploadId),
+    ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
+    // リプレイ時も署名URLは新規発行されるため、証跡として残すが outcome は区別する
+    outcome: replayed ? "url_reissued" : "created",
   });
 
   return { uploadId: result.uploadId, status: "pending", upload: instruction };
@@ -277,12 +285,15 @@ export async function completeUpload(
 
   const objectInfo = await verify();
 
-  const { result } = await runIdempotent<CompleteUploadResult>(deps, {
+  let transitioned = false;
+  const { result, replayed } = await runIdempotent<CompleteUploadResult>(deps, {
     namespace: "upload_complete",
     key: params.idempotencyKey,
     principal: params.uid,
     requestHash: requestHash(deps, { uploadId: params.uploadId }),
     execute: async (tx) => {
+      // tx リトライ時に前試行の状態が残らないよう各試行でリセット
+      transitioned = false;
       const ref = deps.db.doc(`uploads/${params.uploadId}`);
       const snap = await tx.get(ref);
       const doc = snap.data() as UploadDoc | undefined;
@@ -297,6 +308,7 @@ export async function completeUpload(
           "このアップロードは利用できない状態です。",
         );
       }
+      transitioned = true;
       tx.update(ref, {
         status: "uploaded",
         objectGeneration: objectInfo.generation,
@@ -324,15 +336,18 @@ export async function completeUpload(
     }
   }
 
-  await audit(deps, {
-    actorType: "patient",
-    actorUidHash: auditUidHash(deps, params.uid),
-    action: "UPLOAD_COMPLETED",
-    resourceType: "uploads",
-    resourceIdHash: params.uploadId,
-    requestId: params.requestId,
-    outcome: "uploaded",
-  });
+  // 冪等リプレイ・既 uploaded の早期 return では状態遷移が起きていないため監査は発行しない
+  if (!replayed && transitioned) {
+    await audit(deps, {
+      actorType: "patient",
+      actorUidHash: auditUidHash(deps, params.uid),
+      action: AUDIT_ACTIONS.UPLOAD_COMPLETED,
+      resourceType: "uploads",
+      resourceIdHash: auditResourceHash(deps, params.uploadId),
+      requestId: params.requestId,
+      outcome: "uploaded",
+    });
+  }
 
   return result;
 }

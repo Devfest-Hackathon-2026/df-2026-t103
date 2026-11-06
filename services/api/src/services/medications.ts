@@ -5,6 +5,7 @@ import {
 } from "firebase-admin/firestore";
 import type { Deps } from "../deps.js";
 import type {
+  AuditEventDoc,
   MedicationDoc,
   UploadDoc,
 } from "../domain/firestoreDocs.js";
@@ -19,7 +20,14 @@ import type {
 } from "../domain/types.js";
 import { ApiError } from "../lib/errors.js";
 import { requestHash, runIdempotent } from "../lib/idempotency.js";
-import { audit, auditUidHash } from "../lib/audit.js";
+import {
+  audit,
+  auditInTransaction,
+  auditResourceHash,
+  auditUidHash,
+  logAuditEvent,
+} from "../lib/audit.js";
+import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { getDoc } from "../repos/helpers.js";
 import {
   getMedication,
@@ -90,12 +98,22 @@ export function toMedicationResponse(
  */
 export async function getExtraction(
   deps: Deps,
-  params: { uid: string; jobId: string },
+  params: { uid: string; jobId: string; requestId?: string },
 ): Promise<ExtractionResponse> {
   const job = await getOcrJob(deps.db, params.jobId);
   if (!job || job.patientUid !== params.uid) {
     throw ApiError.notFound("抽出結果が見つかりません。");
   }
+  // 閲覧監査: 抽出候補は薬剤名等のPHIを含むため閲覧証跡を残す（値自体は記録しない）
+  await audit(deps, {
+    actorType: "patient",
+    actorUidHash: auditUidHash(deps, params.uid),
+    action: AUDIT_ACTIONS.OCR_EXTRACTION_READ,
+    resourceType: "ocrJobs",
+    resourceIdHash: auditResourceHash(deps, params.jobId),
+    ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
+    outcome: "ok",
+  });
   return {
     jobId: params.jobId,
     status: job.status,
@@ -160,63 +178,73 @@ export async function createMedication(
 
   const confirmationStatus: MedicationConfirmationStatus =
     body.confirmationStatus ?? "confirmed";
-  const { result } = await runIdempotent<{ medicationId: string }>(deps, {
-    namespace: "medication_create",
-    key: params.idempotencyKey,
-    principal: params.uid,
-    requestHash: requestHash(deps, body),
-    execute: async (tx) => {
-      const ref = deps.db.collection("medications").doc();
-      const now = deps.clock.now();
-      const doc: MedicationDoc = {
-        patientUid: params.uid,
-        displayName: body.displayName,
-        // OCR候補を既定値として利用者入力で上書き（FR-M04 の人手確認）
-        ...(body.genericName !== undefined
-          ? { genericName: body.genericName }
-          : {}),
-        strength:
-          body.strength !== undefined
-            ? body.strength
-            : (candidate?.strength ?? null),
-        instructionsText:
-          body.instructionsText !== undefined
-            ? body.instructionsText
-            : (candidate?.dosage ?? null),
-        quantity:
-          body.quantity !== undefined
-            ? body.quantity
-            : (candidate?.quantity ?? null),
-        prescribedAt:
-          body.prescribedAt !== undefined
-            ? body.prescribedAt
-            : (candidate?.prescribedAt ?? null),
-        currentStatus: body.currentStatus,
-        confirmationStatus,
-        sourceType,
-        ...(sourceUploadId !== undefined ? { uploadId: sourceUploadId } : {}),
-        ...(body.ocrJobId !== undefined ? { ocrJobId: body.ocrJobId } : {}),
-        attachToQuestionnaire: body.attachToQuestionnaire ?? false,
-        ...(confirmationStatus === "confirmed"
-          ? { userConfirmedAt: Timestamp.fromDate(now) }
-          : {}),
-        createdAt: Timestamp.fromDate(now),
-        updatedAt: Timestamp.fromDate(now),
-      };
-      tx.create(ref, doc as unknown as DocumentData);
-      return { medicationId: ref.id };
+  const { result, replayed } = await runIdempotent<{ medicationId: string }>(
+    deps,
+    {
+      namespace: "medication_create",
+      key: params.idempotencyKey,
+      principal: params.uid,
+      requestHash: requestHash(deps, body),
+      execute: async (tx) => {
+        const ref = deps.db.collection("medications").doc();
+        const now = deps.clock.now();
+        const doc: MedicationDoc = {
+          patientUid: params.uid,
+          displayName: body.displayName,
+          // OCR候補を既定値として利用者入力で上書き（FR-M04 の人手確認）
+          ...(body.genericName !== undefined
+            ? { genericName: body.genericName }
+            : {}),
+          strength:
+            body.strength !== undefined
+              ? body.strength
+              : (candidate?.strength ?? null),
+          instructionsText:
+            body.instructionsText !== undefined
+              ? body.instructionsText
+              : (candidate?.dosage ?? null),
+          quantity:
+            body.quantity !== undefined
+              ? body.quantity
+              : (candidate?.quantity ?? null),
+          prescribedAt:
+            body.prescribedAt !== undefined
+              ? body.prescribedAt
+              : (candidate?.prescribedAt ?? null),
+          currentStatus: body.currentStatus,
+          confirmationStatus,
+          sourceType,
+          ...(sourceUploadId !== undefined
+            ? { uploadId: sourceUploadId }
+            : {}),
+          ...(body.ocrJobId !== undefined
+            ? { ocrJobId: body.ocrJobId }
+            : {}),
+          attachToQuestionnaire: body.attachToQuestionnaire ?? false,
+          ...(confirmationStatus === "confirmed"
+            ? { userConfirmedAt: Timestamp.fromDate(now) }
+            : {}),
+          createdAt: Timestamp.fromDate(now),
+          updatedAt: Timestamp.fromDate(now),
+        };
+        tx.create(ref, doc as unknown as DocumentData);
+        return { medicationId: ref.id };
+      },
     },
-  });
+  );
 
-  await audit(deps, {
-    actorType: "patient",
-    actorUidHash: auditUidHash(deps, params.uid),
-    action: "MEDICATION_CREATED",
-    resourceType: "medications",
-    resourceIdHash: result.medicationId,
-    requestId: params.requestId,
-    outcome: confirmationStatus,
-  });
+  // 冪等リプレイでは新規作成が起きていないため監査も発行しない
+  if (!replayed) {
+    await audit(deps, {
+      actorType: "patient",
+      actorUidHash: auditUidHash(deps, params.uid),
+      action: AUDIT_ACTIONS.MEDICATION_CREATED,
+      resourceType: "medications",
+      resourceIdHash: auditResourceHash(deps, result.medicationId),
+      requestId: params.requestId,
+      outcome: confirmationStatus,
+    });
+  }
 
   const created = await getMedication(deps.db, result.medicationId);
   if (!created) {
@@ -239,7 +267,12 @@ export async function listMedications(
 /** API-025 PATCH /medications/{id}。 */
 export async function patchMedication(
   deps: Deps,
-  params: { uid: string; medicationId: string; body: MedicationPatchBody },
+  params: {
+    uid: string;
+    medicationId: string;
+    body: MedicationPatchBody;
+    requestId?: string;
+  },
 ): Promise<MedicationResponse> {
   const ref = deps.db.doc(`medications/${params.medicationId}`);
   const snap = await ref.get();
@@ -272,9 +305,10 @@ export async function patchMedication(
   await audit(deps, {
     actorType: "patient",
     actorUidHash: auditUidHash(deps, params.uid),
-    action: "MEDICATION_UPDATED",
+    action: AUDIT_ACTIONS.MEDICATION_UPDATED,
     resourceType: "medications",
-    resourceIdHash: params.medicationId,
+    resourceIdHash: auditResourceHash(deps, params.medicationId),
+    ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
     outcome: "updated",
   });
   const after = (await ref.get()).data() as MedicationDoc;
@@ -284,21 +318,30 @@ export async function patchMedication(
 /** API-026 DELETE /medications/{id}。物理削除（PHI最小化）。 */
 export async function deleteMedication(
   deps: Deps,
-  params: { uid: string; medicationId: string },
+  params: { uid: string; medicationId: string; requestId?: string },
 ): Promise<void> {
   const ref = deps.db.doc(`medications/${params.medicationId}`);
-  const snap = await ref.get();
-  const doc = snap.data() as MedicationDoc | undefined;
-  if (!snap.exists || !doc || doc.patientUid !== params.uid) {
-    throw ApiError.notFound("薬剤が見つかりません。");
-  }
-  await ref.delete();
-  await audit(deps, {
-    actorType: "patient",
-    actorUidHash: auditUidHash(deps, params.uid),
-    action: "MEDICATION_DELETED",
-    resourceType: "medications",
-    resourceIdHash: params.medicationId,
-    outcome: "deleted",
+  const committedAudits: AuditEventDoc[] = [];
+  // 削除と証跡を同一txにし、同時DELETE競合で監査が二重発行されないようにする
+  await deps.db.runTransaction(async (tx) => {
+    committedAudits.length = 0;
+    const snap = await tx.get(ref);
+    const doc = snap.data() as MedicationDoc | undefined;
+    if (!snap.exists || !doc || doc.patientUid !== params.uid) {
+      throw ApiError.notFound("薬剤が見つかりません。");
+    }
+    tx.delete(ref);
+    committedAudits.push(
+      auditInTransaction(tx, deps, {
+        actorType: "patient",
+        actorUidHash: auditUidHash(deps, params.uid),
+        action: AUDIT_ACTIONS.MEDICATION_DELETED,
+        resourceType: "medications",
+        resourceIdHash: auditResourceHash(deps, params.medicationId),
+        ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
+        outcome: "deleted",
+      }),
+    );
   });
+  for (const e of committedAudits) logAuditEvent(deps, e);
 }

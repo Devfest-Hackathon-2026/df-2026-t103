@@ -2,6 +2,7 @@ import type {
   Firestore,
   DocumentData,
   DocumentReference,
+  DocumentSnapshot,
   Transaction,
   Timestamp,
   Query,
@@ -39,6 +40,8 @@ export async function queryDocs<T>(
   conditions: QueryCondition[],
   options?: {
     orderBy?: Array<{ field: string; direction?: "asc" | "desc" }>;
+    /** ページングカーソルとして使う直前ドキュメントのスナップショット。 */
+    startAfterDoc?: DocumentSnapshot;
     limit?: number;
     collectionGroup?: boolean;
   },
@@ -49,6 +52,11 @@ export async function queryDocs<T>(
   for (const c of conditions) q = q.where(c.field, c.op, c.value);
   for (const o of options?.orderBy ?? []) {
     q = q.orderBy(o.field, o.direction ?? "asc");
+  }
+  if (options?.startAfterDoc) {
+    // スナップショットカーソル: フィールド値が同一のドキュメント間でも
+    // ドキュメント位置で一意に分割できる（値カーソルだと同時刻のdocが脱落する）
+    q = q.startAfter(options.startAfterDoc);
   }
   if (options?.limit) q = q.limit(options.limit);
   const snap = await q.get();

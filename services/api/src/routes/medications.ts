@@ -55,7 +55,11 @@ export function registerMedicationRoutes(
       },
     },
     async (req) =>
-      getExtraction(deps, { uid: uidOf(req), jobId: req.params.jobId }),
+      getExtraction(deps, {
+        uid: uidOf(req),
+        jobId: req.params.jobId,
+        requestId: req.requestContext.requestId,
+      }),
   );
 
   // API-023
@@ -126,6 +130,7 @@ export function registerMedicationRoutes(
         uid: uidOf(req),
         medicationId: req.params.medicationId,
         body: req.body,
+        requestId: req.requestContext.requestId,
       }),
   );
 
@@ -149,6 +154,7 @@ export function registerMedicationRoutes(
       await deleteMedication(deps, {
         uid: uidOf(req),
         medicationId: req.params.medicationId,
+        requestId: req.requestContext.requestId,
       });
       return reply.status(204).send(null);
     },

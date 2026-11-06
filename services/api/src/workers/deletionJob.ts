@@ -9,14 +9,19 @@ import {
   OVERDUE_ALERT_MS,
   retryDelayMs,
 } from "../domain/deletion.js";
-import { audit, auditUidHash } from "../lib/audit.js";
+import { audit, auditResourceHash, auditUidHash } from "../lib/audit.js";
+import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import {
   deleteRecursive,
   deleteWhere,
   existsWhere,
   queryDocs,
 } from "../repos/helpers.js";
-import { findAbandonedJobs, findDueJobs } from "../repos/deletionJobs.js";
+import {
+  findAbandonedJobs,
+  findDueJobs,
+  findFailedJobs,
+} from "../repos/deletionJobs.js";
 
 export interface JobRunResult {
   jobId: string;
@@ -84,9 +89,22 @@ export class DeletionWorker {
       Timestamp.fromMillis(nowMs - CLAIM_TTL_MS),
       this.deps.config.deletionScanBatchSize,
     );
+    // 終端失敗ジョブは再実行されないが、未削除データが残るため
+    // 期限超過アラート(SLO-07)の対象として走査する
+    const failed = await findFailedJobs(
+      this.deps.db,
+      this.deps.config.deletionScanBatchSize,
+    );
+    for (const { id, data } of failed) {
+      await this.alertIfOverdue(id, data).catch((err) =>
+        this.deps.logger.warn({ err, jobId: id }, "overdue alert failed"),
+      );
+    }
     const results: JobRunResult[] = [];
     for (const { id, data } of [...due, ...abandoned]) {
-      this.alertIfOverdue(id, data).catch(() => undefined);
+      await this.alertIfOverdue(id, data).catch((err) =>
+        this.deps.logger.warn({ err, jobId: id }, "overdue alert failed"),
+      );
       results.push(await this.runJob(id));
     }
     const executed = results.filter(
@@ -105,6 +123,20 @@ export class DeletionWorker {
   /** Cloud Tasks 相当: 単一ジョブを冪等に実行する。 */
   async runJob(jobId: string): Promise<JobRunResult> {
     const claimed = await this.claim(jobId);
+    if (claimed.outcome === "terminalized") {
+      // claim tx が今回新たに終端化した経路。通常の fail() を通らないため
+      // ここで失敗監査を記録する（クレーム放棄の最終到達点）
+      await audit(this.deps, {
+        actorType: "service",
+        actorUidHash: auditUidHash(this.deps, claimed.subjectUid),
+        action: AUDIT_ACTIONS.ACCOUNT_DELETION_FAILED,
+        outcome: "failed_terminal",
+        resourceType: "deletionJobs",
+        resourceIdHash: auditResourceHash(this.deps, jobId),
+        details: { errorClass: claimed.errorCode },
+      });
+      return { jobId, outcome: "already_terminal" };
+    }
     if (claimed.outcome !== "claimed") {
       return { jobId, outcome: claimed.outcome };
     }
@@ -130,10 +162,10 @@ export class DeletionWorker {
     });
     await audit(this.deps, {
       actorType: "service",
-      action: "ACCOUNT_PURGED",
+      action: AUDIT_ACTIONS.ACCOUNT_PURGED,
       outcome: "succeeded",
       resourceType: "deletionJobs",
-      resourceIdHash: jobId,
+      resourceIdHash: auditResourceHash(this.deps, jobId),
       actorUidHash: auditUidHash(this.deps, uid),
       details: { attemptCount: job.attemptCount },
     });
@@ -394,6 +426,8 @@ export class DeletionWorker {
   ): Promise<
     | { outcome: "claimed"; job: DeletionJobDoc }
     | { outcome: JobRunResult["outcome"] }
+    // claim tx 内で新たに終端化した経路（監査発行のため区別する）
+    | { outcome: "terminalized"; subjectUid: string; errorCode: string }
   > {
     const ref = this.deps.db.doc(`deletionJobs/${jobId}`);
     return this.deps.db.runTransaction(async (tx) => {
@@ -421,7 +455,11 @@ export class DeletionWorker {
             status: "failed",
             lastErrorCode: "claim_abandoned",
           });
-          return { outcome: "already_terminal" as const };
+          return {
+            outcome: "terminalized" as const,
+            subjectUid: job.subjectUid,
+            errorCode: "claim_abandoned",
+          };
         }
       }
       if (job.status === "failed" && job.attemptCount >= this.deps.config.deletionJobMaxAttempts) {
@@ -510,10 +548,10 @@ export class DeletionWorker {
     );
     await audit(this.deps, {
       actorType: "service",
-      action: "ACCOUNT_PURGED",
+      action: AUDIT_ACTIONS.ACCOUNT_DELETION_FAILED,
       outcome: terminal ? "failed_terminal" : "failed_retryable",
       resourceType: "deletionJobs",
-      resourceIdHash: jobId,
+      resourceIdHash: auditResourceHash(this.deps, jobId),
       actorUidHash: auditUidHash(this.deps, job.subjectUid),
       details: { step, errorClass },
     });
@@ -530,24 +568,46 @@ export class DeletionWorker {
     jobId: string,
     job: DeletionJobDoc,
   ): Promise<void> {
-    const execMs = (job.executeAfter as { toMillis?: () => number } | undefined)?.toMillis?.();
-    if (execMs === undefined || job.overdueAlertedAt) return;
+    // アンカーは「当初の削除予定時刻」。executeAfter はリトライ毎に
+    // 前進するため失敗し続けるジョブが永遠にアラートされなくなるのを
+    // 防ぐため requestedAt + 猶予期間から導出する（欠損時は executeAfter）
+    const requestedMs = (
+      job.requestedAt as { toMillis?: () => number } | undefined
+    )?.toMillis?.();
+    const graceMs =
+      this.deps.config.deletionGracePeriodDays * 24 * 3600_000;
+    const anchorMs =
+      requestedMs !== undefined
+        ? requestedMs + graceMs
+        : (
+            job.executeAfter as { toMillis?: () => number } | undefined
+          )?.toMillis?.();
+    if (anchorMs === undefined || job.overdueAlertedAt) return;
     const nowMs = this.deps.clock.now().getTime();
-    if (nowMs - execMs <= OVERDUE_ALERT_MS) return;
+    if (nowMs - anchorMs <= OVERDUE_ALERT_MS) return;
     this.deps.logger.error(
-      { jobId, overdueMs: nowMs - execMs },
+      { jobId, overdueMs: nowMs - anchorMs },
       "deletion job overdue >24h — manual review required (SLO-07)",
     );
+    // マーカー永続化を監査より先・未設定ガード付きtxで行い、
+    // 並行スキャンや書込失敗での重複アラートを防ぐ
+    const ref = this.deps.db.doc(`deletionJobs/${jobId}`);
+    const marked = await this.deps.db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists || snap.data()?.overdueAlertedAt) return false;
+      await tx.update(ref, {
+        overdueAlertedAt: FieldValue.serverTimestamp(),
+      });
+      return true;
+    });
+    if (!marked) return;
     await audit(this.deps, {
       actorType: "service",
-      action: "ACCOUNT_PURGED",
+      action: AUDIT_ACTIONS.DELETION_JOB_OVERDUE,
       outcome: "overdue_alert",
       resourceType: "deletionJobs",
-      resourceIdHash: jobId,
+      resourceIdHash: auditResourceHash(this.deps, jobId),
       actorUidHash: auditUidHash(this.deps, job.subjectUid),
-    });
-    await this.deps.db.doc(`deletionJobs/${jobId}`).update({
-      overdueAlertedAt: FieldValue.serverTimestamp(),
     });
   }
 }

@@ -46,6 +46,7 @@ export function registerDeliveryRoutes(
         senderUid: uidOf(req),
         body: req.body,
         idempotencyKey: requireIdempotencyKey(req),
+        requestId: req.id,
       });
       return reply.status(202).send(result);
     },
@@ -71,6 +72,7 @@ export function registerDeliveryRoutes(
       getDeliveryForSender(deps, {
         senderUid: uidOf(req),
         deliveryId: req.params.deliveryId,
+        requestId: req.id,
       }),
   );
 }

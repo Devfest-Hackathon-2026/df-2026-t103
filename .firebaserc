@@ -1,5 +1,17 @@
 {
   "projects": {
     "default": "moshimoshimonshin"
+  },
+  "targets": {
+    "moshimoshimonshin": {
+      "hosting": {
+        "app": [
+          "moshimoshimonshin-app"
+        ],
+        "hospital": [
+          "moshimoshimonshin-hospital"
+        ]
+      }
+    }
   }
 }

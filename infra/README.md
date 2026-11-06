@@ -120,3 +120,8 @@ gcloud artifacts repositories create api \
   --repository-format docker \
   --description "moshimoshimonshin API container images"
 ```
+
+## 運営IAM・監査の責任分界（#46）
+
+[役割別グループ、アプリ内roleとの対応、単一projectの監査分離、権限レビュー手順](iam/README.md)。
+適用前の設計案であり、実グループ・メンバー・監査保持期間は別途確定する。

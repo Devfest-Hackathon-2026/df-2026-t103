@@ -62,11 +62,11 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
   typed.get(
     "/v1/me/profile",
     {
-      config: { access: { tier: "authenticated" } },
+      config: { access: { tier: "consented" } },
       schema: {
-        response: { 200: profileResponseSchema, ...errors(401, 403, 404) },
+        response: { 200: profileResponseSchema, ...errors(401, 403, 404, 412) },
         tags: ["me"],
-        summary: "プロフィール取得",
+        summary: "プロフィール取得（現行同意必須）",
         security: [{ bearerAuth: [] }],
       },
     },

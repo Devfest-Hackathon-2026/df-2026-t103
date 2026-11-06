@@ -1,6 +1,7 @@
+import type { Timestamp } from "firebase-admin/firestore";
 import type { UploadDoc } from "../domain/firestoreDocs.js";
 import type { UploadStatus } from "../domain/types.js";
-import { getDoc, queryDocs } from "./helpers.js";
+import { getDoc } from "./helpers.js";
 import type { FirestoreLike } from "./helpers.js";
 
 export function uploadRef(db: FirestoreLike, uploadId: string) {
@@ -15,14 +16,18 @@ export async function getUpload(
   return r.data;
 }
 
-/** 患者の有効（pending/uploaded）アップロード数。枚数上限の事前チェック用。 */
-export async function countActiveUploads(
+/**
+ * 枚数上限カウント用クエリ（新規作成時のtx内で tx.get() する）。
+ * 期限切れドキュメントは容量を消費しないよう expiresAt で除外する。
+ */
+export function activeUploadsQuery(
   db: FirestoreLike,
   patientUid: string,
-): Promise<number> {
-  const rows = await queryDocs<UploadDoc>(db, "uploads", [
-    { field: "patientUid", op: "==", value: patientUid },
-    { field: "status", op: "in", value: ["pending", "uploaded"] as UploadStatus[] },
-  ]);
-  return rows.length;
+  now: Timestamp,
+) {
+  return db
+    .collection("uploads")
+    .where("patientUid", "==", patientUid)
+    .where("status", "in", ["pending", "uploaded"] as UploadStatus[])
+    .where("expiresAt", ">", now);
 }

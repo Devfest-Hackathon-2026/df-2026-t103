@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
+import { Timestamp } from "firebase-admin/firestore";
 import { makeTestDeps, type TestDeps } from "../helpers/deps.js";
 import {
   authHeader,
@@ -163,7 +164,7 @@ describe("POST /v1/uploads/init (API-019)", () => {
       sourcePurpose: "prescription_photo",
       createdAt: new Date(),
       updatedAt: new Date(),
-      expiresAt: new Date(Date.now() + 3600_000),
+      expiresAt: Timestamp.fromMillis(Date.now() + 3600_000),
     });
     const res = await initUpload(app, "k2");
     expect(res.statusCode).toBe(412);
@@ -178,6 +179,47 @@ describe("POST /v1/uploads/init (API-019)", () => {
     expect(first.statusCode).toBe(201);
     expect(second.statusCode).toBe(201);
     expect(second.json().uploadId).toBe(first.json().uploadId);
+    await app.close();
+  });
+
+  it("上限到達後も冪等リプレイは既存結果を返す（412にならない）", async () => {
+    const { app } = await setup({ uploadMaxActive: 1 });
+    const first = await initUpload(app, "replay-key");
+    expect(first.statusCode).toBe(201);
+    // 上限は1で既に埋まっているが、同一キーの再送はリプレイされる
+    const second = await initUpload(app, "replay-key");
+    expect(second.statusCode).toBe(201);
+    expect(second.json().uploadId).toBe(first.json().uploadId);
+    await app.close();
+  });
+
+  it("期限切れアップロードは枚数上限にカウントしない", async () => {
+    const { deps, app } = await setup({ uploadMaxActive: 1 });
+    await deps.db.collection("uploads").doc("expired-1").set({
+      patientUid: UID,
+      status: "pending",
+      storageBucket: "b",
+      objectPath: "p",
+      mimeType: "image/jpeg",
+      bytes: 10,
+      sha256: SHA,
+      sourcePurpose: "prescription_photo",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      // 既に期限切れ
+      expiresAt: Timestamp.fromMillis(Date.now() - 3600_000),
+    });
+    const res = await initUpload(app, "k-exp");
+    expect(res.statusCode).toBe(201);
+    await app.close();
+  });
+
+  it("署名URL指示に create-only の generation 前提ヘッダを含む", async () => {
+    const { app } = await setup();
+    const res = await initUpload(app, "gen-header");
+    expect(res.statusCode).toBe(201);
+    const headers = res.json().upload.headers as Record<string, string>;
+    expect(headers["x-goog-if-generation-match"]).toBe("0");
     await app.close();
   });
 });

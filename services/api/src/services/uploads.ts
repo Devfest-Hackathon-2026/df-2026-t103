@@ -17,7 +17,7 @@ import {
 import { ApiError, ErrorCodes } from "../lib/errors.js";
 import { requestHash, runIdempotent } from "../lib/idempotency.js";
 import { audit, auditUidHash } from "../lib/audit.js";
-import { countActiveUploads, getUpload } from "../repos/uploads.js";
+import { activeUploadsQuery, getUpload } from "../repos/uploads.js";
 
 export interface InitUploadResult {
   uploadId: string;
@@ -65,20 +65,26 @@ export async function initUpload(
     );
   }
 
-  // 有効アップロード数の上限（FR-M01 枚数制限）。soft limitとしてトランザクション外で確認する。
-  const active = await countActiveUploads(deps.db, params.uid);
-  if (active >= deps.config.uploadMaxActive) {
-    throw ApiError.precondition(
-      "アップロード件数が上限に達しています。不要な画像を削除してからやり直してください。",
-    );
-  }
-
   const { result } = await runIdempotent<{ uploadId: string }>(deps, {
     namespace: "upload_init",
     key: params.idempotencyKey,
     principal: params.uid,
     requestHash: requestHash(deps, body),
     execute: async (tx) => {
+      // 枚数上限（FR-M01）は新規作成時のみ。冪等リプレイは容量を消費せず
+      // 既存の結果を再生する（上限到達後のリトライでも同一結果を返す）。
+      const activeSnap = await tx.get(
+        activeUploadsQuery(
+          deps.db,
+          params.uid,
+          Timestamp.fromDate(deps.clock.now()),
+        ),
+      );
+      if (activeSnap.size >= deps.config.uploadMaxActive) {
+        throw ApiError.precondition(
+          "アップロード件数が上限に達しています。不要な画像を削除してからやり直してください。",
+        );
+      }
       const ref = deps.db.collection("uploads").doc();
       const now = deps.clock.now();
       const doc: UploadDoc = {

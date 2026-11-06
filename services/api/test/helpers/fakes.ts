@@ -179,7 +179,10 @@ export class FakeStorageGateway implements StorageGateway {
     return {
       method: "PUT",
       url: `https://storage.test/${params.bucket}/${params.objectPath}?sig=fake`,
-      headers: { "content-type": params.mimeType },
+      headers: {
+        "content-type": params.mimeType,
+        "x-goog-if-generation-match": "0",
+      },
       expiresAt: params.expiresAt.toISOString(),
     };
   }

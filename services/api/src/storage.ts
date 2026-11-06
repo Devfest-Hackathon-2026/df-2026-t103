@@ -51,16 +51,22 @@ export function createStorageGateway(
         };
       }
       const file = storage.bucket(params.bucket).file(params.objectPath);
+      // create-only: generation=0 前提条件で既存オブジェクトの上書きを禁止する。
+      // 署名対象ヘッダなのでクライアントも同じ値を送る必要がある（改ざん不可）。
       const [url] = await file.getSignedUrl({
         version: "v4",
         action: "write",
         expires: params.expiresAt,
         contentType: params.mimeType,
+        extensionHeaders: { "x-goog-if-generation-match": "0" },
       });
       return {
         method: "PUT",
         url,
-        headers: { "content-type": params.mimeType },
+        headers: {
+          "content-type": params.mimeType,
+          "x-goog-if-generation-match": "0",
+        },
         expiresAt: expiresAtIso,
       };
     },

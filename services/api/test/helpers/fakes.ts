@@ -6,8 +6,11 @@ import type {
 import type {
   AuthAdmin,
   ContentScanner,
+  LlmAdapter,
   OcrEngine,
   OcrTaskQueue,
+  QuestionGenInput,
+  QuestionGenOutput,
   StorageGateway,
   StoredObjectInfo,
   UploadUrlInstruction,
@@ -249,6 +252,22 @@ export class FakeOcrTaskQueue implements OcrTaskQueue {
       throw new Error("tasks/enqueue-failed");
     }
     this.enqueued.push(jobId);
+  }
+}
+
+/** 試験用LLMアダプタ。戻り値・例外を自在に制御できる。 */
+export class FakeLlmAdapter implements LlmAdapter {
+  readonly name = "fake";
+  result: QuestionGenOutput | null = null;
+  shouldThrow: unknown = null;
+  calls: QuestionGenInput[] = [];
+
+  generateQuestions(input: QuestionGenInput): Promise<QuestionGenOutput> {
+    this.calls.push(input);
+    if (this.shouldThrow !== null) return Promise.reject(this.shouldThrow);
+    return Promise.resolve(
+      this.result ?? { questions: [], modelVersion: "fake-v1" },
+    );
   }
 }
 

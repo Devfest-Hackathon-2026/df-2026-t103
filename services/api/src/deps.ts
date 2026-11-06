@@ -8,6 +8,10 @@ import type {
 import type { OcrEngineResult } from "./domain/ocr.js";
 import type { FirestoreLike } from "./repos/helpers.js";
 import type { FastifyBaseLogger } from "fastify";
+import type {
+  LlmQuestion,
+  NormalizedAnswer,
+} from "./ai/questionSchema.js";
 
 /** Firebase Auth 管理操作（サービス層から見える最小IF）。 */
 export interface AuthAdmin {
@@ -125,6 +129,37 @@ export interface OcrTaskQueue {
   enqueueOcrJob(jobId: string): Promise<void>;
 }
 
+/** LLMへの構造化入力（PHIは匿名化済みの問診データのみ）。 */
+export interface QuestionGenInput {
+  symptomText: string;
+  bodyLocations: string[];
+  locale: string;
+  /** 正規化済みの回答JSON。推測で埋めない。 */
+  answers: NormalizedAnswer[];
+  /** 既出トピック（重複生成の抑止）。 */
+  askedTopics: string[];
+  /** まだ未質問の収集トピック。 */
+  remainingTopics: string[];
+  /** これ以上生成してよい質問数の上限。 */
+  maxQuestions: number;
+}
+
+export interface QuestionGenOutput {
+  questions: LlmQuestion[];
+  /** モデル/プロンプト版。APIキー・患者内容は含めない。 */
+  modelVersion: string;
+}
+
+/**
+ * 問診AIアダプタ（FR-I03/I04）。
+ * 実装は Vertex AI（本番）・dummy（開発/試験）。
+ * 出力はサービス側で JSON Schema + 禁則検査を必ず通す。
+ */
+export interface LlmAdapter {
+  readonly name: string;
+  generateQuestions(input: QuestionGenInput): Promise<QuestionGenOutput>;
+}
+
 export interface Deps {
   config: AppConfig;
   db: FirestoreLike;
@@ -135,6 +170,7 @@ export interface Deps {
   contentScanner: ContentScanner;
   ocrEngine: OcrEngine;
   ocrQueue: OcrTaskQueue;
+  llmAdapter: LlmAdapter;
   uploadCompletion?: UploadCompletionHook;
   rateLimiter: RateLimiter;
   clock: Clock;

@@ -274,7 +274,7 @@ describe("POST /v1/uploads/:id/complete (API-020)", () => {
     await app.close();
   });
 
-  it("400: 内容が宣言と異なる（偽装ファイル）は拒否・削除される", async () => {
+  it("400: 内容が宣言と異なる（偽装ファイル）は拒否・tombstone化される", async () => {
     const { deps, app } = await setup();
     // 申告は JPEG、中身は PDF。サイズとメタ contentType は申告どおりに偽装。
     const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
@@ -297,9 +297,17 @@ describe("POST /v1/uploads/:id/complete (API-020)", () => {
     const after = (await getUploadDoc(deps, uploadId))!;
     expect(after.status).toBe("rejected");
     expect(after.contentScanStatus).toBe("failed");
-    expect(deps.fakeStorage.deleted.map((d) => d.path)).toContain(
+    // 実体削除はしない（create-only URL の再利用を防ぐためパスを占有維持）
+    expect(deps.fakeStorage.deleted).toHaveLength(0);
+    expect(deps.fakeStorage.tombstoned.map((d) => d.path)).toContain(
       doc.objectPath,
     );
+    // tombstone は空内容で generation を占有する（=再PUTは ifGenerationMatch:0 で拒否される）
+    const info = await deps.fakeStorage.inspectObject(
+      doc.storageBucket,
+      doc.objectPath,
+    );
+    expect(info?.sizeBytes).toBe(0);
     await app.close();
   });
 

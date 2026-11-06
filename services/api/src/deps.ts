@@ -52,6 +52,12 @@ export interface StorageGateway {
     objectPath: string,
     generation?: string,
   ): Promise<void>;
+  /**
+   * 内容を空に置き換えパスを占有したままにする（rejected オブジェクト用）。
+   * 実体削除すると create-only URL の ifGenerationMatch=0 が再び成立し、
+   * URL 有効期限内の再 PUT で拒否済みパスを再作成できてしまう。
+   */
+  tombstoneObject(bucket: string, objectPath: string): Promise<void>;
   /** オブジェクトのメタ情報を取得。存在しなければ null。 */
   inspectObject(
     bucket: string,

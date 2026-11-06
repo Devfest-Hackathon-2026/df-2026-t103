@@ -25,6 +25,12 @@ export function createStorageGateway(
       void generation; // generation一致確認はエミュレータ非対応のため省略（本運用で再検討）
     },
 
+    async tombstoneObject(bucket, objectPath) {
+      // 新しい generation を空内容で作り、パスを占有し続ける。
+      const file = storage.bucket(bucket).file(objectPath);
+      await file.save("", { resumable: false });
+    },
+
     async inspectObject(bucket, objectPath) {
       const file = storage.bucket(bucket).file(objectPath);
       const [exists] = await file.exists();

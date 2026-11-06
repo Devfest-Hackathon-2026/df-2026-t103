@@ -155,6 +155,19 @@ export class FakeStorageGateway implements StorageGateway {
     this.objects.delete(this.key(bucket, objectPath));
   }
 
+  tombstoned: Array<{ bucket: string; path: string }> = [];
+
+  async tombstoneObject(bucket: string, objectPath: string): Promise<void> {
+    this.tombstoned.push({ bucket, path: objectPath });
+    const key = this.key(bucket, objectPath);
+    const obj = this.objects.get(key);
+    this.objects.set(key, {
+      data: new Uint8Array(0),
+      contentType: "application/octet-stream",
+      generation: `${obj?.generation ?? "0"}-t`,
+    });
+  }
+
   async inspectObject(
     bucket: string,
     objectPath: string,

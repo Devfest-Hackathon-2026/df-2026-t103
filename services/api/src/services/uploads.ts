@@ -188,11 +188,12 @@ export async function completeUpload(
     }
 
     // 実オブジェクトと申告の不一致は終端状態（宣言時点の指定が誤りだったため
-    // このアップロードは有効にならない）。rejected にして実体を削除する。
+    // このアップロードは有効にならない）。rejected にして内容を tombstone 化
+    // する（実体削除すると create-only URL が再び使えてしまうため占有維持）。
     const reject = async (reason: string, error: ApiError): Promise<never> => {
       await rejectUpload(deps, params.uploadId, reason);
       await deps.storage
-        .deleteObject(upload.storageBucket, upload.objectPath)
+        .tombstoneObject(upload.storageBucket, upload.objectPath)
         .catch((err) =>
           deps.logger.warn(
             { err, uploadId: params.uploadId },

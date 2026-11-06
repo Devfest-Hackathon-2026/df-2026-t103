@@ -42,12 +42,15 @@ export function createStorageGateway(
       const expiresAtIso = params.expiresAt.toISOString();
       if (config.emulator) {
         // Storage Emulator の GCS JSON API 互換アップロードエンドポイント。
+        // メディアアップロードはPOST（PUTは継続用のresumableでupload_id必須）。
         const url =
           `http://${publicEmulatorHost}/upload/storage/v1/b/` +
           `${encodeURIComponent(params.bucket)}/o` +
-          `?uploadType=media&name=${encodeURIComponent(params.objectPath)}`;
+          `?uploadType=media&name=${encodeURIComponent(params.objectPath)}` +
+          // 本番と同じく新規作成のみ許可（既存オブジェクトの上書きを拒否）
+          `&ifGenerationMatch=0`;
         return {
-          method: "PUT",
+          method: "POST",
           url,
           headers: { "content-type": params.mimeType },
           expiresAt: expiresAtIso,

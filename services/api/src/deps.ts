@@ -36,7 +36,8 @@ export interface StoredObjectInfo {
 
 /** uploads/init が返す短命アップロード指示。 */
 export interface UploadUrlInstruction {
-  method: "PUT";
+  /** 本番署名URLはPUT。Storage Emulator のメディアアップロードはPOST。 */
+  method: "PUT" | "POST";
   url: string;
   headers: Record<string, string>;
   /** ISO8601。URLの有効期限。 */

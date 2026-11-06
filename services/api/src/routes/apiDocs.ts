@@ -92,7 +92,7 @@ export const uploadInitResponseSchema = z.object({
   uploadId: z.string(),
   status: z.literal("pending"),
   upload: z.object({
-    method: z.literal("PUT"),
+    method: z.enum(["PUT", "POST"]),
     url: z.string(),
     headers: z.record(z.string(), z.string()),
     expiresAt: z.string().describe("ISO8601"),

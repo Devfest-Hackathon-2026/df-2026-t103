@@ -14,6 +14,8 @@ import { DummyOcrEngine } from "./engines/dummyOcr.js";
 import { DummyLlmAdapter } from "./engines/dummyLlm.js";
 import { VertexAiLlmAdapter } from "./engines/vertexLlm.js";
 import { CloudTasksOcrQueue } from "./tasks.js";
+import { GooglePlacesGateway } from "./engines/googlePlaces.js";
+import { DummyPlacesGateway } from "./engines/dummyPlaces.js";
 import { createOcrJobForUpload } from "./services/ocr.js";
 import { OcrWorker } from "./workers/ocrJob.js";
 import { DEV_LEGAL_DOCUMENTS } from "./domain/legalDocuments.js";
@@ -66,6 +68,10 @@ async function main(): Promise<void> {
             timeoutMs: config.vertexAiTimeoutMs,
           })
         : new DummyLlmAdapter(),
+    placesGateway:
+      config.googlePlacesApiKey !== undefined && config.googlePlacesApiKey !== ""
+        ? new GooglePlacesGateway(config.googlePlacesApiKey)
+        : new DummyPlacesGateway(),
     rateLimiter: new RateLimiter(systemClock),
     clock: systemClock,
     logger,

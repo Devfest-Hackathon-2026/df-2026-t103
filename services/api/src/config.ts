@@ -49,6 +49,11 @@ const envSchema = z.object({
   /** 下書き問診の保存日数（FR-I06 短期）。 */
   INTAKE_DRAFT_TTL_DAYS: z.coerce.number().int().positive().default(7),
 
+  /** Google Places (New) APIキー（Secret Managerから注入）。未設定時は施設検索が503。 */
+  GOOGLE_PLACES_API_KEY: z.string().optional(),
+  /** Places Nearby Search の最大件数上限（1〜20）。 */
+  PLACES_MAX_RESULTS: z.coerce.number().int().min(1).max(20).default(10),
+
   /**
    * 問診AIの本番承認フラグ（ADR-009）。未承認の既定falseでは
    * 固定質問のみ発行する（FR-I10 代替動作が安全側既定）。
@@ -105,6 +110,8 @@ export type AppConfig = Readonly<{
   vertexAiModel: string;
   vertexAiLocation: string;
   vertexAiTimeoutMs: number;
+  googlePlacesApiKey: string | undefined;
+  placesMaxResults: number;
 }>;
 
 const DUMMY_SECRETS = new Set(["", "change-me-local-dev"]);
@@ -167,5 +174,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     vertexAiModel: parsed.VERTEX_AI_MODEL,
     vertexAiLocation: parsed.VERTEX_AI_LOCATION,
     vertexAiTimeoutMs: parsed.VERTEX_AI_TIMEOUT_MS,
+    googlePlacesApiKey: parsed.GOOGLE_PLACES_API_KEY,
+    placesMaxResults: parsed.PLACES_MAX_RESULTS,
   });
 }

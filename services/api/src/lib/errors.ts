@@ -87,6 +87,15 @@ export class ApiError extends Error {
   static conflict(code: ErrorCode, message: string) {
     return new ApiError(409, code, message);
   }
+
+  static upstreamUnavailable(service = "upstream") {
+    return new ApiError(
+      503,
+      ErrorCodes.UPSTREAM_UNAVAILABLE,
+      `外部サービスが利用できません（${service}）。`,
+      { retryable: true },
+    );
+  }
 }
 
 export function isApiError(e: unknown): e is ApiError {

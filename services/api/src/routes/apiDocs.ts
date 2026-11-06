@@ -385,3 +385,27 @@ export const deliveryGetResponseSchema = z.object({
   deliveredAt: z.string().nullable(),
   acknowledgedAt: z.string().nullable(),
 });
+
+export const facilitySearchItemSchema = z.object({
+  source: z.literal("places"),
+  placeId: z.string(),
+  displayName: z.string(),
+  formattedAddress: z.string(),
+  lat: z.number(),
+  lng: z.number(),
+  primaryType: z.string().nullable(),
+  receivingEnabled: z.boolean(),
+  verifiedFacilityId: z.string().nullable(),
+});
+
+export const facilitySearchResponseSchema = z.object({
+  facilities: z.array(facilitySearchItemSchema),
+});
+
+export const facilityDetailResponseSchema = z.object({
+  facilityId: z.string(),
+  displayName: z.string(),
+  formattedAddress: z.string(),
+  verificationStatus: z.string(),
+  receivingEnabled: z.boolean(),
+});

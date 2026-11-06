@@ -160,6 +160,34 @@ export interface LlmAdapter {
   generateQuestions(input: QuestionGenInput): Promise<QuestionGenOutput>;
 }
 
+/** Places Nearby Search (New) の正規化済み結果。 */
+export interface PlaceResult {
+  placeId: string;
+  displayName: string;
+  formattedAddress: string;
+  /** サーバ側で小数点以下4桁に丸めた緯度。 */
+  lat: number;
+  /** サーバ側で小数点以下4桁に丸めた経度。 */
+  lng: number;
+  primaryType: string | null;
+}
+
+export interface PlacesSearchParams {
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  maxResultCount: number;
+  includeTypes: string[];
+}
+
+/**
+ * Google Places (New) アダプタ（02 §8, FR-H01〜H04）。
+ * 症状・PHIは一切渡さない。実装は本番用と Fake（テスト用）を切り替える。
+ */
+export interface PlacesGateway {
+  searchNearby(params: PlacesSearchParams): Promise<PlaceResult[]>;
+}
+
 export interface Deps {
   config: AppConfig;
   db: FirestoreLike;
@@ -171,6 +199,7 @@ export interface Deps {
   ocrEngine: OcrEngine;
   ocrQueue: OcrTaskQueue;
   llmAdapter: LlmAdapter;
+  placesGateway: PlacesGateway;
   uploadCompletion?: UploadCompletionHook;
   rateLimiter: RateLimiter;
   clock: Clock;

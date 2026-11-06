@@ -1,0 +1,132 @@
+name: security
+
+# 横断的なCI検証（アプリ個別のci.yaml / patient-ci.yaml / hospital-ci.yaml を補完）。
+# - Secret誤コミット検出（gitleaks）
+# - 依存脆弱性スキャン（npm audit）
+# - firebase.json / Firestore・Storage Rules / インデックス定義の検証
+# 参照: Issue #37、docs/06 §10、docs/02 §13.1
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: secrets / gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # gitleaks が履歴走査できるよう全履歴を取得
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.21.2
+        run: |
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan repository for secrets
+        run: gitleaks detect --source . --config .gitleaks.toml --no-banner --redact --verbose
+
+  dependency-audit:
+    name: dependency-audit / npm audit
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - services/api
+          - apps/hospital
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      - name: npm ci
+        working-directory: ${{ matrix.package }}
+        run: npm ci
+
+      # critical のみでCIを落とす（制御不能な推移的 moderate/high でPRを塞がない）。
+      # high 以下は警告として残し、継続監視する。
+      - name: Audit (critical fails)
+        working-directory: ${{ matrix.package }}
+        run: npm audit --audit-level=critical
+
+      - name: Audit report (high, informational)
+        if: always()
+        working-directory: ${{ matrix.package }}
+        run: npm audit --audit-level=high || echo "::warning::high以上の脆弱性が検出されました（${{ matrix.package }}）"
+
+  firebase-config:
+    name: firebase-config / rules + json validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Set up Java (Firebase emulators requirement)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Validate JSON configuration files
+        run: |
+          for f in firebase.json .firebaserc firebase/firestore.indexes.json firebase/database.rules.json; do
+            echo "validating $f"
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))"
+          done
+
+      - name: Compile Firestore & Storage security rules
+        # emulators:exec はルールを読み込んでコンパイルするため、
+        # 構文エラーがあればここで失敗する。実プロジェクトには接続しない。
+        run: npx -y firebase-tools emulators:exec --only firestore,storage --project demo-mmr "echo rules compiled"
+
+  workflow-lint:
+    name: workflow-lint / yaml parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: Validate workflow YAML syntax
+        run: |
+          python3 - <<'PY'
+          import glob, sys, yaml
+          failed = False
+          for path in sorted(glob.glob(".github/workflows/*.y*ml")):
+              try:
+                  with open(path) as fh:
+                      yaml.safe_load(fh)
+                  print(f"ok: {path}")
+              except yaml.YAMLError as exc:
+                  print(f"FAIL: {path}\n{exc}")
+                  failed = True
+          sys.exit(1 if failed else 0)
+          PY

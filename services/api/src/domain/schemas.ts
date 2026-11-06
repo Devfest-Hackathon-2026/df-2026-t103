@@ -347,3 +347,16 @@ export const deliveryCreateSchema = z
   })
   .strict();
 export type DeliveryCreateBody = z.infer<typeof deliveryCreateSchema>;
+
+/**
+ * API-042 POST /me/devices。FCM登録トークンとプラットフォーム。
+ * token は Firebase installation/token 由来の不透明文字列（内容は検証しない）。
+ */
+export const deviceRegisterBodySchema = z
+  .object({
+    token: z.string().min(10).max(4096),
+    platform: z.enum(["android", "ios", "web"]),
+  })
+  .strict();
+
+export type DeviceRegisterBody = z.infer<typeof deviceRegisterBodySchema>;

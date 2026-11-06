@@ -12,6 +12,7 @@ import { countPdfPages } from "../domain/uploads.js";
 import { audit, auditResourceHash, auditUidHash } from "../lib/audit.js";
 import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { getDoc } from "../repos/helpers.js";
+import { notifyPatient } from "../services/notifications.js";
 
 export interface OcrRunResult {
   jobId: string;
@@ -284,6 +285,20 @@ export class OcrWorker {
         resourceIdHash: auditResourceHash(this.deps, jobId),
         details: { errorCode: result.code, attempt },
       });
+    }
+
+    // 実遷移がコミットされた場合のみ通知（applied=true で claim 所有者のみ到達）。
+    // 通知失敗はワーカー処理を止めない（notifyPatient 内部で握り潰す）。
+    if (result.ok) {
+      try {
+        await notifyPatient(this.deps, {
+          patientUid: job.patientUid,
+          template: "OCR_EXTRACTION_READY",
+          refId: jobId,
+        });
+      } catch (err) {
+        this.deps.logger.warn({ err, jobId }, "ocr completion notify failed");
+      }
     }
     return {
       jobId,

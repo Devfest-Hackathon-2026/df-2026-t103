@@ -71,6 +71,16 @@ async function seedPatientData(deps: TestDeps, uid = UID): Promise<void> {
     facilityId: "f1",
     role: "patient",
   });
+  await deps.db.collection("pushDevices").doc("pdv_x").set({
+    patientUid: uid,
+    token: "tok-x",
+    platform: "android",
+    status: "active",
+    invalidatedReason: null,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    lastSeenAt: FieldValue.serverTimestamp(),
+  });
   deps.fakeAuthAdmin.users.set(uid, {
     email: "u@example.com",
     password: "x",

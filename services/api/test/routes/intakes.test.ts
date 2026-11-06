@@ -645,6 +645,80 @@ describe("監査イベント（#22）", () => {
     expect(audits.size).toBe(1);
   });
 
+  it("POST /finalize は登録デバイスへ一般文言で通知する（PHI非含有）", async () => {
+    const { deps, app } = await setup();
+    // デバイス登録（service層直接seedでもよいが経路確認のためAPI経由）
+    const dev = await app.inject({
+      method: "POST",
+      url: "/v1/me/devices",
+      headers: { ...authHeader(UID), ...idem("dev-1") },
+      payload: { token: "tok-finalize-1", platform: "web" },
+    });
+    expect(dev.statusCode).toBe(201);
+
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const sum = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/summary`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+    const srev = (sum.json() as { intakeRevision: number }).intakeRevision;
+    const fin = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/finalize`,
+      headers: { ...authHeader(UID), ...idem("fin-notify") },
+      payload: { expectedIntakeRevision: srev, summaryReviewConfirmed: true },
+    });
+    expect(fin.statusCode).toBe(200);
+    const qid = (fin.json() as { questionnaireId: string }).questionnaireId;
+
+    expect(deps.fakePush.calls).toHaveLength(1);
+    const call = deps.fakePush.calls[0]!;
+    expect(call.token).toBe("tok-finalize-1");
+    // 症状「3日前から頭痛」等のPHIがタイトル・本文・dataに入らない
+    expect(call.title).not.toContain("頭痛");
+    expect(call.body).not.toContain("頭痛");
+    expect(JSON.stringify(call.data ?? {})).not.toContain("頭痛");
+    expect(call.data).toEqual({
+      type: "QUESTIONNAIRE_READY",
+      refId: qid,
+    });
+  });
+
+  it("finalize の冪等リプレイは通知を再送しない", async () => {
+    const { deps, app } = await setup();
+    await app.inject({
+      method: "POST",
+      url: "/v1/me/devices",
+      headers: { ...authHeader(UID), ...idem("dev-2") },
+      payload: { token: "tok-finalize-2", platform: "web" },
+    });
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const sum = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/summary`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+    const srev = (sum.json() as { intakeRevision: number }).intakeRevision;
+    for (let i = 0; i < 2; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/v1/intakes/${intakeId}/finalize`,
+        headers: { ...authHeader(UID), ...idem("fin-notify-replay") },
+        payload: {
+          expectedIntakeRevision: srev,
+          summaryReviewConfirmed: true,
+        },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+    expect(deps.fakePush.calls).toHaveLength(1);
+  });
+
   it("GET /questionnaires/{id} は INTAKE_READ を記録し PHI を含まない", async () => {
     const { deps, app } = await setup();
     const { intakeId } = await createIntake(app);

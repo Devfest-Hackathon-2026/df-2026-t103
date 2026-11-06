@@ -356,6 +356,9 @@ export class DeletionWorker {
     count += await deleteWhere(this.deps.db, "registrationOperations", [
       { field: "uid", op: "==", value: uid },
     ]);
+    count += await deleteWhere(this.deps.db, "pushDevices", [
+      { field: "patientUid", op: "==", value: uid },
+    ]);
     await this.deps.db.doc(`patientProfiles/${uid}`).delete();
     await this.deps.db.doc(`accounts/${uid}`).delete();
     try {
@@ -388,6 +391,7 @@ export class DeletionWorker {
       { collection: "passkeyCredentials", field: "ownerUid" },
       { collection: "facilityMemberships", field: "userUid" },
       { collection: "registrationOperations", field: "uid" },
+      { collection: "pushDevices", field: "patientUid" },
     ];
     // 収集漏れを再削除してから検証（部分失敗からの収束）
     for (const c of checks) {

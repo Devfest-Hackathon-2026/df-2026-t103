@@ -188,6 +188,43 @@ export interface PlacesGateway {
   searchNearby(params: PlacesSearchParams): Promise<PlaceResult[]>;
 }
 
+/**
+ * FCM送信結果の分類（FR-O01/O05, ADR-011）。
+ * 送信はベストエフォート: 失敗をコードで返し、例外で業務処理を止めない。
+ */
+export type PushFailureCode =
+  /** 端末登録が失効（registration-token-not-registered /
+   *  installation-id-not-registered）。トークンを無効化する。 */
+  | "unregistered"
+  /** トークン形式不正（invalid-registration-token 等）。トークンを無効化する。 */
+  | "invalid_token"
+  /** FCM側一時障害。トークンは有効のまま保持する。 */
+  | "unavailable"
+  /** ゲートウェイ無効化（エミュレータ）。送信スキップであり、
+   *  トークン保持・監査記録なしで扱う。 */
+  | "disabled"
+  /** 分類不能。 */
+  | "unknown";
+
+export type PushSendResult =
+  | { ok: true; messageId: string | undefined }
+  | { ok: false; code: PushFailureCode };
+
+/**
+ * FCM送信アダプタ（FR-O01, ADR-011/0015）。
+ * 本番は Admin SDK messaging.send。エミュレータは無効化実装を注入する。
+ * 呼び出し側はタイトル/本文をテンプレートカタログからのみ供給し、
+ * 症状・病名・薬剤名・個人情報を含む文字列を渡してはいけない。
+ */
+export interface PushGateway {
+  sendToDevice(params: {
+    token: string;
+    title: string;
+    body: string;
+    data?: Record<string, string>;
+  }): Promise<PushSendResult>;
+}
+
 export interface Deps {
   config: AppConfig;
   db: FirestoreLike;
@@ -200,6 +237,7 @@ export interface Deps {
   ocrQueue: OcrTaskQueue;
   llmAdapter: LlmAdapter;
   placesGateway: PlacesGateway;
+  pushGateway: PushGateway;
   uploadCompletion?: UploadCompletionHook;
   rateLimiter: RateLimiter;
   clock: Clock;

@@ -145,6 +145,70 @@ describe("OcrWorker.runJob", () => {
     expect(job.errorCode).toBeNull();
   });
 
+  it("成功時は登録デバイスへ一般文言で通知し、終端ジョブ再実行では再送しない", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("pushDevices/pdv_test1").set({
+      patientUid: UID,
+      token: "tok-ocr-1",
+      platform: "android",
+      status: "active",
+      invalidatedReason: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastSeenAt: new Date(),
+    });
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.result = {
+      ok: true,
+      candidates: [CANDIDATE],
+    };
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const worker = new OcrWorker(deps);
+    await worker.runJob(jobId);
+    expect(deps.fakePush.calls).toHaveLength(1);
+    const call = deps.fakePush.calls[0]!;
+    expect(call.token).toBe("tok-ocr-1");
+    // 候補の薬剤名（ロキソプロフェンNa錠）は通知に含めない（FR-O05）
+    expect(call.title).not.toContain("ロキソプロフェン");
+    expect(call.body).not.toContain("ロキソプロフェン");
+    expect(JSON.stringify(call.data ?? {})).not.toContain("ロキソプロフェン");
+    expect(call.data).toEqual({
+      type: "OCR_EXTRACTION_READY",
+      refId: jobId,
+    });
+
+    // 終端ジョブの再実行では通知を再送しない（at-least-once配送の二重化防止）
+    const again = await worker.runJob(jobId);
+    expect(again.outcome).toBe("already_terminal");
+    expect(deps.fakePush.calls).toHaveLength(1);
+  });
+
+  it("終端失敗では通知しない", async () => {
+    const deps = makeTestDeps();
+    await deps.db.doc("pushDevices/pdv_test2").set({
+      patientUid: UID,
+      token: "tok-ocr-2",
+      platform: "android",
+      status: "active",
+      invalidatedReason: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastSeenAt: new Date(),
+    });
+    await seedUpload(deps, "up-1");
+    deps.fakeOcrEngine.result = { ok: false, code: "not_prescription" };
+    const { jobId } = await createOcrJobForUpload(deps, {
+      uploadId: "up-1",
+      patientUid: UID,
+    });
+    const res = await new OcrWorker(deps).runJob(jobId);
+    expect(res.outcome).toBe("failed_terminal");
+    expect(deps.fakePush.calls).toHaveLength(0);
+  });
+
   it("終端失敗（not_prescription）は failed + errorCode", async () => {
     const deps = makeTestDeps();
     await seedUpload(deps, "up-1");

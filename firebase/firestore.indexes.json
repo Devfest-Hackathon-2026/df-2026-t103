@@ -16,6 +16,7 @@
     {"collectionGroup":"deletionJobs","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"executeAfter","order":"ASCENDING"}]},
     {"collectionGroup":"deletionJobs","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"lastStartedAt","order":"ASCENDING"}]},
     {"collectionGroup":"deletionJobs","queryScope":"COLLECTION","fields":[{"fieldPath":"subjectUid","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"}]},
+    {"collectionGroup":"pushDevices","queryScope":"COLLECTION","fields":[{"fieldPath":"patientUid","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"}]},
     {"collectionGroup":"legalConsents","queryScope":"COLLECTION","fields":[{"fieldPath":"subjectUid","order":"ASCENDING"},{"fieldPath":"occurredAt","order":"DESCENDING"}]}
   ],
   "fieldOverrides": [

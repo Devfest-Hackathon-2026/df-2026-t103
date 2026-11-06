@@ -54,6 +54,14 @@ export const AUDIT_ACTIONS = {
   ACCOUNT_PURGED: "ACCOUNT_PURGED",
   /** 予定時刻+24h超過の未完了ジョブ（SLO-07 アラート）。 */
   DELETION_JOB_OVERDUE: "DELETION_JOB_OVERDUE",
+  // ---- 通知（FCM・PHI非含有）----
+  /** プッシュ通知用デバイストークンの登録。 */
+  PUSH_DEVICE_REGISTERED: "PUSH_DEVICE_REGISTERED",
+  PUSH_DEVICE_UNREGISTERED: "PUSH_DEVICE_UNREGISTERED",
+  /** 通知送信成功。details は template 名のみ（文言・個人情報を含めない）。 */
+  NOTIFICATION_SENT: "NOTIFICATION_SENT",
+  /** 通知送信失敗（トークン無効化・一時障害の記録）。 */
+  NOTIFICATION_FAILED: "NOTIFICATION_FAILED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

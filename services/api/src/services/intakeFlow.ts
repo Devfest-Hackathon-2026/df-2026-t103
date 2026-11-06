@@ -18,6 +18,7 @@ import { requestHash, runIdempotent } from "../lib/idempotency.js";
 import { audit, auditResourceHash, auditUidHash } from "../lib/audit.js";
 import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { getProfile } from "../repos/accounts.js";
+import { notifyPatient } from "./notifications.js";
 import {
   getIntake,
   listAnswers,
@@ -402,7 +403,7 @@ export async function finalizeIntake(
     },
   });
   if ("kind" in result) throw draftExpiredError();
-  // 冪等リプレイでは確定が起きていないため監査も発行しない
+  // 冪等リプレイでは確定が起きていないため監査も通知も発行しない
   if (!replayed) {
     await audit(deps, {
       actorType: "patient",
@@ -412,6 +413,19 @@ export async function finalizeIntake(
       resourceIdHash: auditResourceHash(deps, result.questionnaireId),
       ...(params.requestId !== undefined ? { requestId: params.requestId } : {}),
     });
+    try {
+      await notifyPatient(deps, {
+        patientUid: params.uid,
+        template: "QUESTIONNAIRE_READY",
+        refId: result.questionnaireId,
+        ...(params.requestId !== undefined
+          ? { requestId: params.requestId }
+          : {}),
+      });
+    } catch (err) {
+      // 通知はベストエフォート（確定処理の成否に影響させない）
+      deps.logger.warn({ err }, "questionnaire ready notify failed");
+    }
   }
   return {
     intakeId: params.intakeId,

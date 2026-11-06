@@ -421,3 +421,7 @@ export const facilityDetailResponseSchema = z.object({
   verificationStatus: z.string(),
   receivingEnabled: z.boolean(),
 });
+
+export const deviceRegisterResponseSchema = z.object({
+  deviceId: z.string(),
+});

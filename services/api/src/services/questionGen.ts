@@ -58,7 +58,12 @@ export async function generateNextQuestion(
       .map((q) => q.data.topic),
   );
   const remainingTopics = FIXED_TOPICS.filter((t) => !askedTopics.has(t));
-  const budget = INTAKE_MAX_QUESTIONS - intake.questionCount;
+  // 出題枠は現行ブランチ上の質問数で数える（回答編集で無効化された
+  // 分岐の質問は枠を消費しない → 代替質問を発行できる）
+  const usableCount = questions.filter(
+    (q) => q.data.status !== "invalidated",
+  ).length;
+  const budget = INTAKE_MAX_QUESTIONS - usableCount;
   if (budget <= 0) return null;
 
   const qById = new Map(questions.map((q) => [q.id, q.data]));

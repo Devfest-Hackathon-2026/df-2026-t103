@@ -447,7 +447,7 @@ describe("intake domain (#9)", () => {
     });
     const detail = await getIntakeDetail(deps, { uid: UID, intakeId });
     const q2doc = detail.questions.find((x) => x.questionId === q2.questionId);
-    expect(q2doc?.data.status).toBe("invalidated");
+    expect(q2doc?.status).toBe("invalidated");
     // 旧分岐の回答は除去される（現在ブランチに残存しない）
     const a2doc = await deps.memDb
       .doc(`intakes/${intakeId}/answers/${q2.questionId}`)

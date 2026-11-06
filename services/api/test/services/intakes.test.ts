@@ -803,4 +803,76 @@ describe("intake domain (#9)", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 412 });
   });
+
+  it("無効化した質問分だけ出題枠が回復し上限到達後も代替質問を出せる", async () => {
+    const deps = makeTestDeps();
+    const intakeId = await makeQuestioning(deps);
+    let rev = 2;
+    let firstId = "";
+    for (let i = 0; i < 12; i++) {
+      const r = await appendQuestion(deps, {
+        uid: UID,
+        intakeId,
+        expectedIntakeRevision: rev,
+        question: {
+          questionText: `q${i}`,
+          topic: `t${i}`,
+          options: [{ code: "A", label: "a" }],
+          generatedBy: "fixed_template",
+        },
+      });
+      if (i === 0) firstId = r.questionId;
+      rev = r.intakeRevision;
+    }
+    // 上限に到達: 現行ブランチ上の質問が12件あるため拒否される
+    await expect(
+      appendQuestion(deps, {
+        uid: UID,
+        intakeId,
+        expectedIntakeRevision: rev,
+        question: {
+          questionText: "extra",
+          topic: "tx",
+          options: [],
+          generatedBy: "fallback",
+        },
+      }),
+    ).rejects.toMatchObject({ statusCode: 412 });
+
+    // q1 に回答してから編集 → q2..q12 が無効化され出題枠が回復する
+    const a1 = await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: firstId,
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        answerState: "answered",
+        expectedIntakeRevision: rev,
+      },
+    });
+    const p = await patchAnswer(deps, {
+      uid: UID,
+      intakeId,
+      answerId: firstId,
+      body: {
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        freeText: "訂正",
+        expectedIntakeRevision: a1.intakeRevision,
+      },
+    });
+    const replacement = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: p.intakeRevision,
+      question: {
+        questionText: "代替質問",
+        topic: "t_new",
+        options: [{ code: "A", label: "a" }],
+        generatedBy: "fallback",
+      },
+    });
+    expect(replacement.questionId).toBeTruthy();
+  });
 });

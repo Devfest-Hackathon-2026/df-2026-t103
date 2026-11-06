@@ -535,6 +535,11 @@ export async function appendQuestion(
   const result = await deps.db.runTransaction(async (tx) => {
     const ref = deps.db.doc(`intakes/${params.intakeId}`);
     const snap = await tx.get(ref);
+    // 上限判定は現行ブランチ上の質問数（invalidated を除く）で行う。
+    // read は write より先に行う（Firestore tx の read-before-write 規則）。
+    const qAll = await tx.get(
+      deps.db.collection(`intakes/${params.intakeId}/questions`),
+    );
     const intake = snap.data() as IntakeDoc | undefined;
     if (!snap.exists || !intake || intake.patientUid !== params.uid) {
       throw ApiError.notFound("問診が見つかりません。");
@@ -554,7 +559,12 @@ export async function appendQuestion(
         "この操作は現在の問診状態では実行できません。",
       );
     }
-    if (intake.questionCount >= INTAKE_MAX_QUESTIONS) {
+    // 無効化された旧分岐の質問は上限に含めない（編集で枝が消えても
+    // 代替質問を発行できるようにするため）
+    const usableCount = qAll.docs.filter(
+      (q) => (q.data() as QuestionDoc).status !== "invalidated",
+    ).length;
+    if (usableCount >= INTAKE_MAX_QUESTIONS) {
       throw ApiError.precondition(
         "質問数の上限に達しました。確認画面へ進んでください。",
       );

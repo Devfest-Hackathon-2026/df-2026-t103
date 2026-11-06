@@ -28,7 +28,10 @@ export async function createOcrJobForUpload(
     return { jobId: existing.id, created: false };
   }
 
-  const ref = deps.db.collection("ocrJobs").doc();
+  // ジョブIDは uploadId をそのまま使い create-if-absent で予約する。
+  // 同時 complete 競合では一方のみが作成に成功し、他方は既存ジョブを再利用する
+  // （ランダムIDだと二重ジョブが並走して処理状態の表示が不安定になる）。
+  const ref = deps.db.doc(`ocrJobs/${params.uploadId}`);
   const doc: OcrJobDoc = {
     uploadId: params.uploadId,
     patientUid: params.patientUid,
@@ -41,7 +44,20 @@ export async function createOcrJobForUpload(
     createdAt: Timestamp.fromDate(deps.clock.now()),
     updatedAt: Timestamp.fromDate(deps.clock.now()),
   };
-  await ref.set(doc as unknown as DocumentData);
+  try {
+    await ref.create(doc as unknown as DocumentData);
+  } catch (err) {
+    // 既にジョブがある（同時作成 or 過去のジョブ）。最新を再利用する。
+    const existing = await latestOcrJobForUpload(deps.db, params.uploadId);
+    if (!existing) throw err; // 作成失敗が競合以外なら再送出
+    if (
+      existing.data.status === "queued" &&
+      existing.data.dispatchState !== "enqueued"
+    ) {
+      await enqueue(deps, existing.id);
+    }
+    return { jobId: existing.id, created: false };
+  }
   await enqueue(deps, ref.id);
   return { jobId: ref.id, created: true };
 }

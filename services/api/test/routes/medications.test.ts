@@ -77,6 +77,7 @@ async function seedOcrJob(
     attempt: 1,
     errorCode: status === "failed" ? "indeterminate" : null,
     candidates: status === "succeeded" ? CANDIDATES : [],
+    dispatchState: "enqueued",
     createdAt: new Date(),
     updatedAt: new Date(),
   } satisfies OcrJobDoc as unknown as Record<string, unknown>);

@@ -175,11 +175,22 @@ export async function createMedication(
         ...(body.genericName !== undefined
           ? { genericName: body.genericName }
           : {}),
-        strength: body.strength ?? candidate?.strength ?? null,
+        strength:
+          body.strength !== undefined
+            ? body.strength
+            : (candidate?.strength ?? null),
         instructionsText:
-          body.instructionsText ?? candidate?.dosage ?? null,
-        quantity: body.quantity ?? candidate?.quantity ?? null,
-        prescribedAt: body.prescribedAt ?? candidate?.prescribedAt ?? null,
+          body.instructionsText !== undefined
+            ? body.instructionsText
+            : (candidate?.dosage ?? null),
+        quantity:
+          body.quantity !== undefined
+            ? body.quantity
+            : (candidate?.quantity ?? null),
+        prescribedAt:
+          body.prescribedAt !== undefined
+            ? body.prescribedAt
+            : (candidate?.prescribedAt ?? null),
         currentStatus: body.currentStatus,
         confirmationStatus,
         sourceType,

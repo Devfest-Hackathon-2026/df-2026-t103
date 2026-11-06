@@ -202,13 +202,16 @@ export const medicationCreateSchema = z
   .object({
     displayName: z.string().trim().min(1, "薬剤名を入力してください。").max(200),
     genericName: z.string().trim().max(200).optional(),
-    strength: z.string().trim().max(100).optional(),
-    instructionsText: z.string().trim().max(500).optional(),
-    quantity: z.string().trim().max(100).optional(),
+    // OCR候補の誤値を利用者が明示的に消せるよう null 許容（FR-M04）。
+    // undefined は候補値の引継ぎ、null はクリア、文字列は上書き。
+    strength: z.string().trim().max(100).nullable().optional(),
+    instructionsText: z.string().trim().max(500).nullable().optional(),
+    quantity: z.string().trim().max(100).nullable().optional(),
     prescribedAt: z
       .string()
       .trim()
       .regex(DATE_PATTERN, "処方日は YYYY-MM-DD 形式で入力してください。")
+      .nullable()
       .optional(),
     currentStatus: z.enum(["taking", "past", "not_sure"]),
     confirmationStatus: z.enum(["confirmed", "unconfirmed"]).optional(),

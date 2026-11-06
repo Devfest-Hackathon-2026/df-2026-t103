@@ -193,6 +193,30 @@ describe("POST /v1/medications (API-023)", () => {
     await app.close();
   });
 
+  it("候補値は明示 null でクリアできる（誤ったOCR値の除去）", async () => {
+    const { deps, app } = await setup();
+    await seedOcrJob(deps, "job-4b");
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/medications",
+      headers: { ...authHeader(UID), "idempotency-key": "m-3b" },
+      payload: {
+        displayName: "ロキソプロフェンNa錠",
+        prescribedAt: null,
+        ocrJobId: "job-4b",
+        candidateId: "c1",
+        currentStatus: "taking",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const med = res.json();
+    // 誤認識された候補の処方日は復元されず null で保存される
+    expect(med.prescribedAt).toBeNull();
+    // 指定しなかった項目は候補値を引き継ぐ
+    expect(med.strength).toBe("60mg");
+    await app.close();
+  });
+
   it("412: 未完了ジョブの候補は登録に使えない", async () => {
     const { deps, app } = await setup();
     await seedOcrJob(deps, "job-5", UID, "running");

@@ -6,7 +6,7 @@ Flutter の Android / iOS / Web 向けデモ雛形です。現在は準備画面
 
 ルートの `make up` は Firebase Emulator と Flutter Web を起動します。Flutter SDK と稼働中の Docker が必要です。患者アプリだけを起動するには、エミュレータを別途起動した上で `make patient-start` を使ってください。起動の成否は `make logs-patient` と http://localhost:5050 で確認します。
 
-この雛形は `USE_FIREBASE_EMULATOR=true` と `FIREBASE_PROJECT_ID=demo-mmr-dev` が明示された場合にのみ Firebase を初期化し、実環境への接続は未対応です。これらは Makefile のデフォルト設定に含まれます。Android エミュレータからは `10.0.2.2`、Web と iOS シミュレータからは `localhost` を使用します。実機では開発機の到達可能なホストを `--dart-define=FIREBASE_EMULATOR_HOST=<host>` で指定し、エミュレータのネットワーク公開に注意してください。Messaging はネイティブ SDK による外部への自動登録を避けるため、通知実装時まで依存を追加しません。
+この雛形は `USE_FIREBASE_EMULATOR=true` と `FIREBASE_PROJECT_ID=demo-mmr-dev` が明示された場合にのみ Firebase を初期化し、実環境への接続は未対応です。これらは Makefile のデフォルト設定に含まれます。Firebase には単一のホストガードが入っており、許可されるのは `localhost` と `127.0.0.1`、そして Android 非 Web ビルドだけが `10.0.2.2` のみです。比較は完全一致・大文字小文字区別で、`localhost:9099` のようなポート付きや `localhost.evil.example` のような類似値は拒否され、Firebase を初期化する前に `StateError` になります。`--dart-define=FIREBASE_EMULATOR_HOST=<host>` で上書きする場合もこの範囲で、範囲外のホストを指定すると起動時に失敗します。デフォルトは Android エミュレータが `10.0.2.2`、それ以外（Web / iOS シミュレータ）が `localhost` です。つまり Android エミュレータからは `10.0.2.2`、Web と iOS シミュレータからは `localhost` を使い、物理端末（実機）から開発機の LAN IP など任意の LAN ホストで接続する構成は未対応です。エミュレータを外部ネットワークに公開することも想定していません。Messaging はネイティブ SDK による外部への自動登録を避けるため、通知実装時まで依存を追加しません。
 
 ### ブラウザで画面を確認する
 

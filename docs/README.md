@@ -37,3 +37,7 @@
 - [Firebase Authentication: Custom Tokens](https://firebase.google.com/docs/auth/admin/create-custom-tokens)
 - [Firebase App Check: Custom Backend](https://firebase.google.com/docs/app-check/custom-resource-backend)
 - [Cloud Firestore: Transactions](https://firebase.google.com/docs/firestore/manage-data/transactions)
+
+## CI運用
+
+- [依存関係・シークレット・コンテナの検査](DEPENDENCY_SECURITY_CI.md)

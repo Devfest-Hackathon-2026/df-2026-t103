@@ -120,3 +120,75 @@ gcloud artifacts repositories create api \
   --repository-format docker \
   --description "moshimoshimonshin API container images"
 ```
+
+## 非同期ジョブ基盤（Issue #31）
+
+OCR・医療機関への送信・退会削除・期限/整合性スキャンを支える
+Cloud Tasks / Cloud Scheduler / 非公開 Worker の構成。docs/02 §9/§10・docs/04 §10・
+ADR-0005/0009/0011 準拠。
+
+### cloud-run/service-worker.yaml
+
+Scheduler/Tasks から OIDC で呼ばれる**非公開（ingress=internal）Worker サービス**。
+api と同一イメージだがサービスを分割して相互影響を抑える（§11.2）。内部エンドポイント:
+
+| エンドポイント | 起動元 | 用途 |
+|---|---|---|
+| `POST /v1/internal/jobs/deletion-scan` | Scheduler | 削除期限スキャン |
+| `POST /v1/internal/jobs/upload-expiry-scan` | Scheduler | アップロード期限/整合性スキャン |
+| `POST /v1/internal/jobs/deletion-jobs/:id/run` | Tasks | 削除ジョブ実行 |
+| `POST /v1/internal/jobs/ocr/:id/run` | Tasks | OCR 実行 |
+
+```sh
+gcloud run services replace infra/cloud-run/service-worker.yaml \
+  --project PROJECT_ID --region asia-northeast1
+```
+
+### Cloud Tasks キュー / Cloud Scheduler ジョブ
+
+`infra/setup-async-jobs.sh` が冪等に作成する。
+
+| キュー | maxAttempts | 並行 | 用途 |
+|---|---|---|---|
+| `ocr` | 5 | 10 | OCR 実行（費用敏感・並行度低め） |
+| `delivery` | 8 | 20 | 医療機関への送信/通知（at-least-once、ワーカーで冪等化） |
+| `deletion-retry` | 5 | 10 | 削除ジョブのリトライ |
+
+> **DLQ 相当**: Cloud Tasks に専用 DLQ はないため `maxAttempts` で打ち切り、
+> 打ち切り後は Firestore 側の failed ジョブ記録で失敗管理（ADR-0009）。
+
+| Scheduler ジョブ | cron（Asia/Tokyo） | ターゲット |
+|---|---|---|
+| `deletion-scan` | `0 * * * *`（毎時） | `/v1/internal/jobs/deletion-scan` |
+| `upload-expiry-scan` | `*/15 * * * *`（15分毎） | `/v1/internal/jobs/upload-expiry-scan` |
+
+> **重複実行制御**: Scheduler は 1 発火だが、二重処理はワーカー側のリース/冪等
+> （ADR-0009/0011）で防ぐ。
+
+```sh
+# worker デプロイ後、worker の URL を調べて実行
+WORKER_URL=$(gcloud run services describe worker --project PROJECT_ID \
+  --region asia-northeast1 --format 'value(status.url)')
+PROJECT_ID=PROJECT_ID WORKER_URL="$WORKER_URL" \
+  INVOKER_SA=jobs-invoker@PROJECT_ID.iam.gserviceaccount.com \
+  ./infra/setup-async-jobs.sh
+```
+
+### OIDC 呼び出し SA と IAM（owner 実施）
+
+```sh
+gcloud iam service-accounts create jobs-invoker \
+  --project PROJECT_ID --display-name "Scheduler/Tasks OIDC invoker"
+
+INV="jobs-invoker@PROJECT_ID.iam.gserviceaccount.com"
+
+# worker サービスを呼べるように run.invoker を付与
+gcloud run services add-iam-policy-binding worker \
+  --project PROJECT_ID --region asia-northeast1 \
+  --member "serviceAccount:${INV}" --role roles/run.invoker
+
+# Worker ランタイム SA（worker-run-sa）は api-run-sa と同等の最小権限を付与
+# （datastore.user / cloudtasks.enqueuer / secretmanager.secretAccessor /
+#   バケット単位 storage.objectAdmin）。上記「ランタイム SA」節と同手順。
+```
+

@@ -6,6 +6,7 @@ import {
   submitSymptoms,
   appendQuestion,
   saveAnswer,
+  patchAnswer,
 } from "../../src/services/intakes.js";
 import {
   checkForbiddenOutput,
@@ -116,6 +117,112 @@ describe("questionGen (#10)", () => {
     expect(input?.answers).toHaveLength(1);
     expect(input?.answers[0]?.freeText).toBe("昨日から");
     expect(input?.answers[0]?.topic).toBe("onset_timing");
+  });
+
+  it("回答の質問文・選択ラベルをLLM入力へ含める（コードのみでは解釈不能）", async () => {
+    const deps = makeTestDeps({ aiIntakeEnabled: true });
+    const { intakeId, doc } = await intakeAt(deps);
+    const q1 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: doc.revision,
+      question: {
+        questionText: "いつから痛みますか？",
+        topic: "onset_timing",
+        options: [
+          { code: "LT_WEEK", label: "1週間未満" },
+          { code: "GT_WEEK", label: "1週間以上" },
+        ],
+        generatedBy: "fixed_template",
+      },
+    });
+    await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: q1.questionId,
+        questionRevision: 1,
+        selectedCodes: ["GT_WEEK"],
+        answerState: "answered",
+        expectedIntakeRevision: q1.intakeRevision,
+      },
+    });
+    const doc2 = (await deps.memDb.doc(`intakes/${intakeId}`).get()).data() as
+      | IntakeDoc
+      | undefined;
+    await generateNextQuestion(deps, {
+      intakeId,
+      intake: doc2 as IntakeDoc,
+    });
+    const input = deps.fakeLlm.calls[0];
+    const ans = input?.answers[0];
+    expect(ans?.questionText).toBe("いつから痛みますか？");
+    expect(ans?.selectedCodes).toEqual(["GT_WEEK"]);
+    expect(ans?.selectedLabels).toEqual(["1週間以上"]);
+  });
+
+  it("無効化された質問のトピックは再出題できる（重複判定から除外）", async () => {
+    const deps = makeTestDeps();
+    const { intakeId, doc } = await intakeAt(deps);
+    const q1 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: doc.revision,
+      question: {
+        questionText: "いつから痛みますか？",
+        topic: "onset_timing",
+        options: [{ code: "LT_WEEK", label: "1週間未満" }],
+        generatedBy: "fixed_template",
+      },
+    });
+    const q2 = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: q1.intakeRevision,
+      question: {
+        questionText: "痛みの強さは？",
+        topic: "severity",
+        options: [{ code: "MILD", label: "軽い" }],
+        generatedBy: "llm",
+      },
+    });
+    const a1 = await saveAnswer(deps, {
+      uid: UID,
+      intakeId,
+      body: {
+        questionId: q1.questionId,
+        questionRevision: 1,
+        selectedCodes: ["LT_WEEK"],
+        answerState: "answered",
+        expectedIntakeRevision: q2.intakeRevision,
+      },
+    });
+    // q1 の回答を編集 → q2 は invalidated になる
+    const p = await patchAnswer(deps, {
+      uid: UID,
+      intakeId,
+      answerId: q1.questionId,
+      body: {
+        questionRevision: 1,
+        selectedCodes: ["LT_WEEK"],
+        freeText: "訂正",
+        expectedIntakeRevision: a1.intakeRevision,
+      },
+    });
+    const q2doc = await deps.memDb
+      .doc(`intakes/${intakeId}/questions/${q2.questionId}`)
+      .get();
+    expect((q2doc.data() as { status: string }).status).toBe("invalidated");
+    void p;
+    const doc3 = (await deps.memDb.doc(`intakes/${intakeId}`).get()).data() as
+      | IntakeDoc
+      | undefined;
+    const next = await generateNextQuestion(deps, {
+      intakeId,
+      intake: doc3 as IntakeDoc,
+    });
+    // severity は無効化済みなので再出題可能（frequency へ進まない）
+    expect(next?.topic).toBe("severity");
   });
 
   it("LLM障害時は固定質問へフォールバック（BR-03）", async () => {

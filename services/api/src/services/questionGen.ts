@@ -51,22 +51,35 @@ export async function generateNextQuestion(
     listQuestions(deps.db, intakeId),
     listAnswers(deps.db, intakeId),
   ]);
-  const askedTopics = new Set(questions.map((q) => q.data.topic));
+  // 無効化済み質問は重複判定から外す（回答編集で無効化された分岐は再出題可能）
+  const askedTopics = new Set(
+    questions
+      .filter((q) => q.data.status !== "invalidated")
+      .map((q) => q.data.topic),
+  );
   const remainingTopics = FIXED_TOPICS.filter((t) => !askedTopics.has(t));
   const budget = INTAKE_MAX_QUESTIONS - intake.questionCount;
   if (budget <= 0) return null;
 
+  const qById = new Map(questions.map((q) => [q.id, q.data]));
   const answersNorm = normalizeAnswers(
-    answers.map((a) => ({
-      questionId: a.data.questionId,
-      // topicは質問側のスナップショットから解決
-      topic:
-        questions.find((q) => q.id === a.data.questionId)?.data.topic ?? "",
-      stepIndex: a.data.stepIndex,
-      selectedCodes: a.data.selectedCodes,
-      freeText: a.data.freeText ?? null,
-      answerState: a.data.answerState,
-    })),
+    answers.map((a) => {
+      // topic・質問文・選択ラベルは質問スナップショットから解決する
+      // （コードだけではLLMが回答内容を解釈できない）
+      const q = qById.get(a.data.questionId);
+      return {
+        questionId: a.data.questionId,
+        topic: q?.topic ?? "",
+        questionText: q?.questionText ?? "",
+        stepIndex: a.data.stepIndex,
+        selectedCodes: a.data.selectedCodes,
+        selectedLabels: a.data.selectedCodes.map(
+          (code) => q?.options.find((o) => o.code === code)?.label ?? code,
+        ),
+        freeText: a.data.freeText ?? null,
+        answerState: a.data.answerState,
+      };
+    }),
   );
 
   // AI経路（本番承認フラグが立っている場合のみ）

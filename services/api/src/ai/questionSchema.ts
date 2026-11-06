@@ -112,7 +112,11 @@ export interface NormalizedAnswer {
   questionId: string;
   topic: string;
   stepIndex: number;
+  /** 出題時の質問文スナップショット。選択コードの意味をLLMが解釈するのに必須。 */
+  questionText: string;
   selectedCodes: string[];
+  /** 選択コードの表示ラベル（質問optionsから解決済み）。 */
+  selectedLabels: string[];
   freeText: string | null;
   answerState: "answered" | "unknown" | "skipped";
 }
@@ -126,7 +130,9 @@ export function normalizeAnswers(
     questionId: string;
     topic: string;
     stepIndex: number;
+    questionText?: string;
     selectedCodes: string[];
+    selectedLabels?: string[];
     freeText: string | null | undefined;
     answerState: "answered" | "unknown" | "skipped";
   }>,
@@ -135,7 +141,9 @@ export function normalizeAnswers(
     questionId: a.questionId,
     topic: a.topic,
     stepIndex: a.stepIndex,
+    questionText: a.questionText ?? "",
     selectedCodes: a.selectedCodes,
+    selectedLabels: a.selectedLabels ?? [],
     freeText: a.freeText ?? null,
     answerState: a.answerState,
   }));

@@ -1,0 +1,88 @@
+# Cloud Run 非公開 Worker サービス定義 — Issue #31 / docs/02 §9・§10・§11.2・ADR-0005/0009/0011
+#
+# 役割: Cloud Scheduler / Cloud Tasks から OIDC 付きで呼ばれる内部ジョブ実行基盤。
+#   - /v1/internal/jobs/deletion-scan        (Scheduler: 削除期限スキャン)
+#   - /v1/internal/jobs/upload-expiry-scan   (Scheduler: アップロード期限/整合性スキャン)
+#   - /v1/internal/jobs/deletion-jobs/:id/run (Tasks: 削除ジョブ実行)
+#   - /v1/internal/jobs/ocr/:id/run           (Tasks: OCR 実行)
+#
+# api と同一イメージを使うが ingress=internal で公開せず、患者/病院向け API と
+# サービスを分割して相互影響を抑える（§11.2）。内部エンドポイントは tier:"internal"
+# で認可済み。適用:
+#   gcloud run services replace infra/cloud-run/service-worker.yaml \
+#     --project PROJECT_ID --region asia-northeast1
+#
+# 注意:
+#  - Scheduler/Tasks からの到達性のため ingress は internal-and-cloud-load-balancing
+#    を使う場合がある（ネットワーク構成に合わせて調整。詳細は infra/README.md）。
+#  - SA/IAM（run.invoker 等）付与は owner 実施（roles/editor では不可）。
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: worker
+  labels:
+    app: moshimoshimonshin
+    component: worker
+  annotations:
+    # 非公開。インターネットからの直接アクセスを受けない。
+    run.googleapis.com/ingress: internal
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        # ジョブ処理の暴走・費用急増を抑えるため控えめな上限（§11.2）。
+        autoscaling.knative.dev/maxScale: "5"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      serviceAccountName: worker-run-sa@PROJECT_ID.iam.gserviceaccount.com
+      # ジョブは 1 インスタンス 1 実行寄りにして冪等・リース制御（ADR-0009）と整合。
+      containerConcurrency: 8
+      # OCR/削除などの長め処理を許容。
+      timeoutSeconds: 600
+      containers:
+        - name: worker
+          image: asia-northeast1-docker.pkg.dev/PROJECT_ID/api/api:latest
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: "8080"
+            - name: FIREBASE_PROJECT_ID
+              value: PROJECT_ID
+            - name: FIREBASE_STORAGE_BUCKET
+              value: PROJECT_ID.appspot.com
+            - name: OCR_TASKS_LOCATION
+              value: asia-northeast1
+            - name: OCR_TASKS_QUEUE
+              value: ocr
+            - name: VERTEX_AI_LOCATION
+              value: asia-northeast1
+            # Secret Manager 由来（Issue #32）。内部ジョブトークン・HMAC・外部APIキー。
+            - name: SERVER_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: SERVER_HMAC_SECRET
+                  key: latest
+            - name: INTERNAL_JOB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: INTERNAL_JOB_TOKEN
+                  key: latest
+            - name: VERTEX_AI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: VERTEX_AI_API_KEY
+                  key: latest
+  traffic:
+    - percent: 100
+      latestRevision: true

@@ -64,6 +64,20 @@ export type OcrFailureCode =
   | "upload_invalid"
   | "worker_interrupted";
 
+/** FR-M05: 服薬状況を必ず明示（不明も状態として保存）。 */
+export type MedicationCurrentStatus = "taking" | "past" | "not_sure";
+
+/** VAL-013/FR-M04: 抽出候補は利用者確認まで confirmed にしない。 */
+export type MedicationConfirmationStatus =
+  | "unconfirmed"
+  | "confirmed"
+  | "rejected";
+
+export type MedicationSourceType =
+  | "manual"
+  | "prescription_photo"
+  | "medication_notebook";
+
 export type DeletionStepStatus = "pending" | "running" | "succeeded" | "failed";
 
 export type RegistrationOperationStatus =

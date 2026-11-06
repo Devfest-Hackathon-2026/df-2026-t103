@@ -49,6 +49,7 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     appCheckMode: "permissive",
     internalJobToken: "test-internal-token",
     apiDocsEnabled: true,
+    corsOrigins: [],
     reauthWindowSeconds: 900,
     deletionGracePeriodDays: 30,
     deletionJobMaxAttempts: 5,

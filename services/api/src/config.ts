@@ -27,6 +27,7 @@ const envSchema = z.object({
   APP_CHECK_MODE: z.enum(["enforce", "permissive"]).optional(),
   INTERNAL_JOB_TOKEN: z.string().optional(),
   API_DOCS_ENABLED: z.enum(["true", "false"]).optional(),
+  API_CORS_ORIGINS: z.string().optional(),
 
   REAUTH_WINDOW_SECONDS: z.coerce.number().int().positive().default(900),
   DELETION_GRACE_PERIOD_DAYS: z.coerce.number().int().min(0).default(30),
@@ -103,6 +104,7 @@ export type AppConfig = Readonly<{
   appCheckMode: "enforce" | "permissive";
   internalJobToken: string | undefined;
   apiDocsEnabled: boolean;
+  corsOrigins: readonly string[];
   reauthWindowSeconds: number;
   deletionGracePeriodDays: number;
   deletionJobMaxAttempts: number;
@@ -133,6 +135,24 @@ export type AppConfig = Readonly<{
 }>;
 
 const DUMMY_SECRETS = new Set(["", "change-me-local-dev"]);
+
+function parseCorsOrigins(value: string, requireHttps: boolean): readonly string[] {
+  if (value === "") return Object.freeze([]);
+  const origins = value.split(",").map((origin) => origin.trim());
+  for (const origin of origins) {
+    let url: URL;
+    try {
+      url = new URL(origin);
+    } catch {
+      throw new Error("API_CORS_ORIGINS must contain exact HTTP(S) origins");
+    }
+    if (!["http:", "https:"].includes(url.protocol) || url.origin !== origin ||
+        (requireHttps && url.protocol !== "https:")) {
+      throw new Error("API_CORS_ORIGINS must contain exact HTTP(S) origins");
+    }
+  }
+  return Object.freeze(origins);
+}
 
 /** Admin SDK 側の内部エミュレータ接続先。Compose の `firebase` も許可する。 */
 const INTERNAL_HOST_PORT = /^(localhost|127\.0\.0\.1|firebase):([1-9]\d{0,4})$/;
@@ -228,6 +248,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       parsed.API_DOCS_ENABLED !== undefined
         ? parsed.API_DOCS_ENABLED === "true"
         : emulator || parsed.NODE_ENV !== "production",
+    corsOrigins: parseCorsOrigins(
+      parsed.API_CORS_ORIGINS ??
+        (parsed.NODE_ENV === "development" ? "http://localhost:5050,http://127.0.0.1:5050" : ""),
+      parsed.NODE_ENV === "production",
+    ),
     reauthWindowSeconds: parsed.REAUTH_WINDOW_SECONDS,
     deletionGracePeriodDays: parsed.DELETION_GRACE_PERIOD_DAYS,
     deletionJobMaxAttempts: parsed.DELETION_JOB_MAX_ATTEMPTS,

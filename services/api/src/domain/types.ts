@@ -78,6 +78,24 @@ export type MedicationSourceType =
   | "prescription_photo"
   | "medication_notebook";
 
+/** 04 §5.4 問診進行状態。archived は期限切れ・中断終端。 */
+export type IntakeStatus =
+  | "draft"
+  | "safety_check"
+  | "questioning"
+  | "review"
+  | "finalized"
+  | "archived";
+
+/** 質問生成元。modelVersion に APIキー・患者内容を含めない。 */
+export type QuestionGeneratedBy = "fixed_template" | "llm" | "fallback";
+
+/** 回答編集で分岐が変わった後続質問は invalidated。 */
+export type QuestionStatus = "active" | "invalidated" | "answered";
+
+/** 空文字と未回答を区別する（unknown=分からない、skipped=回答しない）。 */
+export type AnswerState = "answered" | "unknown" | "skipped";
+
 export type DeletionStepStatus = "pending" | "running" | "succeeded" | "failed";
 
 export type RegistrationOperationStatus =

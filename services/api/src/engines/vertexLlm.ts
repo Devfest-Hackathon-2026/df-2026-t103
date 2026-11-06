@@ -118,12 +118,13 @@ export class VertexAiLlmAdapter implements LlmAdapter {
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
-    } catch (err) {
+    } catch {
+      // cause を付けない: SyntaxError のメッセージにはモデル応答の断片が
+      // 含まれ得るため、ログ経由で PHI 流出しうる（SEC ログ最小化）。
       throw new ApiError(
         502,
         ErrorCodes.MODEL_SCHEMA_REJECTED,
         "質問生成の応答がJSONではありません。",
-        { cause: err },
       );
     }
     const out = llmOutputSchema.safeParse(parsed);

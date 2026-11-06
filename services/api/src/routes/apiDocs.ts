@@ -369,3 +369,19 @@ export const questionnaireDetailResponseSchema = z.object({
     createdAt: z.string().nullable(),
   }),
 });
+
+export const deliveryCreateResponseSchema = z.object({
+  deliveryId: z.string(),
+  status: z.literal("created"),
+});
+
+export const deliveryGetResponseSchema = z.object({
+  deliveryId: z.string(),
+  status: z.string(),
+  facilityId: z.string(),
+  questionnaireId: z.string(),
+  questionnaireRevisionId: z.string(),
+  createdAt: z.string().nullable(),
+  deliveredAt: z.string().nullable(),
+  acknowledgedAt: z.string().nullable(),
+});

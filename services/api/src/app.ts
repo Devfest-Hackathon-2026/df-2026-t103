@@ -19,6 +19,7 @@ import { registerMedicationRoutes } from "./routes/medications.js";
 import { registerIntakeRoutes } from "./routes/intakes.js";
 import { registerQuestionnaireRoutes } from "./routes/questionnaires.js";
 import { registerInternalJobRoutes } from "./routes/internalJobs.js";
+import { registerDeliveryRoutes } from "./routes/deliveries.js";
 
 /**
  * Fastify アプリケーションの組み立て。
@@ -94,6 +95,7 @@ export function buildApp(deps: Deps): FastifyInstance {
     registerIntakeRoutes(instance, deps);
     registerQuestionnaireRoutes(instance, deps);
     registerInternalJobRoutes(instance, deps);
+    registerDeliveryRoutes(instance, deps);
   });
 
   return app;

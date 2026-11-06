@@ -2,8 +2,10 @@ import type {
   AccountStatus,
   AnswerState,
   ConsentType,
+  DeliveryStatus,
   DeletionJobStatus,
   DeletionStepStatus,
+  FacilityVerificationStatus,
   IntakeStatus,
   MedicationConfirmationStatus,
   MedicationCurrentStatus,
@@ -328,6 +330,46 @@ export interface QuestionnaireRevisionDoc {
   rawAnswerSnapshotHash: string;
   summaryReviewConfirmedAt: unknown;
   createdAt: unknown;
+}
+
+/** 04 §5.8 facilities/{facilityId}。 */
+export interface FacilityDoc {
+  facilityId: string;
+  legalName: string;
+  displayName: string;
+  placeId?: string;
+  address?: Record<string, unknown>;
+  verificationStatus: FacilityVerificationStatus;
+  receivingEnabled: boolean;
+  serviceAgreementVersion: string;
+  verifiedAt?: unknown;
+  verificationRecordId?: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+/** 04 §5.10 deliveries/{deliveryId}（PHI、送信後施設宛コピー）。 */
+export interface DeliveryDoc {
+  senderUid: string;
+  facilityId: string;
+  questionnaireId: string;
+  questionnaireRevisionId: string;
+  consentId: string;
+  shareScope: {
+    includeProfile: boolean;
+    includeConfirmedMedications: boolean;
+    includePrescriptionImages: boolean;
+  };
+  patientIdentitySnapshot: Record<string, unknown>;
+  questionnaireSnapshot: Record<string, unknown>;
+  snapshotSha256: string;
+  status: DeliveryStatus;
+  idempotencyKeyHash: string;
+  facilityRetentionPolicyVersion: string;
+  createdAt: unknown;
+  deliveredAt?: unknown;
+  acknowledgedAt?: unknown;
+  receivedByStaffUid?: string;
 }
 
 export interface AuditEventDoc {

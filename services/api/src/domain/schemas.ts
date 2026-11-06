@@ -336,3 +336,19 @@ export const intakeFinalizeSchema = z
   })
   .strict();
 export type IntakeFinalizeBody = z.infer<typeof intakeFinalizeSchema>;
+
+/** API-029 POST /deliveries（03 §5.4）。Idempotency-Key ヘッダ必須。 */
+export const deliveryCreateSchema = z
+  .object({
+    questionnaireId: z.string().min(1).max(200),
+    questionnaireRevision: z.number().int().min(1),
+    facilityId: z.string().min(1).max(200),
+    consentDocumentVersion: z.string().min(1).max(100),
+    shareScope: z.object({
+      includeProfile: z.boolean(),
+      includeConfirmedMedications: z.boolean(),
+      includePrescriptionImages: z.boolean(),
+    }),
+  })
+  .strict();
+export type DeliveryCreateBody = z.infer<typeof deliveryCreateSchema>;

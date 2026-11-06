@@ -1,15 +1,283 @@
 name: cd
 
-# CD は現時点では未導入。手動 dispatch のみ受け付け、
-# 実際のデプロイ処理はまだ定義しない（誤って push などで実行されないためのスタブ）。
-# 将来: Cloud Run / Firebase Hosting / Functions へのデプロイをここに定義する。
+# =============================================================================
+# CD パイプライン（Issue #38 / docs/02 §13.1・docs/06 §10）
+#
+# 設計方針:
+#  - 手動起動のみ（workflow_dispatch）。push では発火しない（誤デプロイ防止）。
+#  - 環境昇格は GitHub Environments（stg / prod）の required reviewers による
+#    手動承認ゲートで表現（§13.1-6 "stg→手動承認→prod gradual rollout"）。
+#  - 認証は Workload Identity Federation（WIF）。長寿命 SA キーはリポジトリに
+#    置かない（§13.1-5）。
+#  - deploy と rollback を action 入力で切替。
+#
+# 実行に必要なリポジトリ側の事前構成（本ワークフローの対象外・要 owner 作業）:
+#  - GitHub Environments: `stg`, `prod`（prod には required reviewers を設定）
+#  - 環境ごとの Variables:
+#      GCP_PROJECT_ID            例) project-7efcc4c4-6c86-490c-ba5
+#      GCP_WIF_PROVIDER          projects/<n>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+#      GCP_DEPLOY_SA             github-deployer@<project>.iam.gserviceaccount.com
+#      GCP_AR_REPO               Artifact Registry リポジトリ名（例: api）
+#      RUN_SERVICE_API           Cloud Run サービス名（例: api）
+#  - （任意）Secrets: DEPLOY_NOTIFY_WEBHOOK  デプロイ結果通知用の Webhook URL
+#
+# Android/iOS のストア配信は署名材料（keystore / App Store 証明書）が未整備の
+# ため本 CD の対象外。Firebase App Distribution / Fastlane を用いた配信は別途
+# 構築する（本ファイルでは Flutter Web のみ Hosting へ配信）。
+# =============================================================================
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: デプロイ先環境
+        type: choice
+        required: true
+        options:
+          - stg
+          - prod
+      action:
+        description: 実行アクション
+        type: choice
+        required: true
+        default: deploy
+        options:
+          - deploy
+          - rollback
+      rollback_revision:
+        description: "rollback 時に 100% トラフィックを戻す Cloud Run リビジョン名（例: api-00042-abc）"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  id-token: write # WIF のトークン発行に必須
+
+concurrency:
+  # 同一環境への同時デプロイを防ぐ（進行中のデプロイはキャンセルしない）
+  group: cd-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  GCP_REGION: asia-northeast1
 
 jobs:
-  disabled:
-    name: cd disabled
+  plan:
+    name: plan / 構成の解決
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }} # ← ここで手動承認ゲートが働く
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+    steps:
+      - name: Resolve deploy plan
+        id: vars
+        run: |
+          image="${GCP_REGION}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/${{ vars.RUN_SERVICE_API }}:${GITHUB_SHA}"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## CD plan"
+            echo "- environment: \`${{ inputs.environment }}\`"
+            echo "- action: \`${{ inputs.action }}\`"
+            echo "- region: \`${GCP_REGION}\`"
+            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- image: \`${image}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-api:
+    name: build-api / イメージビルド＋push
+    if: inputs.action == 'deploy'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: auth
+        name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure docker for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build API image (prod target)
+        run: docker build -f docker/api/Dockerfile --target prod -t "${{ needs.plan.outputs.image }}" .
+
+      - name: Push image
+        run: docker push "${{ needs.plan.outputs.image }}"
+
+  deploy-cloud-run:
+    name: deploy-cloud-run / API サービス更新
+    if: inputs.action == 'deploy'
+    needs: [plan, build-api]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy new revision (no traffic)
+        # 新リビジョンをトラフィック 0 で投入し、段階的に切替える（gradual rollout）
+        run: |
+          gcloud run deploy "${{ vars.RUN_SERVICE_API }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${GCP_REGION}" \
+            --image "${{ needs.plan.outputs.image }}" \
+            --no-traffic \
+            --tag "sha-${GITHUB_SHA::7}" \
+            --quiet
+
+      - name: Shift traffic to new revision
+        # stg は即時 100%、prod は段階（10%→確認→100%）を想定。
+        # ここでは最新リビジョンへ 100% 切替。canary を細分化する場合は
+        # --to-revisions で比率指定し、監視後に再実行する。
+        run: |
+          gcloud run services update-traffic "${{ vars.RUN_SERVICE_API }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${GCP_REGION}" \
+            --to-latest \
+            --quiet
+
+  deploy-rules:
+    name: deploy-rules / Firestore・Storage・RTDB
+    if: inputs.action == 'deploy'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Deploy security rules & indexes
+        # firebase-tools は WIF で得た GOOGLE_APPLICATION_CREDENTIALS を利用。
+        # rules の更新は医療監修レビュー前提（§13.1-7）。
+        run: |
+          npx -y firebase-tools deploy \
+            --only firestore:rules,firestore:indexes,storage,database \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --non-interactive
+
+  deploy-hosting:
+    name: deploy-hosting / Web 配信
+    if: inputs.action == 'deploy'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: Build patient Flutter Web (app)
+        working-directory: apps/patient
+        run: |
+          flutter pub get
+          flutter build web --release
+
+      - name: Build hospital Next.js static export
+        working-directory: apps/hospital
+        run: |
+          npm ci
+          npm run build
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Deploy Hosting (app + hospital)
+        run: |
+          npx -y firebase-tools deploy \
+            --only hosting \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --non-interactive
+
+  rollback:
+    name: rollback / 前リビジョンへ切戻し
+    if: inputs.action == 'rollback'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Validate input
+        run: |
+          if [ -z "${{ inputs.rollback_revision }}" ]; then
+            echo "::error::rollback には rollback_revision（戻し先リビジョン名）が必須です"
+            exit 1
+          fi
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Shift 100% traffic to target revision
+        run: |
+          gcloud run services update-traffic "${{ vars.RUN_SERVICE_API }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${GCP_REGION}" \
+            --to-revisions "${{ inputs.rollback_revision }}=100" \
+            --quiet
+          echo "::notice::Cloud Run を ${{ inputs.rollback_revision }} へ 100% 切戻しました。Firestore/Storage rules は git revert → deploy-rules 再実行で戻してください。"
+
+  notify:
+    name: notify / 監査・通知
+    if: always()
+    needs: [plan, build-api, deploy-cloud-run, deploy-rules, deploy-hosting, rollback]
     runs-on: ubuntu-latest
     steps:
-      - run: echo "CD is not enabled yet. Nothing to do."
+      - name: Compose deploy summary
+        run: |
+          {
+            echo "## CD result: ${{ inputs.action }} → ${{ inputs.environment }}"
+            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- actor: \`${{ github.actor }}\`"
+            echo "- build-api: ${{ needs.build-api.result }}"
+            echo "- deploy-cloud-run: ${{ needs.deploy-cloud-run.result }}"
+            echo "- deploy-rules: ${{ needs.deploy-rules.result }}"
+            echo "- deploy-hosting: ${{ needs.deploy-hosting.result }}"
+            echo "- rollback: ${{ needs.rollback.result }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Send webhook notification (optional)
+        if: ${{ env.WEBHOOK != '' }}
+        env:
+          WEBHOOK: ${{ secrets.DEPLOY_NOTIFY_WEBHOOK }}
+        run: |
+          curl -fsS -X POST "$WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\"CD ${{ inputs.action }} -> ${{ inputs.environment }} / ${GITHUB_SHA} / run=${{ needs.deploy-cloud-run.result }} hosting=${{ needs.deploy-hosting.result }}\"}" \
+            || echo "::warning::通知 Webhook の送信に失敗しました"

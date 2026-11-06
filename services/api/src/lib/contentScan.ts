@@ -22,12 +22,10 @@ export class SignatureContentScanner implements ContentScanner {
     if (!isUploadMimeType(params.declaredMimeType)) {
       return { verdict: "rejected", reason: "unsupported_mime" };
     }
-    let prefix: Uint8Array;
-    try {
-      prefix = await params.readPrefix(SIGNATURE_BYTES);
-    } catch {
-      return { verdict: "rejected", reason: "object_unreadable" };
-    }
+    // 読取失敗は再試行可能なエラーとして伝播させる（一時障害で
+    // 有効な画像を終端rejected+削除しないため）。拒否は検査に
+    // 成功した内容が不正な場合のみ。
+    const prefix = await params.readPrefix(SIGNATURE_BYTES);
     if (!matchesMagicBytes(prefix, params.declaredMimeType)) {
       return { verdict: "rejected", reason: "content_mismatch" };
     }

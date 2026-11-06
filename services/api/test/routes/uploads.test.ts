@@ -303,6 +303,30 @@ describe("POST /v1/uploads/:id/complete (API-020)", () => {
     await app.close();
   });
 
+  it("一時的な読取失敗は 500 で返し、アップロードと実体を保持する", async () => {
+    const { deps, app } = await setup();
+    const init = await initUpload(app, "i-transient");
+    const uploadId = init.json().uploadId;
+    const doc = (await getUploadDoc(deps, uploadId))!;
+    deps.fakeStorage.seedObject(
+      doc.storageBucket,
+      doc.objectPath,
+      JPEG_BYTES,
+      "image/jpeg",
+    );
+    // inspect は成功するが prefix 読取が一時失敗する状態
+    deps.fakeStorage.failOn.add(`${doc.storageBucket}/${doc.objectPath}`);
+
+    const res = await completeUpload(app, UID, uploadId, "c-transient");
+    expect(res.statusCode).toBe(500);
+    const after = (await getUploadDoc(deps, uploadId))!;
+    // 終端 rejected ではなく pending のまま（complete リトライ可能）
+    expect(after.status).toBe("pending");
+    // 一時障害で有効な画像を削除しない
+    expect(deps.fakeStorage.deleted).toHaveLength(0);
+    await app.close();
+  });
+
   it("404: 他人のアップロードは存在自体を秘匿", async () => {
     const { app } = await setup();
     const init = await initUpload(app, "i-6");

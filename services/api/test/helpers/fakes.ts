@@ -192,6 +192,9 @@ export class FakeStorageGateway implements StorageGateway {
     objectPath: string,
     maxBytes: number,
   ): Promise<Uint8Array> {
+    if (this.failOn.has(`${bucket}/${objectPath}`)) {
+      throw new Error("storage/read failed");
+    }
     const obj = this.objects.get(this.key(bucket, objectPath));
     if (!obj) throw new Error("storage/object-not-found");
     return obj.data.slice(0, maxBytes);

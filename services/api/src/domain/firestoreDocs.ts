@@ -239,6 +239,12 @@ export interface IntakeDoc {
   lastProcessedAt?: unknown;
   /** 下書きの短期保存期限（FR-I06）。 */
   expiresAt: unknown;
+  /**
+   * レビュー時に確認した要約の内容ハッシュ（sha256）。
+   * 確認後に薬・既往歴・回答が変わった場合に確定票が
+   * レビュー済み内容と乖離しないよう finalize で照合する。
+   */
+  reviewedSummaryHash?: string;
   createdAt: unknown;
   updatedAt: unknown;
   finalizedAt?: unknown;

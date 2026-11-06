@@ -426,6 +426,61 @@ describe("intake routes (#11, API-009〜016)", () => {
     ).toBe(fbody.questionnaireId);
   });
 
+  it("POST /finalize after the reviewed summary changed returns 412", async () => {
+    const { app, deps } = await setup();
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const sum = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/summary`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+    const srev = (sum.json() as { intakeRevision: number }).intakeRevision;
+    // レビュー後に添付対象の確認済み薬が増えると、確定内容が要約と乖離する
+    await deps.db.doc("medications/med-late").set({
+      patientUid: UID,
+      displayName: "カルベナ",
+      genericName: null,
+      strength: "200mg",
+      instructionsText: null,
+      quantity: null,
+      prescribedAt: null,
+      currentStatus: "taking",
+      confirmationStatus: "confirmed",
+      sourceType: "manual",
+      uploadId: null,
+      ocrJobId: null,
+      attachToQuestionnaire: true,
+      userConfirmedAt: null,
+      createdAt: null,
+      updatedAt: null,
+    });
+    const fin = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/finalize`,
+      headers: { ...authHeader(UID), ...idem("fin-stale") },
+      payload: { expectedIntakeRevision: srev, summaryReviewConfirmed: true },
+    });
+    expect(fin.statusCode).toBe(412);
+    // 要約を再確認すれば確定できる
+    const sum2 = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/summary`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: srev },
+    });
+    const srev2 = (sum2.json() as { intakeRevision: number }).intakeRevision;
+    const fin2 = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/finalize`,
+      headers: { ...authHeader(UID), ...idem("fin-ok") },
+      payload: { expectedIntakeRevision: srev2, summaryReviewConfirmed: true },
+    });
+    expect(fin2.statusCode).toBe(200);
+    await app.close();
+  });
+
   it("POST /summary on an expired draft archives it and returns 412", async () => {
     const { app, deps } = await setup();
     const { intakeId } = await createIntake(app);

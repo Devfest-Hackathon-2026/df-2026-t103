@@ -253,6 +253,8 @@ export async function summarizeIntake(
       revision: next,
       updatedAt: Timestamp.fromDate(deps.clock.now()),
       reviewedAt: Timestamp.fromDate(deps.clock.now()),
+      // 確認した要約内容の証跡。finalize 時の再構成と照合する。
+      reviewedSummaryHash: sha256Hex(canonicalJson(summary)),
     });
     return next;
   });
@@ -346,6 +348,16 @@ export async function finalizeIntake(
       if (doc.status !== "review") {
         throw ApiError.precondition(
           "確定する前にレビュー（要約の確認）が必要です。",
+        );
+      }
+      // 確認後に薬・既往歴・回答が変わった場合は確定内容がレビューと
+      // 乖離するため、再構成した要約とレビュー時のハッシュを照合する。
+      if (
+        doc.reviewedSummaryHash !==
+        sha256Hex(canonicalJson(summary))
+      ) {
+        throw ApiError.precondition(
+          "要約の確認後に内容が変更されました。再度要約を確認してください。",
         );
       }
       const now = Timestamp.fromDate(deps.clock.now());

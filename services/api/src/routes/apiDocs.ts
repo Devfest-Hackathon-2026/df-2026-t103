@@ -198,3 +198,114 @@ export const scanResultSchema = z.object({
   skipped: z.number(),
   results: z.array(jobRunResultSchema),
 });
+
+const questionOptionSchema = z.object({
+  code: z.string(),
+  label: z.string(),
+});
+
+export const questionDocSchema = z.object({
+  questionId: z.string(),
+  stepIndex: z.number(),
+  questionText: z.string(),
+  topic: z.string(),
+  options: z.array(questionOptionSchema),
+  generatedBy: z.string(),
+  modelVersion: z.string().nullable(),
+  questionRevision: z.number(),
+  status: z.string(),
+  createdAt: z.string().nullable(),
+});
+
+export const answerDocSchema = z.object({
+  answerId: z.string(),
+  questionId: z.string(),
+  questionRevision: z.number(),
+  stepIndex: z.number(),
+  selectedCodes: z.array(z.string()),
+  freeText: z.string().nullable(),
+  answerState: z.string(),
+  answeredAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+});
+
+export const intakeCreateResponseSchema = z.object({
+  intakeId: z.string(),
+  status: z.literal("draft"),
+  revision: z.number(),
+});
+
+export const intakeDetailResponseSchema = z.object({
+  intakeId: z.string(),
+  status: z.string(),
+  revision: z.number(),
+  initialSymptomText: z.string().nullable(),
+  bodyLocations: z.array(z.string()),
+  currentQuestionId: z.string().nullable(),
+  questionCount: z.number(),
+  safetyFlags: z.array(z.string()),
+  aiEnabledForThisIntake: z.boolean(),
+  questions: z.array(questionDocSchema),
+  answers: z.array(answerDocSchema),
+  createdAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+  finalizedAt: z.string().nullable(),
+});
+
+export const intakeStateResponseSchema = z.object({
+  intakeId: z.string(),
+  status: z.string(),
+  revision: z.number(),
+});
+
+export const nextQuestionResponseSchema = z.object({
+  intakeId: z.string(),
+  intakeRevision: z.number(),
+  question: questionDocSchema
+    .omit({ status: true, createdAt: true })
+    .nullable(),
+});
+
+export const answerSaveResponseSchema = z.object({
+  answerId: z.string(),
+  intakeRevision: z.number(),
+});
+
+const summarySectionSchema = z.object({
+  value: z.string().nullable(),
+  source: z.string().nullable(),
+  answerState: z.string(),
+});
+
+export const summaryResponseSchema = z.object({
+  intakeId: z.string(),
+  status: z.literal("review"),
+  intakeRevision: z.number(),
+  summary: z.object({
+    chiefComplaint: z.object({
+      value: z.string().nullable(),
+      source: z.string(),
+    }),
+    sections: z.record(z.string(), summarySectionSchema),
+    unansweredTopics: z.array(z.string()),
+    bodyLocations: z.array(z.string()),
+    medicationSnapshots: z.array(
+      z.object({
+        medicationId: z.string(),
+        displayName: z.string(),
+        confirmed: z.literal(true),
+      }),
+    ),
+    medicalHistorySnapshot: z.array(
+      z.object({ conditionText: z.string(), source: z.string() }),
+    ),
+  }),
+});
+
+export const finalizeResponseSchema = z.object({
+  intakeId: z.string(),
+  questionnaireId: z.string(),
+  questionnaireRevision: z.number(),
+  status: z.literal("finalized"),
+});

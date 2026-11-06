@@ -306,3 +306,33 @@ export const intakeAnswerPatchSchema = z
     message: "更新する項目を指定してください。",
   });
 export type IntakeAnswerPatchBody = z.infer<typeof intakeAnswerPatchSchema>;
+
+/** API-012 POST /intakes/{id}/next-question。 */
+export const intakeNextQuestionSchema = z
+  .object({
+    expectedIntakeRevision: z.number().int().min(1),
+  })
+  .strict();
+export type IntakeNextQuestionBody = z.infer<
+  typeof intakeNextQuestionSchema
+>;
+
+/** API-015 POST /intakes/{id}/summary（review 遷移を要求）。 */
+export const intakeSummarySchema = z
+  .object({
+    expectedIntakeRevision: z.number().int().min(1),
+  })
+  .strict();
+export type IntakeSummaryBody = z.infer<typeof intakeSummarySchema>;
+
+/**
+ * API-016 POST /intakes/{id}/finalize。
+ * VAL-007: 未レビュー確定は不可。summaryReviewConfirmed=true が必須。
+ */
+export const intakeFinalizeSchema = z
+  .object({
+    expectedIntakeRevision: z.number().int().min(1),
+    summaryReviewConfirmed: z.literal(true),
+  })
+  .strict();
+export type IntakeFinalizeBody = z.infer<typeof intakeFinalizeSchema>;

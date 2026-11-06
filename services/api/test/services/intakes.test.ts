@@ -217,7 +217,7 @@ describe("intake domain (#9)", () => {
     const detail = await getIntakeDetail(deps, { uid: UID, intakeId });
     expect(detail.questionCount).toBe(1);
     expect(detail.currentQuestionId).toBe(questionId);
-    expect(detail.questions[0]?.data.status).toBe("active");
+    expect(detail.questions[0]?.status).toBe("active");
 
     // fill up to the cap
     while (true) {
@@ -276,13 +276,13 @@ describe("intake domain (#9)", () => {
     const detail = await getIntakeDetail(deps, { uid: UID, intakeId });
     expect(detail.revision).toBe(r.intakeRevision);
     const ans = detail.answers.find((a) => a.answerId === q.questionId);
-    expect(ans?.data.freeText).toBe("昨日の夜から");
-    expect(ans?.data.selectedCodes).toEqual(["LT_WEEK"]);
-    expect(ans?.data.questionRevision).toBe(1);
+    expect(ans?.freeText).toBe("昨日の夜から");
+    expect(ans?.selectedCodes).toEqual(["LT_WEEK"]);
+    expect(ans?.questionRevision).toBe(1);
     const question = detail.questions.find(
       (x) => x.questionId === q.questionId,
     );
-    expect(question?.data.status).toBe("answered");
+    expect(question?.status).toBe("answered");
   });
 
   it("rejects answer codes not in the question options", async () => {
@@ -383,7 +383,7 @@ describe("intake domain (#9)", () => {
     const q2doc = detail.questions.find(
       (x) => x.questionId === q2.questionId,
     );
-    expect(q2doc?.data.status).toBe("invalidated");
+    expect(q2doc?.status).toBe("invalidated");
   });
 
   it("回答済みの後続質問も無効化し、その回答を除去する", async () => {
@@ -447,7 +447,7 @@ describe("intake domain (#9)", () => {
     });
     const detail = await getIntakeDetail(deps, { uid: UID, intakeId });
     const q2doc = detail.questions.find((x) => x.questionId === q2.questionId);
-    expect(q2doc?.data.status).toBe("invalidated");
+    expect(q2doc?.status).toBe("invalidated");
     // 旧分岐の回答は除去される（現在ブランチに残存しない）
     const a2doc = await deps.memDb
       .doc(`intakes/${intakeId}/answers/${q2.questionId}`)

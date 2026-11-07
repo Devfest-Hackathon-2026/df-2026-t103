@@ -1,5 +1,6 @@
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import type { Deps } from "../deps.js";
+import { listAuditSummaries } from "../repos/auditSummaries.js";
 import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import {
   audit,
@@ -74,6 +75,7 @@ export async function verifyFacility(
     await tx.create(recRef, {
       facilityId: params.facilityId,
       verifierUid: params.operatorUid,
+      decision: "verified",
       checks: params.checks,
       verificationRecordId: params.verificationRecordId,
       note: params.note ?? null,
@@ -89,7 +91,7 @@ export async function verifyFacility(
         outcome: "success",
         details: {
           from: fac.verificationStatus,
-          recordId: params.verificationRecordId,
+          recordRefHash: auditResourceHash(deps, params.verificationRecordId),
         },
         ...(params.requestId ? { requestId: params.requestId } : {}),
       }),
@@ -184,6 +186,23 @@ export async function listJobFailures(
     resourceIdHash: auditResourceHash(deps, params.type),
     outcome: "success",
     details: { type: params.type },
+    ...(params.requestId ? { requestId: params.requestId } : {}),
+  });
+  return page;
+}
+
+/** O-002: privileged metadata-only audit monitoring; the read is itself audited. */
+export async function listOperatorAuditEvents(
+  deps: Deps,
+  params: { operatorUid: string; limit: number; cursor?: string; requestId?: string },
+) {
+  const page = await listAuditSummaries(deps, params);
+  await audit(deps, {
+    actorType: "platform",
+    actorUidHash: auditUidHash(deps, params.operatorUid),
+    action: AUDIT_ACTIONS.AUDIT_EVENTS_LISTED,
+    resourceType: "auditSummary",
+    outcome: "success",
     ...(params.requestId ? { requestId: params.requestId } : {}),
   });
   return page;

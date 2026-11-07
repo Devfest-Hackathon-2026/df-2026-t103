@@ -93,3 +93,67 @@ flutter run -d web-server --web-hostname=localhost --web-port=5055 -t lib/demo_h
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5057 -t lib/demo_hospital_detail_preview.dart
 ```
+
+## 送信前の確認プレビュー
+
+送信前確認・個別同意（P-032）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5058 を開きます。確認後は Ctrl+C で停止します。送信先・送信する内容・提供目的を明示し、送信するお薬を個別に選べます。要配慮情報の第三者提供についての個別同意を取るまで送信できません。このプレビューは送信 API に接続せず、実際の送信（deliveries API）は未接続です。実在する施設や実際の処方情報は入力しないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5058 -t lib/demo_send_confirm_preview.dart
+```
+
+## 問診Q&Aプレビュー
+
+AI 質問 Q&A（P-013）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5059 を開きます。確認後は Ctrl+C で停止します。1 画面 1 問・原則 3 択に加え「わからない」「答えたくない」「前に戻る」「中断」を固定操作として表示します。質問は架空の表示例で医学的な判断は行いません。回答はメモリ上の下書きのみ、AI 連携・保存（next-question / answers API）は未接続です。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5059 -t lib/demo_ai_question_preview.dart
+```
+
+## 問診票の確認プレビュー
+
+問診票レビュー＋確定（P-014/P-015）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5060 を開きます。確認後は Ctrl+C で停止します。回答の要約を表示し、未回答は「未確認／未回答」、推定した内容は「（推定）」として区別します。医学的な断定は行いません。確定するまで送信できず、確定後は内容を変更できません。このプレビューは summary/finalize/送信 API に接続しません。実際の問診内容は入力しないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5060 -t lib/demo_review_preview.dart
+```
+
+## 処方箋の取り込みプレビュー
+
+処方箋撮影・選択（P-021）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5061 を開きます。確認後は Ctrl+C で停止します。処方箋に個人情報が含まれる旨を説明し、カメラ・写真・PDF の取り込み方法と対応形式を案内します。このプレビューは image_picker/file_picker・uploads API に接続せず、読み取り（P-022）も未接続です。実際の処方箋は取り込まないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5061 -t lib/demo_prescription_capture_preview.dart
+```
+
+## 退会フロープレビュー
+
+退会フロー（P-040/P-041）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5062 を開きます。確認後は Ctrl+C で停止します。申請前は影響・30日保留・取消期限を示し、理解チェックと二重確認を経て申請します（本番では再認証が必要）。申請後は通常機能の停止を示し、退会を取り消せます。このプレビューは deletion-request / cancel API に接続しません。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5062 -t lib/demo_withdrawal_preview.dart
+```
+
+## アカウントプレビュー
+
+アカウント（P-008）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5063 を開きます。確認後は Ctrl+C で停止します。プロフィール変更・認証設定（パスワード変更/再設定）・同意履歴・退会（P-040）への導線を集約し、機微操作の前に再認証を求める前提を案内します。このプレビューはプロフィール/consents/認証/退会 API に接続しません。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5063 -t lib/demo_account_preview.dart
+```
+
+## プロフィール登録プレビュー
+
+プロフィール登録（P-006）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5064 を開きます。確認後は Ctrl+C で停止します。氏名・カナ・生年月日・電話・郵便番号・住所の必須項目と任意の持病を分けて表示し、妥当性を検証します。入力は画面内に保持されますが、保存（PATCH /me/profile）は未接続です。実在する個人情報は入力しないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5064 -t lib/demo_profile_form_preview.dart
+```
+
+## 通知プレビュー
+
+通知受信表示（FCM・PHI非含有）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5065 を開きます。確認後は Ctrl+C で停止します。通知の受け取り許可の説明と拒否時の動作を示し、受信通知は症状やお薬などの個人情報を含まない一般文言のみで表示します。このプレビューは FCM・/me/devices API に接続せず、通知タップ遷移も未接続です。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5065 -t lib/demo_notifications_preview.dart
+```

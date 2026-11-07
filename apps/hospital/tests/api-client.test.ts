@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createApiClient, parseJobFailurePage } from "../lib/api-client";
+import { createApiClient, parseJobFailurePage, parseAuditSummaryPage } from "../lib/api-client";
 import { validateClientConfig } from "../lib/client-config";
 
 const local = { emulator: "true", projectId: "demo-mmr-dev", apiBaseUrl: "http://localhost:8080/v1", authEmulatorUrl: "http://localhost:9099" };
@@ -20,6 +20,9 @@ test("job page rejects malformed data and removes unknown private fields", () =>
 test("production requires both credentials before issuing a network request", async () => {
   const api = createApiClient({ apiBaseUrl: "https://invalid.example/v1", emulator: false, idToken: async () => "id-token", appCheckToken: async () => null });
   await assert.rejects(api.jobFailures("ocr"), { status: 401 });
+  await assert.rejects(api.auditEvents(), { status: 401 });
+  await assert.rejects(api.reviewFacilities(), { status: 401 });
+  await assert.rejects(api.verificationRecords("facility-1"), { status: 401 });
   await assert.rejects(api.disableFacility("synthetic-facility", "drill"), { status: 401 });
 });
 
@@ -60,4 +63,10 @@ test("emergency stop reports fresh-auth failure without disclosing server error 
     return true;
   });
   assert.equal(calls, 1);
+});
+
+test("audit summary strips private fields and rejects malformed operational metadata", () => {
+  const item = { eventId: `ae_${"a".repeat(64)}`, action: "STAFF_MEMBERSHIP_UPDATED", actorType: "staff", occurredAt: "2026-01-01T00:00:00.000Z", decision: null, outcome: "success" };
+  assert.deepEqual(parseAuditSummaryPage({ items: [{ ...item, details: "PRIVATE", actorUidHash: "PRIVATE", facilityId: "PRIVATE" }], nextCursor: null }), { items: [item], nextCursor: null });
+  for (const patch of [{ actorType: "PRIVATE" }, { outcome: "PRIVATE" }, { eventId: "raw-id" }, { decision: "PRIVATE" }, { occurredAt: "bad date" }, { action: "<script>" }]) assert.throws(() => parseAuditSummaryPage({ items: [{ ...item, ...patch }], nextCursor: null }));
 });

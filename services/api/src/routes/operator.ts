@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { Deps } from "../deps.js";
+import { AUDIT_ACTIONS, SUMMARY_ACTORS, SUMMARY_OUTCOMES } from "../domain/auditEvents.js";
 import {
   requireFreshAuth,
   requirePlatformSecurityAdmin,
@@ -9,8 +10,10 @@ import {
 import {
   disableFacilityReceiving,
   listJobFailures,
+  listOperatorAuditEvents,
   verifyFacility,
 } from "../services/operator.js";
+import { registerOperatorReviewRoutes } from "./operatorReviews.js";
 import { errors } from "./apiDocs.js";
 
 const facilityParams = z.object({
@@ -58,13 +61,54 @@ export function registerOperatorRoutes(
   app: FastifyInstance,
   deps: Deps,
 ): void {
+  registerOperatorReviewRoutes(app, deps);
   const typed = app.withTypeProvider<ZodTypeProvider>();
+
+  typed.get(
+    "/v1/operator/audit-events",
+    {
+      config: { access: { tier: "authenticated" } },
+      onRequest: async (_req, reply) => {
+        void reply.header("Cache-Control", "private, no-store");
+      },
+      schema: {
+        querystring: jobFailuresQuery.omit({ type: true }).strict(),
+        response: {
+          200: z.object({
+            items: z.array(z.object({
+              eventId: z.string().regex(/^ae_[0-9a-f]{64}$/),
+              action: z.enum([...Object.values(AUDIT_ACTIONS), "UNKNOWN"]),
+              actorType: z.enum(SUMMARY_ACTORS),
+              occurredAt: z.string().nullable(),
+              decision: z.enum(["allow", "deny"]).nullable(),
+              outcome: z.enum(SUMMARY_OUTCOMES).nullable(),
+            })),
+            nextCursor: z.string().nullable(),
+          }),
+          ...errors(400, 401, 403, 429),
+        },
+        tags: ["operator"],
+        summary: "監査イベントの非識別サマリー（O-002）",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (req) => {
+      await requirePlatformSecurityAdmin(deps, req);
+      return listOperatorAuditEvents(deps, {
+        operatorUid: req.requestContext.auth!.uid,
+        limit: req.query.limit,
+        ...(req.query.cursor ? { cursor: req.query.cursor } : {}),
+        requestId: req.id,
+      });
+    },
+  );
 
   // API-036 施設本人確認承認（platform_security_admin + 再認証）
   typed.post(
     "/v1/operator/facilities/:facilityId/verify",
     {
       config: { access: { tier: "authenticated" } },
+      onRequest: async (_req, reply) => { void reply.header("Cache-Control", "private, no-store"); },
       schema: {
         params: facilityParams,
         body: verifyBody,

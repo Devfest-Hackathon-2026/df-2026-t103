@@ -22,6 +22,8 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
   const email = `${uid}@example.test`;
   const password = "Synthetic-only-connection-123!";
   const membership = firebase.firestore.doc(`facilityMemberships/${uid}`);
+  const browserStaffMembership = firebase.firestore.doc(`facilityMemberships/${uid}-browser-staff`);
+  const browserOtherMembership = firebase.firestore.doc(`facilityMemberships/${uid}-browser-other`);
   const job = firebase.firestore.doc(`ocrJobs/${uid}`);
   const auditFixtures = Array.from({ length: 25 }, (_, i) => firebase.firestore.doc(`auditEvents/${uid}-${i}`));
   const facility = firebase.firestore.doc(`facilities/${uid}`);
@@ -65,6 +67,10 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
     await assert.rejects(api.auditEvents(), { status: 403 });
     await assert.rejects(api.disableFacility(uid, "Synthetic emergency drill"), { status: 403 });
     await membership.set({ userUid: uid, facilityId: "synthetic-facility", role: "platform_security_admin", status: "active" });
+    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") {
+      await browserStaffMembership.set({ userUid: uid, facilityId: uid, role: "facility_admin", status: "active" });
+      await browserOtherMembership.set({ userUid: uid, facilityId: `${uid}-reject`, role: "facility_staff", status: "active" });
+    }
     await job.set({ status: "failed", errorCode: "engine_unavailable", attempt: 2, updatedAt: new Date(), patientUid: "SYNTHETIC_PRIVATE_VALUE" });
     const page = await api.jobFailures("ocr");
     assert.ok(page.items.some((item) => item.failureCode === "engine_unavailable" && item.attempts === 2));
@@ -114,7 +120,7 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
       deliveredBeforeStop = (await firebase.firestore.doc(`deliveries/${deliveredId}`).get()).data();
       assert.equal((deliveredBeforeStop as { status: string }).status, "delivered");
     };
-    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver });
+    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, staffIdToken: await auth.currentUser!.getIdToken(), assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver });
     else {
       await api.reviewFacility(uid, "verified", { checks: allChecks, verificationRecordId: "SYNTHETIC_REFERENCE" });
       await api.reviewFacility(`${uid}-reject`, "rejected", { checks: { ...allChecks, applicant: false }, verificationRecordId: "SYNTHETIC_REFERENCE", reason: "SYNTHETIC_REVIEW_PRIVATE_VALUE" });
@@ -183,7 +189,7 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
     await Promise.all([patientAccount.delete(), revision.delete(), questionnaire.delete(), ...consentFixtures.map((ref) => ref.delete()), firebase.auth.deleteUser(patientUid).catch(() => {})]);
     if (previousLegalConfig.exists) await legalConfig.set(previousLegalConfig.data()!);
     else await legalConfig.delete();
-    await Promise.all([membership.delete(), job.delete(), facility.delete(), rejectedFacility.delete(), ...auditFixtures.map((ref) => ref.delete()), firebase.auth.deleteUser(uid).catch(() => {})]);
+    await Promise.all([membership.delete(), browserStaffMembership.delete(), browserOtherMembership.delete(), job.delete(), facility.delete(), rejectedFacility.delete(), ...auditFixtures.map((ref) => ref.delete()), firebase.auth.deleteUser(uid).catch(() => {})]);
     await deleteApp(app);
     await deleteApp(patientApp);
     await firebase.firestore.terminate();

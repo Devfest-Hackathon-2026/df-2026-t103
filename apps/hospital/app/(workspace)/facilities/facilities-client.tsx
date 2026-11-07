@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { HxButton } from "../../../components/design-system/hx-button";
 import { HxEmptyState } from "../../../components/design-system/hx-feedback";
 import { HxIcon } from "../../../components/design-system/hx-icon";
@@ -25,9 +26,10 @@ function verificationOf(facility: { verificationStatus: string }) {
 
 /**
  * H-002 施設選択。選択は /api/facility-context がメンバーシップ照合後に
- * Cookie へ書き込み、切替時は施設別の画面状態を引き継がないよう全面遷移する。
+ * Cookie へ書き込み、認証を保持したままサーバの施設コンテキストを更新する。
  */
 export function FacilitiesClient() {
+  const router = useRouter();
   const memberships = useMemberships();
   const selected = useSelectedFacility();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -55,9 +57,10 @@ export function FacilitiesClient() {
         setMessage("施設を選択できませんでした。時間をおいて再試行してください。");
         return;
       }
-      // 施設別状態（一覧・詳細・検索条件）を引き継がないため全面遷移する
-      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 施設コンテキストの完全リセットが目的
-      location.assign("/deliveries");
+      // 全面遷移は Firebase のインメモリ認証を失う。サーバの Cookie を再読込し、
+      // layout の施設キー変更で一覧・詳細・検索条件を再生成する。
+      router.replace("/deliveries");
+      router.refresh();
     } catch {
       setMessage("通信できませんでした。接続状態を確認してください。");
     } finally {

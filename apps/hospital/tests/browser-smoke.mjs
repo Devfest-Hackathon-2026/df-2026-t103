@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 // Optional real-browser extension of test:api. Uses the real UI + SDK + BE;
 // no page routes, API responses, or Firebase services are intercepted.
-export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, assertStillPending, assertStillReceiving }) {
+export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, staffIdToken, assertStillPending, assertStillReceiving }) {
   const profile = await mkdtemp(join(tmpdir(), "hospital-browser-"));
   const origin = "http://127.0.0.1:33090";
   const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", "33090"], {
@@ -49,7 +49,7 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       const alert = await evaluate("document.querySelector('[role=alert]')?.textContent || ''");
-      throw new Error(`Browser UI did not reach expected state: ${alert}`);
+      throw new Error(`Browser UI did not reach expected state at ${await evaluate("location.pathname")}: ${alert}`);
     };
     await send("Page.enable", {}, sessionId);
     await send("Runtime.enable", {}, sessionId);
@@ -92,6 +92,31 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     await assertStillReceiving();
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='この施設の受信を停止する').click()");
     await poll("[...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('受信停止を確認しました'))");
+    // Same real signed-in identity also has a facility membership. Establish the
+    // existing verified Cookie API, then follow actual Next links. This tests
+    // post-auth navigation; it does not claim to exercise staff MFA enrollment.
+    assert.equal(await evaluate(`(async()=> (await fetch('/api/session', {method:'POST', headers:{'content-type':'application/json','x-hx-client':'portal'}, body:JSON.stringify({idToken:${JSON.stringify(staffIdToken)}})})).status)()`), 200);
+    await evaluate("document.querySelector('a[href=\"/\"]').click()");
+    await poll("location.pathname==='/' && !!document.querySelector('a[href=\"/login\"]')");
+    await evaluate("document.querySelector('a[href=\"/login\"]').click()");
+    await poll("location.pathname==='/facilities' && [...document.querySelectorAll('button')].some(b=>b.textContent==='この施設を選択')");
+    await evaluate("window.staffNavigationMarker=true");
+    await evaluate("[...document.querySelectorAll('li')].find(e=>e.innerText.includes('役割：施設管理者')).querySelector('button').click()");
+    await poll("location.pathname==='/deliveries' && !!document.querySelector('tbody tr a[href^=\"/deliveries/\"]')");
+    assert.equal(await evaluate("window.staffNavigationMarker"), true, "Facility selection must preserve the signed-in document");
+    await evaluate("const filter=document.querySelector('#delivery-status'); filter.value='acknowledged'; filter.dispatchEvent(new Event('change',{bubbles:true}))");
+    await poll("document.body.innerText.includes('条件に一致する問診がありません')");
+    await evaluate("document.querySelector('a[href=\"/facilities\"]').click()");
+    await poll("location.pathname==='/facilities' && [...document.querySelectorAll('li')].some(e=>e.innerText.includes('役割：受付担当') && e.querySelector('button'))");
+    await evaluate("[...document.querySelectorAll('li')].find(e=>e.innerText.includes('役割：受付担当') && e.querySelector('button')).querySelector('button').click()");
+    await poll("location.pathname==='/deliveries' && document.body.innerText.includes('受信した問診はまだありません')");
+    assert.equal(await evaluate("document.querySelector('#delivery-status').value"), "", "Facility switch must reset the previous filter");
+    assert.equal(await evaluate("!!document.querySelector('a[href=\"/staff\"]')"), false, "Staff facility must not inherit the admin navigation");
+    await evaluate("document.querySelector('a[href=\"/facilities\"]').click()");
+    await poll("location.pathname==='/facilities' && [...document.querySelectorAll('li')].some(e=>e.innerText.includes('役割：施設管理者') && e.querySelector('button'))");
+    await evaluate("[...document.querySelectorAll('li')].find(e=>e.innerText.includes('役割：施設管理者') && e.querySelector('button')).querySelector('button').click()");
+    await poll("location.pathname==='/deliveries' && !!document.querySelector('tbody tr a[href^=\"/deliveries/\"]')");
+    assert.equal(await evaluate("window.staffNavigationMarker"), true);
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('ログアウト')).click()");
     await poll("!!document.querySelector('input[name=email]') && !document.querySelector('tbody') && !document.querySelector('[data-audit-summary]')");
     assert.deepEqual(await evaluate("window.cspViolations"), [], "Real UI/Auth/BE workflow must not violate CSP");

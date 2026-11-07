@@ -18,6 +18,8 @@ Node.js 22 以降で `npm ci`、`npm run dev` を実行し、http://localhost:30
 
 ## 職員認証・セッション（H-001）
 
+施設選択・切替ではNextの画面遷移とサーバコンテキスト更新を使い、Firebaseのメモリ内認証を保持します。施設IDが変わると業務シェルを再生成し、前施設の一覧・検索条件・管理者ナビを引き継ぎません。
+
 - `/login` で Firebase Auth（メール/パスワード）にサインインし、MFA 未登録なら TOTP 登録、登録済みなら TOTP 検証を経て、`POST /api/session` が実 API で credential を検証し（本番ではMFAクレームも確認）、HttpOnly Cookie（本番 `__Host-mmr-session`、SameSite=Strict、最長55分）を発行します。失敗してもアカウントの存在有無を示さない応答にします。
 - 業務画面は `app/(workspace)/layout.tsx` がセッション Cookie と `GET /v1/me/facility-memberships` で検証します。401/403 なら `GET /api/session/logout` で Cookie を消して `/login` へ、5xx・接続失敗ではセッションを維持したまま再試行可能なエラー画面を出します。`proxy.ts` は Cookie の有無だけの楽観的リダイレクトで、認可の正本は API 側です。
 - クライアントの API 呼び出しは `lib/hx-api.ts` 経由で `/api/hx/*` のみを使い、サーバ側が Bearer + App Check を付けて転送します。`/api/session` と `/api/hx/*` は必須カスタムヘッダー `x-hx-client: portal`・`Sec-Fetch-Site`/`Origin` の同一オリジン確認で CSRF を防ぎます。
@@ -159,6 +161,7 @@ macOSでChromeをインストールしている場合は、同じコマンドに
 追加すると、実画面でのログイン・実BEからの一覧/監査表示・施設審査の承認/却下・確認前の未変更・施設受信停止・ログアウトと、CSP違反が発生しないことも確認します。
 Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータルはloopback:33090で起動し、
 試験後にChromeの一時プロファイル・起動プロセスを終了します。このブラウザ試験は任意実行です。
+同じ合成ユーザーに運営権限と施設所属を与え、実SDKでのサインインと既存セッションAPIのトークン検証後に、職員の施設選択→実受信一覧→別施設への切替→元の施設への復帰も検証します。施設切替時の絞り込みリセットと管理者ナビの分離を確認し、職員ログインUIのTOTP登録・検証を受入済みとは扱いません。
 
 参照: [App Check custom backend](https://firebase.google.com/docs/app-check/web/custom-resource)、
 [TOTP MFA](https://firebase.google.com/docs/auth/web/totp-mfa)。

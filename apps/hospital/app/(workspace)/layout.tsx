@@ -105,7 +105,7 @@ export default async function WorkspaceLayout({ children }: { children: React.Re
       : null;
 
   return (
-    <WorkspaceShell memberships={memberships.items} selectedFacility={selected}>
+    <WorkspaceShell key={selected?.facilityId ?? "unselected"} memberships={memberships.items} selectedFacility={selected}>
       {children}
     </WorkspaceShell>
   );

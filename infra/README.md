@@ -201,3 +201,7 @@ gcloud run services add-iam-policy-binding worker \
 # （datastore.user / cloudtasks.enqueuer / secretmanager.secretAccessor /
 #   バケット単位 storage.objectAdmin）。上記「ランタイム SA」節と同手順。
 ```
+
+## 監査ログの運用
+
+限定viewでの検索・最小限の抽出・保持設定の確認と職務分離の受入は [監査運用手順](audit/README.md) を参照してください。

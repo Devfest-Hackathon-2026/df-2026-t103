@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 // Optional real-browser extension of test:api. Uses the real UI + SDK + BE;
 // no page routes, API responses, or Firebase services are intercepted.
-export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, assertStillPending, assertStillReceiving, assertStaffSession }) {
+export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, assertStillPending, assertStillReceiving }) {
   const profile = await mkdtemp(join(tmpdir(), "hospital-browser-"));
   const origin = "http://127.0.0.1:33090";
   const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", "33090"], {
@@ -102,7 +102,6 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     await poll("!!document.querySelector('#hx-login-email') && !!document.querySelector('button[type=submit]:not(:disabled)')");
     assert.equal(await evaluate("document.querySelector('form').method"), "post");
     assert.equal(await evaluate("location.search"), "");
-    await assertStaffSession(origin);
   } finally {
     socket?.close();
     for (const process of [chrome, next]) {

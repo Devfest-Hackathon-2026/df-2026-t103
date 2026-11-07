@@ -14,7 +14,7 @@ import { browserSmoke } from "./browser-smoke.mjs";
 import { hospitalTenantSmoke } from "./hospital-tenant-smoke";
 import { staffSessionSmoke } from "./staff-session-smoke";
 
-test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)", { timeout: 90000 }, async () => {
+test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify + Next (no API stub)", { timeout: 90000 }, async () => {
   assert.equal(process.env.FIREBASE_PROJECT_ID, "demo-mmr-dev");
   for (const key of ["FIREBASE_AUTH_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST", "FIREBASE_STORAGE_EMULATOR_HOST", "FIREBASE_DATABASE_EMULATOR_HOST"]) assert.match(process.env[key] ?? "", /^127\.0\.0\.1:\d+$/);
   const firebase = initFirebase(loadConfig());
@@ -114,9 +114,7 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
       deliveredBeforeStop = (await firebase.firestore.doc(`deliveries/${deliveredId}`).get()).data();
       assert.equal((deliveredBeforeStop as { status: string }).status, "delivered");
     };
-    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver,
-      assertStaffSession: (origin: string) => staffSessionSmoke({ firebase, origin, facilityId: uid, otherFacilityId: `${uid}-reject`, deliveryId: deliveredId!, hmacSecret: loadConfig().hmacSecret }),
-    });
+    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver });
     else {
       await api.reviewFacility(uid, "verified", { checks: allChecks, verificationRecordId: "SYNTHETIC_REFERENCE" });
       await api.reviewFacility(`${uid}-reject`, "rejected", { checks: { ...allChecks, applicant: false }, verificationRecordId: "SYNTHETIC_REFERENCE", reason: "SYNTHETIC_REVIEW_PRIVATE_VALUE" });
@@ -152,6 +150,7 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
     assert.equal(patientStatus.status, 200);
     assert.equal((await patientStatus.json() as { status: string }).status, "delivered");
     assert.equal((await firebase.firestore.collection("deliveries").where("senderUid", "==", patientUid).get()).size, 1);
+    await staffSessionSmoke({ firebase, apiBaseUrl: `http://127.0.0.1:${port}/v1`, facilityId: uid, otherFacilityId: `${uid}-reject`, deliveryId: deliveredId!, hmacSecret: loadConfig().hmacSecret });
     await hospitalTenantSmoke({ firebase, apiBaseUrl: `http://127.0.0.1:${port}/v1`, facilityId: uid, otherFacilityId: `${uid}-reject`, deliveryId: deliveredId!, hmacSecret: loadConfig().hmacSecret });
     await api.disableFacility(uid, "Synthetic repeat");
     assert.deepEqual((await facility.get()).data(), stopped, "Repeated stop must be idempotent");

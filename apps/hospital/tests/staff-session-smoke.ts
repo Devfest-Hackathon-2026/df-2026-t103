@@ -1,11 +1,46 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { initializeApp, deleteApp } from "firebase/app";
 import { initializeAuth, connectAuthEmulator, signInWithEmailAndPassword, inMemoryPersistence } from "firebase/auth";
 import type { FirebaseHandles } from "../../../services/api/src/firebase";
 import { hmacSha256Hex } from "../../../services/api/src/lib/hash";
 
+/** Runs in ordinary test:api/CI, without requiring Chrome or a running portal. */
+export async function staffSessionSmoke({ apiBaseUrl, ...fixtures }: {
+  firebase: FirebaseHandles; apiBaseUrl: string; facilityId: string;
+  otherFacilityId: string; deliveryId: string; hmacSecret: string;
+}) {
+  assert.equal(process.env.FIREBASE_PROJECT_ID, "demo-mmr-dev");
+  assert.match(apiBaseUrl, /^http:\/\/127\.0\.0\.1:\d+\/v1$/);
+  const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST ?? "";
+  assert.match(authHost, /^127\.0\.0\.1:\d+$/);
+  const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", "0"], {
+    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1", NODE_ENV: "development", NEXT_PUBLIC_USE_FIREBASE_EMULATOR: "true", NEXT_PUBLIC_FIREBASE_PROJECT_ID: "demo-mmr-dev", NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL: `http://${authHost}`, NEXT_PUBLIC_API_BASE_URL: apiBaseUrl },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  try {
+    const origin = await new Promise<string>((resolve, reject) => {
+      let output = "";
+      const timer = setTimeout(() => reject(new Error("Staff portal startup timed out")), 15000);
+      next.once("error", () => { clearTimeout(timer); reject(new Error("Staff portal could not start")); });
+      next.once("exit", () => { clearTimeout(timer); reject(new Error("Staff portal exited before startup")); });
+      const read = (chunk: Buffer) => {
+        output += chunk.toString();
+        const address = output.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
+        if (address && output.includes("Ready in")) { clearTimeout(timer); resolve(address); }
+      };
+      next.stdout.on("data", read);
+      next.stderr.on("data", read);
+    });
+    await verifyStaffSession({ ...fixtures, origin });
+  } finally {
+    if (next.exitCode === null) { const exited = once(next, "exit"); next.kill("SIGTERM"); await exited; }
+  }
+}
+
 /** Real Next HTTP + Auth/Firestore/API. This does not exercise the MFA login UI. */
-export async function staffSessionSmoke({ firebase, origin, facilityId, otherFacilityId, deliveryId, hmacSecret }: {
+async function verifyStaffSession({ firebase, origin, facilityId, otherFacilityId, deliveryId, hmacSecret }: {
   firebase: FirebaseHandles; origin: string; facilityId: string;
   otherFacilityId: string; deliveryId: string; hmacSecret: string;
 }) {

@@ -38,7 +38,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Real BE connection (Auth + Firestore Emulator)
+      - name: Real BE and staff Cookie/BFF (Auth + Firestore + Next HTTP)
         env:
           FIREBASE_PROJECT_ID: demo-mmr-dev
           FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:19099

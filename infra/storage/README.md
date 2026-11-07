@@ -1,7 +1,7 @@
 # Storage / RTDB の単一プロジェクト設定（Issue #36）
 
 対象は `project-7efcc4c4-6c86-490c-ba5` のみ。
-このディレクトリは設定**案**を生成する。クラウド適用は行わない。
+render_config.py は設定JSONの生成専用。2026-11-07のPO委任に基づく初期設定は下記。
 既存 `.firebaserc` の別project/Hosting targetを流用しない。
 
 ## 適用前に確定する値
@@ -133,3 +133,18 @@ pendingStorageObjectsへ残す（`services/api/src/workers/deletionJob.ts`）。
 ローカル回帰テストは実SDKからloopback HTTP fixtureへ送るDELETEを検証し、
 GCS/実患者資産は使わない。Emulatorが世代条件を無視する可能性があるため、
 実GCSでの世代競合試験は上記受入確認に引き続き必要。
+
+## 2026-11-07 初期運用値（POから選定・反映を委任）
+
+- origin: `https://project-7efcc4c4-6c86-490c-ba5.web.app`。Firebase Hosting APIで実在確認したdefault site。カスタムドメインを推測しない。
+- bucket: `project-7efcc4c4-6c86-490c-ba5-patient-uploads`（東京、画像専用）。
+- API upload TTL: 既存値30日を維持し、TerraformのAPI/workerへ明示。
+- lifecycle: `patient-uploads/` のみ31日で削除対象。期限内アップロードを消さない1日の余裕。法定保存期間の主張ではない。
+- soft delete: 7日。通常read不能な復旧用コピーが残るため即時完全消去とは案内しない。lifecycle処理は非同期であり38日を厳密な消去期限と保証しない。
+- versioning無効、retention lock/holdなし、public access prevention enforced、uniform access、force_destroy=false、prevent_destroy=true。
+- 別の既存bucketを変数で指定した場合は新規bucketリソースを作成せず、そのbucketのCORS/lifecycleも自動変更しない。
+
+Cloud Runサービスは読み取り時点で0件のため、実API発行URLによる受入試験はデプロイ後に行う。
+初回にCLIで作成したbucketをTerraformへ移管する場合は、共有backend初期化後に
+`terraform import -var='project_id=project-7efcc4c4-6c86-490c-ba5' 'google_storage_bucket.patient_uploads[0]' project-7efcc4c4-6c86-490c-ba5-patient-uploads`
+で取り込み、planで再作成/削除がないことを確認する。

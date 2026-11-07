@@ -1,5 +1,5 @@
 locals {
-  storage_bucket = var.storage_bucket != "" ? var.storage_bucket : "${var.project_id}.appspot.com"
+  storage_bucket = var.storage_bucket != "" ? var.storage_bucket : google_storage_bucket.patient_uploads[0].name
 
   # ランタイム SA（Cloud Run が assume）
   api_sa_email    = google_service_account.api_run.email

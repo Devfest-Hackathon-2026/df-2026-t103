@@ -17,7 +17,7 @@ variable "api_image" {
 
 variable "storage_bucket" {
   type        = string
-  description = "アプリ用 Storage バケット名。空ならデフォルト（<project>.appspot.com）を使う。"
+  description = "アプリ用 Storage バケット名。空ならTerraform管理の画像専用bucketを新規作成する。"
   default     = ""
 }
 

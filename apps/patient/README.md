@@ -101,3 +101,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5057 -t lib/demo_h
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5058 -t lib/demo_send_confirm_preview.dart
 ```
+
+## 問診Q&Aプレビュー
+
+AI 質問 Q&A（P-013）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5059 を開きます。確認後は Ctrl+C で停止します。1 画面 1 問・原則 3 択に加え「わからない」「答えたくない」「前に戻る」「中断」を固定操作として表示します。質問は架空の表示例で医学的な判断は行いません。回答はメモリ上の下書きのみ、AI 連携・保存（next-question / answers API）は未接続です。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5059 -t lib/demo_ai_question_preview.dart
+```

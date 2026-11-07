@@ -125,3 +125,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5060 -t lib/demo_r
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5061 -t lib/demo_prescription_capture_preview.dart
 ```
+
+## アカウントプレビュー
+
+アカウント（P-008）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5063 を開きます。確認後は Ctrl+C で停止します。プロフィール変更・認証設定（パスワード変更/再設定）・同意履歴・退会（P-040）への導線を集約し、機微操作の前に再認証を求める前提を案内します。このプレビューはプロフィール/consents/認証/退会 API に接続しません。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5063 -t lib/demo_account_preview.dart
+```

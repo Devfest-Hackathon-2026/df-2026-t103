@@ -499,6 +499,125 @@ describe("registerEmail", () => {
     expect(operations.docs[0]!.data().uid).not.toBe(uid);
   });
 
+  it("有効化に失敗した未完登録は別キーでも同一内容なら孤児を引き継いで登録できる", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+
+    // 1件目: 同意書コミット後のAuth有効化で失敗 → disabled 孤児 + onboarding_pending account
+    deps.fakeAuthAdmin.failOn.add("update");
+    await expect(
+      registerEmail(deps, {
+        body: validBody,
+        idempotencyKey: "stuck-key-a",
+        requestId: "stuck-req-a",
+      }),
+    ).rejects.toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
+    deps.fakeAuthAdmin.failOn.delete("update");
+
+    const orphanUid = [...deps.fakeAuthAdmin.users.keys()][0]!;
+    expect(deps.fakeAuthAdmin.users.get(orphanUid)!.disabled).toBe(true);
+
+    // 別キー・同一本文の再試行は未完登録を引き継いで成功する
+    const r = await registerEmail(deps, {
+      body: validBody,
+      idempotencyKey: "retry-key-b",
+      requestId: "retry-req-b",
+    });
+    expect(r.registrationStatus).toBe("created");
+
+    // 孤児uidが引き継がれ有効化され、account/同意は重複しない
+    expect(deps.fakeAuthAdmin.users.size).toBe(1);
+    expect(deps.fakeAuthAdmin.users.get(orphanUid)!.disabled).toBe(false);
+    expect((await deps.db.collection("accounts").get()).size).toBe(1);
+    const consents = await deps.db
+      .collection("legalConsents")
+      .where("subjectUid", "==", orphanUid)
+      .get();
+    expect(consents.size).toBe(DEV_LEGAL_DOCUMENTS.requiredConsents.length);
+    const operations = await deps.db.collection("registrationOperations").get();
+    const adopted = operations.docs
+      .map((d) => d.data())
+      .find((op) => op.uid === orphanUid && op.status === "enabled");
+    expect(adopted).toBeDefined();
+    const audits = await deps.db.collection("auditEvents").get();
+    expect(
+      audits.docs.some((d) => d.data().action === "REGISTRATION_REPAIRED"),
+    ).toBe(true);
+  });
+
+  it("別キーでも本文が異なれば未完登録の孤児を引き継がず409", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    deps.fakeAuthAdmin.failOn.add("update");
+    await expect(
+      registerEmail(deps, {
+        body: validBody,
+        idempotencyKey: "stuck-key-a",
+        requestId: "stuck-req-a",
+      }),
+    ).rejects.toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
+    deps.fakeAuthAdmin.failOn.delete("update");
+
+    const orphanUid = [...deps.fakeAuthAdmin.users.keys()][0]!;
+
+    // 別キー・異なる本文（パスワード違い）は他人の未完登録として引き継がない
+    await expect(
+      registerEmail(deps, {
+        body: { ...validBody, password: "wxyz9876" },
+        idempotencyKey: "retry-key-b",
+        requestId: "retry-req-b",
+      }),
+    ).rejects.toMatchObject({ code: "REGISTRATION_CONFLICT" });
+
+    // 孤児は変更されず、新規台帳も孤児uidへ付け替えられない
+    expect(deps.fakeAuthAdmin.users.get(orphanUid)!.disabled).toBe(true);
+    const operations = await deps.db.collection("registrationOperations").get();
+    const orphanOps = operations.docs
+      .map((d) => d.data())
+      .filter((op) => op.uid === orphanUid);
+    expect(orphanOps).toHaveLength(1);
+    expect(orphanOps[0]!.status).toBe("consents_committed");
+    const audits = await deps.db.collection("auditEvents").get();
+    expect(
+      audits.docs.some((d) => d.data().action === "REGISTRATION_REPAIRED"),
+    ).toBe(false);
+  });
+
+  it("引き継ぎ後に元キーでの再試行も同一アカウントに収束する", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    deps.fakeAuthAdmin.failOn.add("update");
+    await expect(
+      registerEmail(deps, {
+        body: validBody,
+        idempotencyKey: "stuck-key-a",
+        requestId: "stuck-req-a",
+      }),
+    ).rejects.toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
+    deps.fakeAuthAdmin.failOn.delete("update");
+
+    await registerEmail(deps, {
+      body: validBody,
+      idempotencyKey: "retry-key-b",
+      requestId: "retry-req-b",
+    });
+
+    const orphanUid = [...deps.fakeAuthAdmin.users.keys()][0]!;
+    const r = await registerEmail(deps, {
+      body: validBody,
+      idempotencyKey: "stuck-key-a",
+      requestId: "retry-req-a2",
+    });
+    expect(r.registrationStatus).toBe("created");
+    expect(deps.fakeAuthAdmin.users.size).toBe(1);
+    expect((await deps.db.collection("accounts").get()).size).toBe(1);
+    const operations = await deps.db.collection("registrationOperations").get();
+    const ownerOp = operations.docs
+      .map((d) => d.data())
+      .find((op) => op.uid === orphanUid);
+    expect(ownerOp).toBeDefined();
+  });
+
   it("同一キー+異なる本文は 409 REGISTRATION_CONFLICT", async () => {
     const deps = makeTestDeps();
     await seedLegalDocuments(deps);

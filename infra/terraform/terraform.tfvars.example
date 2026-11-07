@@ -1,0 +1,9 @@
+# 実値は owner が設定（コミット禁止の terraform.tfvars にコピーして使う）
+project_id = "project-7efcc4c4-6c86-490c-ba5"
+region     = "asia-northeast1"
+
+# CD が差し替えるが初回 apply 用の初期イメージ
+# api_image = "asia-northeast1-docker.pkg.dev/project-7efcc4c4-6c86-490c-ba5/api/api:latest"
+
+# 病院ポータルの許可 origin
+# cors_origins = "https://hospital.moshimoshimonshin.com"

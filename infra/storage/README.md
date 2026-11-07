@@ -166,3 +166,15 @@ Cloud Runへ環境変数を反映してもApp CheckやFirebase Authの要件は�
 Cloud Runの予約変数 `PORT` はTerraformから指定しない。
 [Cloud Run環境変数](https://docs.cloud.google.com/run/docs/configuring/services/environment-variables)と
 [RTDB Admin SDKの接続先](https://firebase.google.com/docs/database/admin/start)を参照。
+
+## ブラウザからAPIへの入口
+
+2026-11-07のPO明示承認により、Cloud Runのapiサービスだけに
+`allUsers / roles/run.invoker` を付与する。ブラウザのOPTIONSとFirebase ID tokenを
+アプリまで到達させる設定であり、業務APIのFirebase Auth・App Check・同意/状態/認可、
+内部jobのtoken照合は維持する。workerのprivate ingress/IAM、Storageの非公開設定は
+変更しない。Cloud Runの入口403をアプリの認証拒否の証拠として扱わない。
+
+検証はGoogle IAM tokenなしで、許可originのOPTIONSと不許可originの拒否、
+Firebase tokenなしPOST、App Checkなしpublic API、内部tokenなしjobの拒否を確認する。
+ロールバックはapiサービスの `allUsers / roles/run.invoker` memberだけを削除する。

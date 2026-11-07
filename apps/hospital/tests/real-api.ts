@@ -13,6 +13,7 @@ import { createApiClient } from "../lib/api-client";
 import { browserSmoke } from "./browser-smoke.mjs";
 import { hospitalTenantSmoke } from "./hospital-tenant-smoke";
 import { staffSessionSmoke } from "./staff-session-smoke";
+import { hmacSha256Hex } from "../../../services/api/src/lib/hash";
 
 test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify + Next (no API stub)", { timeout: 90000 }, async () => {
   assert.equal(process.env.FIREBASE_PROJECT_ID, "demo-mmr-dev");
@@ -110,6 +111,9 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
     const sendDelivery = async (key: string) => fetch(`http://127.0.0.1:${port}/v1/deliveries`, { method: "POST", headers: { Authorization: `Bearer ${await patientAuth.currentUser!.getIdToken()}`, "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(deliveryBody) });
     let deliveredId: string | undefined;
     let deliveredBeforeStop: unknown;
+    let browserDeliveryId: string | undefined;
+    let browserDeliveryBefore: Record<string, unknown> | undefined;
+    const expectedDeliveryCount = process.env.HOSPITAL_BROWSER_SMOKE === "true" ? 2 : 1;
     const assertReceivingAndDeliver = async () => {
       assert.equal((await facility.get()).data()?.receivingEnabled, true);
       const response = await sendDelivery(`${patientUid}-before-stop`);
@@ -119,8 +123,29 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
       deliveredId = result.deliveryId;
       deliveredBeforeStop = (await firebase.firestore.doc(`deliveries/${deliveredId}`).get()).data();
       assert.equal((deliveredBeforeStop as { status: string }).status, "delivered");
+      if (process.env.HOSPITAL_BROWSER_SMOKE === "true") {
+        const browserDelivery = await sendDelivery(`${patientUid}-browser-ack`);
+        assert.equal(browserDelivery.status, 202);
+        browserDeliveryId = (await browserDelivery.json() as { deliveryId: string }).deliveryId;
+        assert.equal(typeof browserDeliveryId, "string");
+        assert.notEqual(browserDeliveryId, deliveredId, "Browser ack must not mutate the stop/tenant scenario delivery");
+        browserDeliveryBefore = (await firebase.firestore.doc(`deliveries/${browserDeliveryId}`).get()).data();
+      }
+      return { browserDeliveryId };
     };
-    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, staffIdToken: await auth.currentUser!.getIdToken(), assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver });
+    const assertBrowserDelivery = async (status: "delivered" | "acknowledged") => {
+      const actual = (await firebase.firestore.doc(`deliveries/${browserDeliveryId}`).get()).data();
+      assert.equal(actual?.status, status);
+      if (status === "delivered") assert.deepEqual(actual, browserDeliveryBefore, "Viewing/canceling must not acknowledge");
+      else {
+        assert.ok(actual?.acknowledgedAt, "UI confirmation must persist the acknowledgment timestamp");
+        assert.deepEqual(actual?.questionnaireSnapshot, browserDeliveryBefore?.questionnaireSnapshot);
+        assert.equal(actual?.snapshotSha256, browserDeliveryBefore?.snapshotSha256);
+        const audits = await firebase.firestore.collection("auditEvents").where("resourceIdHash", "==", hmacSha256Hex(loadConfig().hmacSecret, `audit-res:${browserDeliveryId}`)).get();
+        assert.equal(audits.docs.filter((doc) => doc.data().action === "DELIVERY_ACKNOWLEDGED" && doc.data().decision === "allow").length, 1);
+      }
+    };
+    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, staffIdToken: await auth.currentUser!.getIdToken(), assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver, assertBrowserDelivery });
     else {
       await api.reviewFacility(uid, "verified", { checks: allChecks, verificationRecordId: "SYNTHETIC_REFERENCE" });
       await api.reviewFacility(`${uid}-reject`, "rejected", { checks: { ...allChecks, applicant: false }, verificationRecordId: "SYNTHETIC_REFERENCE", reason: "SYNTHETIC_REVIEW_PRIVATE_VALUE" });
@@ -146,16 +171,17 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
     assert.equal(rejectedDelivery.status, 412, "Stopped facility must reject a new patient delivery");
     assert.equal((await rejectedDelivery.json() as { error: { code: string } }).error.code, "PRECONDITION_FAILED");
     const patientDeliveries = await firebase.firestore.collection("deliveries").where("senderUid", "==", patientUid).get();
-    assert.equal(patientDeliveries.size, 1, "Failed send must not persist another delivery");
-    assert.equal(patientDeliveries.docs[0]!.id, deliveredId);
-    assert.deepEqual(patientDeliveries.docs[0]!.data(), deliveredBeforeStop, "Stopping must leave the existing delivery unchanged");
+    assert.equal(patientDeliveries.size, expectedDeliveryCount, "Failed send must not persist another delivery");
+    const originalDelivery = patientDeliveries.docs.find((doc) => doc.id === deliveredId);
+    assert.ok(originalDelivery);
+    assert.deepEqual(originalDelivery.data(), deliveredBeforeStop, "Stopping must leave the existing delivery unchanged");
     const replay = await sendDelivery(`${patientUid}-before-stop`);
     assert.equal(replay.status, 202, "Retry of a committed send must return the original result after stop");
     assert.equal((await replay.json() as { deliveryId: string }).deliveryId, deliveredId);
     const patientStatus = await fetch(`http://127.0.0.1:${port}/v1/deliveries/${deliveredId}`, { headers: { Authorization: `Bearer ${await patientAuth.currentUser!.getIdToken()}` } });
     assert.equal(patientStatus.status, 200);
     assert.equal((await patientStatus.json() as { status: string }).status, "delivered");
-    assert.equal((await firebase.firestore.collection("deliveries").where("senderUid", "==", patientUid).get()).size, 1);
+    assert.equal((await firebase.firestore.collection("deliveries").where("senderUid", "==", patientUid).get()).size, expectedDeliveryCount);
     await staffSessionSmoke({ firebase, apiBaseUrl: `http://127.0.0.1:${port}/v1`, facilityId: uid, otherFacilityId: `${uid}-reject`, deliveryId: deliveredId!, hmacSecret: loadConfig().hmacSecret });
     await hospitalTenantSmoke({ firebase, apiBaseUrl: `http://127.0.0.1:${port}/v1`, facilityId: uid, otherFacilityId: `${uid}-reject`, deliveryId: deliveredId!, hmacSecret: loadConfig().hmacSecret });
     await api.disableFacility(uid, "Synthetic repeat");
@@ -182,6 +208,8 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
     await Promise.all(generatedRecords.docs.map((doc) => doc.ref.delete()));
     const patientDeliveries = await firebase.firestore.collection("deliveries").where("senderUid", "==", patientUid).get();
     for (const doc of patientDeliveries.docs) {
+      const audit = await firebase.firestore.collection("auditEvents").where("resourceIdHash", "==", hmacSha256Hex(loadConfig().hmacSecret, `audit-res:${doc.id}`)).get();
+      await Promise.all(audit.docs.map((event) => event.ref.delete()));
       const keyHash = doc.data().idempotencyKeyHash as string;
       await firebase.firestore.doc(`idempotencyKeys/${keyHash}`).delete();
       await doc.ref.delete();

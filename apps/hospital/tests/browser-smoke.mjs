@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 // Optional real-browser extension of test:api. Uses the real UI + SDK + BE;
 // no page routes, API responses, or Firebase services are intercepted.
-export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, staffIdToken, assertStillPending, assertStillReceiving }) {
+export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, staffIdToken, assertStillPending, assertStillReceiving, assertBrowserDelivery }) {
   const profile = await mkdtemp(join(tmpdir(), "hospital-browser-"));
   const origin = "http://127.0.0.1:33090";
   const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", "33090"], {
@@ -89,7 +89,7 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     await poll("[...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('却下を確認しました'))");
     await evaluate(`document.querySelector('[name=facilityId]').value=${JSON.stringify(facilityId)}; document.querySelector('[name=reason]').value='Synthetic emergency drill'; document.querySelector('[name=facilityId]').form.requestSubmit();`);
     await poll("[...document.querySelectorAll('button')].some(b=>b.textContent==='この施設の受信を停止する')");
-    await assertStillReceiving();
+    const { browserDeliveryId } = await assertStillReceiving();
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='この施設の受信を停止する').click()");
     await poll("[...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('受信停止を確認しました'))");
     // Same real signed-in identity also has a facility membership. Establish the
@@ -112,11 +112,35 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     await poll("location.pathname==='/deliveries' && document.body.innerText.includes('受信した問診はまだありません')");
     assert.equal(await evaluate("document.querySelector('#delivery-status').value"), "", "Facility switch must reset the previous filter");
     assert.equal(await evaluate("!!document.querySelector('a[href=\"/staff\"]')"), false, "Staff facility must not inherit the admin navigation");
+    // A real Cookie/BFF request under the other selected hospital must not expose
+    // this delivery, including its existence or a way to acknowledge it.
+    for (const suffix of ["", "/acknowledge"]) {
+      const denied = await evaluate(`(async()=>{const response=await fetch('/api/hx/hospitals/${rejectedFacilityId}/deliveries/${browserDeliveryId}${suffix}',{method:${JSON.stringify(suffix ? "POST" : "GET")},headers:{'x-hx-client':'portal'}});return {status:response.status,private:(await response.text()).includes('SYNTHETIC_QUESTIONNAIRE')}})()`);
+      assert.deepEqual(denied, { status: 404, private: false });
+    }
+    await assertBrowserDelivery("delivered");
     await evaluate("document.querySelector('a[href=\"/facilities\"]').click()");
     await poll("location.pathname==='/facilities' && [...document.querySelectorAll('li')].some(e=>e.innerText.includes('役割：施設管理者') && e.querySelector('button'))");
     await evaluate("[...document.querySelectorAll('li')].find(e=>e.innerText.includes('役割：施設管理者') && e.querySelector('button')).querySelector('button').click()");
     await poll("location.pathname==='/deliveries' && !!document.querySelector('tbody tr a[href^=\"/deliveries/\"]')");
     assert.equal(await evaluate("window.staffNavigationMarker"), true);
+    await evaluate(`document.querySelector('a[href="/deliveries/${browserDeliveryId}"]').click()`);
+    await poll("document.body.innerText.includes('SYNTHETIC_QUESTIONNAIRE') && [...document.querySelectorAll('button')].some(b=>b.textContent==='受領を確認する')");
+    await assertBrowserDelivery("delivered");
+    await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='受領を確認する').click()");
+    await poll("!!document.querySelector('[role=dialog]')");
+    await assertBrowserDelivery("delivered");
+    await evaluate("[...document.querySelectorAll('[role=dialog] button')].find(b=>b.textContent==='キャンセル').click()");
+    await poll("!document.querySelector('[role=dialog]')");
+    await assertBrowserDelivery("delivered");
+    await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='受領を確認する').click()");
+    await poll("!!document.querySelector('[role=dialog]')");
+    await evaluate("[...document.querySelectorAll('[role=dialog] button')].find(b=>b.textContent==='受領を確認する').click()");
+    await poll("!document.querySelector('[role=dialog]') && document.body.innerText.includes('受領確認済みです')");
+    await assertBrowserDelivery("acknowledged");
+    await evaluate("document.querySelector('a[href=\"/deliveries\"]').click()");
+    await poll(`[...document.querySelectorAll('tbody tr')].some(row=>row.querySelector('a[href="/deliveries/${browserDeliveryId}"]') && row.innerText.includes('受領確認済み'))`);
+    await assertBrowserDelivery("acknowledged");
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('ログアウト')).click()");
     await poll("!!document.querySelector('input[name=email]') && !document.querySelector('tbody') && !document.querySelector('[data-audit-summary]')");
     assert.deepEqual(await evaluate("window.cspViolations"), [], "Real UI/Auth/BE workflow must not violate CSP");

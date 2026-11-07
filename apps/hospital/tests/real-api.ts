@@ -22,6 +22,7 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
   const job = firebase.firestore.doc(`ocrJobs/${uid}`);
   const auditFixtures = Array.from({ length: 25 }, (_, i) => firebase.firestore.doc(`auditEvents/${uid}-${i}`));
   const facility = firebase.firestore.doc(`facilities/${uid}`);
+  const rejectedFacility = firebase.firestore.doc(`facilities/${uid}-reject`);
   const app = initializeApp({ projectId: "demo-mmr-dev", apiKey: "demo-key" }, uid);
   const auth = initializeAuth(app, { persistence: inMemoryPersistence });
   connectAuthEmulator(auth, `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`, { disableWarnings: true });
@@ -65,8 +66,29 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
     assert.equal(new Set(summaries.map((item) => item.eventId)).size, summaries.length);
     assert.ok(!JSON.stringify({ audits, olderAudits }).includes("SYNTHETIC_AUDIT_PRIVATE_VALUE"));
     assert.ok(!JSON.stringify({ audits, olderAudits }).includes(uid));
-    await facility.set({ receivingEnabled: true, verificationStatus: "verified" });
-    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, assertStillReceiving: async () => assert.equal((await facility.get()).data()?.receivingEnabled, true) });
+    for (const ref of [facility, rejectedFacility]) await ref.set({ legalName: "合成審査施設", displayName: "合成審査施設", receivingEnabled: true, verificationStatus: "pending", createdAt: new Date(), contactChannel: { private: "SYNTHETIC_REVIEW_PRIVATE_VALUE" } });
+    const reviewPage = await api.reviewFacilities();
+    assert.ok(reviewPage.items.some((item) => item.facilityId === uid));
+    assert.ok(!JSON.stringify(reviewPage).includes("SYNTHETIC_REVIEW_PRIVATE_VALUE"));
+    await assert.rejects(api.reviewFacility(uid, "verified", { checks: { existence: true, applicant: false, receiverContact: true, location: true }, verificationRecordId: "SYNTHETIC_REFERENCE" }));
+    const allChecks = { existence: true, applicant: true, receiverContact: true, location: true };
+    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: async () => assert.equal((await facility.get()).data()?.receivingEnabled, true) });
+    else {
+      await api.reviewFacility(uid, "verified", { checks: allChecks, verificationRecordId: "SYNTHETIC_REFERENCE" });
+      await api.reviewFacility(`${uid}-reject`, "rejected", { checks: { ...allChecks, applicant: false }, verificationRecordId: "SYNTHETIC_REFERENCE", reason: "SYNTHETIC_REVIEW_PRIVATE_VALUE" });
+    }
+    assert.equal((await facility.get()).data()?.verificationStatus, "verified");
+    assert.equal((await rejectedFacility.get()).data()?.verificationStatus, "rejected");
+    assert.equal((await rejectedFacility.get()).data()?.receivingEnabled, false);
+    await api.reviewFacility(`${uid}-reject`, "rejected", { checks: allChecks, verificationRecordId: "SYNTHETIC_REPEAT", reason: "SYNTHETIC_REPEAT" });
+    const evidence = await api.verificationRecords(uid);
+    const rejectedEvidence = await api.verificationRecords(`${uid}-reject`);
+    assert.equal(evidence.items.length, 1);
+    assert.equal(rejectedEvidence.items.length, 1);
+    assert.equal(evidence.items[0]!.decision, "verified");
+    assert.equal(rejectedEvidence.items[0]!.decision, "rejected");
+    assert.ok(!JSON.stringify({ evidence, rejectedEvidence }).includes("SYNTHETIC_REFERENCE"));
+    assert.ok(!JSON.stringify({ evidence, rejectedEvidence }).includes("SYNTHETIC_REVIEW_PRIVATE_VALUE"));
     await api.disableFacility(uid, "Synthetic emergency drill");
     const stopped = (await facility.get()).data();
     assert.equal(stopped?.receivingEnabled, false);
@@ -79,12 +101,17 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
     await assert.rejects(api.jobFailures("ocr"), { status: 403 });
     await assert.rejects(api.disableFacility(uid, "Synthetic emergency drill"), { status: 403 });
     await assert.rejects(api.auditEvents(), { status: 403 });
+    await assert.rejects(api.reviewFacilities(), { status: 403 });
+    await assert.rejects(api.verificationRecords(uid), { status: 403 });
+    await assert.rejects(api.reviewFacility(uid, "rejected", { checks: allChecks, verificationRecordId: "SYNTHETIC_REFERENCE", reason: "synthetic" }), { status: 403 });
     assert.equal((await facility.get()).data()?.receivingEnabled, true, "Revoked operator must not stop receiving");
     const unauthenticated = await fetch(`http://127.0.0.1:${port}/v1/operator/job-failures?type=ocr`);
     assert.equal(unauthenticated.status, 401);
   } finally {
     if (child.exitCode === null) { const exited = once(child, "exit"); child.kill("SIGTERM"); await exited; }
-    await Promise.all([membership.delete(), job.delete(), facility.delete(), ...auditFixtures.map((ref) => ref.delete()), firebase.auth.deleteUser(uid).catch(() => {})]);
+    const generatedRecords = await firebase.firestore.collection("facilityVerificationRecords").where("facilityId", "in", [uid, `${uid}-reject`]).get();
+    await Promise.all(generatedRecords.docs.map((doc) => doc.ref.delete()));
+    await Promise.all([membership.delete(), job.delete(), facility.delete(), rejectedFacility.delete(), ...auditFixtures.map((ref) => ref.delete()), firebase.auth.deleteUser(uid).catch(() => {})]);
     await deleteApp(app);
     await firebase.firestore.terminate();
     const { deleteApp: deleteAdminApp } = createRequire(new URL("../../../services/api/package.json", import.meta.url))("firebase-admin/app") as { deleteApp: (app: unknown) => Promise<void> };

@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 // Optional real-browser extension of test:api. Uses the real UI + SDK + BE;
 // no page routes, API responses, or Firebase services are intercepted.
-export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, assertStillReceiving }) {
+export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, assertStillPending, assertStillReceiving }) {
   const profile = await mkdtemp(join(tmpdir(), "hospital-browser-"));
   const origin = "http://127.0.0.1:33090";
   const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", "33090"], {
@@ -65,11 +65,30 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     const auditBody = await evaluate("document.querySelector('[data-audit-summary]').innerText");
     assert.ok(auditBody.includes("職員権限・状態変更"));
     assert.ok(!auditBody.includes("SYNTHETIC_AUDIT_PRIVATE_VALUE"));
+    const selectReview = async (id) => {
+      await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='施設一覧を取得・再試行').click()");
+      await poll("!!document.querySelector('[data-review-facilities]')");
+      await evaluate(`[...document.querySelectorAll('[data-review-facilities] button')].find(b=>b.textContent===${JSON.stringify(`施設 ${id} の審査・証跡`)}).click()`);
+      await poll("!!document.querySelector('[data-facility-review-form]')");
+    };
+    await selectReview(facilityId);
+    await evaluate("document.querySelectorAll('[data-facility-review-form] input[type=checkbox]').forEach(i=>i.checked=true); document.querySelector('[name=verificationRecordId]').value='SYNTHETIC_REFERENCE'; document.querySelector('[data-facility-review-form]').requestSubmit()");
+    await poll("!!document.querySelector('[data-review-confirmation]')");
+    await assertStillPending();
+    await evaluate("document.querySelector('[data-review-confirmation] button').click()");
+    await poll("[...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('承認を確認しました'))");
+    await selectReview(rejectedFacilityId);
+    await evaluate("const select=document.querySelector('[data-facility-review-form] select'); select.value='rejected'; select.dispatchEvent(new Event('change',{bubbles:true}));");
+    await poll("!!document.querySelector('[name=reason]')");
+    await evaluate("document.querySelector('[name=verificationRecordId]').value='SYNTHETIC_REFERENCE'; document.querySelector('[name=reason]').value='SYNTHETIC_REVIEW_PRIVATE_VALUE'; document.querySelector('[data-facility-review-form]').requestSubmit()");
+    await poll("!!document.querySelector('[data-review-confirmation]')");
+    await evaluate("document.querySelector('[data-review-confirmation] button').click()");
+    await poll("[...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('却下を確認しました'))");
     await evaluate(`document.querySelector('[name=facilityId]').value=${JSON.stringify(facilityId)}; document.querySelector('[name=reason]').value='Synthetic emergency drill'; document.querySelector('[name=facilityId]').form.requestSubmit();`);
     await poll("[...document.querySelectorAll('button')].some(b=>b.textContent==='この施設の受信を停止する')");
     await assertStillReceiving();
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='この施設の受信を停止する').click()");
-    await poll("!!document.querySelector('[role=status]')?.textContent.includes('受信停止を確認しました')");
+    await poll("[...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('受信停止を確認しました'))");
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('ログアウト')).click()");
     await poll("!!document.querySelector('input[name=email]') && !document.querySelector('tbody') && !document.querySelector('[data-audit-summary]')");
   } finally {

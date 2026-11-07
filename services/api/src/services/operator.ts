@@ -75,6 +75,7 @@ export async function verifyFacility(
     await tx.create(recRef, {
       facilityId: params.facilityId,
       verifierUid: params.operatorUid,
+      decision: "verified",
       checks: params.checks,
       verificationRecordId: params.verificationRecordId,
       note: params.note ?? null,
@@ -90,7 +91,7 @@ export async function verifyFacility(
         outcome: "success",
         details: {
           from: fac.verificationStatus,
-          recordId: params.verificationRecordId,
+          recordRefHash: auditResourceHash(deps, params.verificationRecordId),
         },
         ...(params.requestId ? { requestId: params.requestId } : {}),
       }),

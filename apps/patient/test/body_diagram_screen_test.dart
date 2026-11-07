@@ -23,7 +23,9 @@ void main() {
 
   testWidgets('文字による代替選択でも選べる', (tester) async {
     await tester.pumpWidget(const BodyDiagramPreview());
-    await tester.tap(find.text('文字で選ぶ（図が使いにくいとき）'));
+    final expander = find.text('文字で選ぶ（図が使いにくいとき）');
+    await tester.ensureVisible(expander);
+    await tester.tap(expander);
     await tester.pumpAndSettle();
     final item = find.widgetWithText(CheckboxListTile, '背面の背中');
     await tester.ensureVisible(item);

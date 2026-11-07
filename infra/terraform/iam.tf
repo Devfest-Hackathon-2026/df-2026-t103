@@ -60,3 +60,10 @@ resource "google_cloud_run_v2_service_iam_member" "invoker" {
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.jobs_invoker.email}"
 }
+
+# ADC signing needs IAM signBlob on this signer, not project-wide impersonation.
+resource "google_service_account_iam_member" "api_signed_uploads" {
+  service_account_id = google_service_account.api_run.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.api_run.email}"
+}

@@ -124,12 +124,12 @@ gcloud artifacts repositories create api \
 ## 運営IAM・監査の責任分界（#46）
 
 [役割別グループ、アプリ内roleとの対応、単一projectの監査分離、権限レビュー手順](iam/README.md)。
-適用前の設計案であり、実グループ・メンバー・監査保持期間は別途確定する。
+監査400日と最小権限を設定。実グループ・メンバーの準備は別途必要。
 
 ## Storage / RTDB（#36）
 
 [単一プロジェクトの設定案生成・適用・検証手順](storage/README.md)。
-保管日数と公開originの確定前はクラウドへ適用しない。
+単一projectの実在origin・31日lifecycle・7日soft deleteを設定。
 
 ## 非同期ジョブ基盤（Issue #31）
 

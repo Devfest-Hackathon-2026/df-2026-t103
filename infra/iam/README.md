@@ -1,6 +1,6 @@
 # IAM / 運営アカウント / 監査の責任分界案（#46）
 
-状態: 適用前の設計案。グループ、実メンバー、IAM binding、ログbucket/viewは未作成。
+状態: 東京の監査bucket/view/sinkは実作成済み。実グループ・メンバーの準備と職務分離は未完了。
 対象: **project-7efcc4c4-6c86-490c-ba5 の単一プロジェクト**。
 
 根拠: docs/06 §11（RACIドラフト）、docs/02 §2.1/§5.3、ADR-0014。
@@ -157,3 +157,14 @@ log view/IAM/アプリそれぞれの許可・拒否試験、継承経路のレ�
 
 同一project内のlog bucketへのsinkはwriter用の追加project IAM付与が不要:
 https://docs.cloud.google.com/logging/docs/export/configure_export_v2
+
+## Owner権限反映後の実適用
+
+前段の403は当時の認証に対する履歴。Owner付与反映後、testIamPermissionsで必要な
+権限が許可され、東京の `operator-audit`（400日）・`security-audit` view・同名sinkを作成した。
+単一project内のsinkに追加writer IAMは付けない。groupへの権限は未付与のまま。
+GCP Project OwnerだけではCloud Identityのグループ管理者権限を意味しない。
+
+API署名URL用のToken Creatorはapi-run-sa自身を同じSAへ紐付ける。project全体の
+Token Creatorを人間/運営グループへ付けない。合成アップロード検証用の人間のgrantは
+15分期限付き・同じSAだけに限定し、検証終了時に除去する。

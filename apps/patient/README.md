@@ -57,3 +57,7 @@ flutter run -d web-server --web-hostname=localhost --web-port=5056 -t lib/demo_a
 ```
 
 Passkey は審査承認まで既定で非表示です。表示状態だけを確認する場合は、承認済みのレビュー環境に限り `--dart-define=PASSKEY_AUTH_ENABLED=true` を追加します。このフラグは公開承認を意味しません。
+
+### 架空の問診デモ
+
+架空の患者・施設データだけを使う問診フローのデモ手順は [FICTIONAL_DEMO.md](FICTIONAL_DEMO.md) を参照してください。Flutter SDK のみで起動でき、Docker・Firebase Emulator・Node API は不要です。

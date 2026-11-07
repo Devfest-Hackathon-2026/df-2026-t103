@@ -7,6 +7,7 @@
 ## 1. Mission and Decision Principles
 
 - Deliver the smallest complete, correct, secure, accessible, and maintainable solution to the user's actual request.
+- Product screens must use the implemented backend APIs. Do not substitute mock APIs, hard-coded business data, or disconnected previews for a working feature. Mocks are permitted in isolated tests only; integration acceptance must exercise the real backend. Missing auth, App Check, API contracts, or environment configuration are implementation work or explicit blockers, never a reason to silently fall back to fake success.
 - Optimize for user value, reliability, and long-term code health, not the number of lines changed or features added.
 - Prefer clarity over cleverness, evidence over intuition, simple designs over speculative abstractions, and reversible decisions over irreversible ones.
 - Preserve existing behavior and public contracts unless the task explicitly requires changing them.

@@ -71,7 +71,10 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
     {
       config: { access: { tier: "consented" } },
       schema: {
-        response: { 200: profileResponseSchema, ...errors(401, 403, 404, 412, 429) },
+        response: {
+          200: profileResponseSchema,
+          ...errors(401, 403, 404, 412, 429, 500, 503),
+        },
         tags: ["me"],
         summary: "プロフィール取得（現行同意必須）",
         security: [{ bearerAuth: [] }],

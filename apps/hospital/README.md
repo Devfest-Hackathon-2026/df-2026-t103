@@ -6,7 +6,33 @@ Node.js 22 以降で `npm ci`、`npm run dev` を実行し、http://localhost:30
 
 `lib/firebase-demo.ts` は将来のデモ向けの明示的な初期化関数です。`NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-mmr-dev`、`NEXT_PUBLIC_USE_FIREBASE_EMULATOR=true` と Compose が指定する localhost の Auth / Firestore / Storage エミュレータのアドレスがすべて必要で、異なる設定は拒否します。この旧ヘルパーは既存のSDK結合試験用です。業務画面は `lib/firebase-client.ts` のAuth＋APIクライアントを利用し、Firestoreから業務データを直接取得しません。
 
-本番 Hosting 静的配信か SSR かは未決定です。実用化にはインフラとの調整と、認証・施設単位の認可・監査・医療情報保護の実装と検証が必要です。
+本番配信基盤は未決定です。以下のnonce方式はNext.jsサーバーを必要とするため、既存のHosting静的配信案との調整が必要です。実用化には認証・施設単位の認可・監査・医療情報保護の実装と検証も必要です。
+
+## Next.js配信のセキュリティ（#90）
+
+`proxy.ts` はHTML・RSC・prefetch・404を含む応答に `Cache-Control: private, no-store`、
+nonce付きCSP、フレーム埋め込み拒否、no-referrer、nosniff、機器権限制限を付与します。
+実環境ではHSTSとHTTPSへのupgradeを有効化します。HMRは開発時のみ許可し、明示的なEmulator設定では指定したloopback接続先だけを許可します。
+nonceはクライアントのヘッダを上書きし、リクエストごとに生成します。
+接続設定を検証したうえで、実APIのorigin、Firebase Authのidentitytoolkit/securetoken、SDKのApp Check接続先content-firebaseappcheckとreCAPTCHAを許可します。reCAPTCHAのframe-srcも公式指定のURLに限定します。設定不足・不正値ならself限定のままです。ワイルドカードでは許可しません。
+
+root layoutの `connection()` によりリクエスト時に描画します。PHIをサーバ側で取得せず、
+HTML/RSC・JS/CSS・静的ファイル・ログへ入れない設計制約は引き続き適用します。
+現在の検証は合成入力が応答へ反射しないことまでで、未実装の患者データ取得経路の保証ではありません。
+
+このnonce方式は `next start` 等のNext.jsサーバーを必要とし、静的exportはできません。
+`firebase.json` のhospital `public: apps/hospital/out` は静的配信案のままです。
+そのHostingヘッダはNext.jsのnonceを生成できず、重ねるとbootstrapを拒否します。
+本番公開前に #80/#82 の担当者とSSR配信経路・Hostingとのヘッダ所有者を確定してください。
+この変更でクラウドやHostingのデプロイ設定は変更していません。
+
+`npm run build && npm run test:security` は本番ビルドをloopback上で起動し、
+HTTPヘッダ、nonceの更新・全bootstrap scriptへの一致、静的JS取得、404、RSC、prefetchを検証します。
+実ブラウザでのCSP施行は、後述の任意ブラウザ試験で実Auth/BEへの接続とともに検証します。実クラウドApp Check/MFAと将来の患者データ取得経路のPHI検証は別途必要です。
+現在のログイン・変更APIはメモリ内Bearer token方式で、API fetchはcredentials: omitを使います。サーバ側の認証/App Check/運営権限/再認証を回避しません。将来Cookie認証を導入する場合はHttpOnly・Secure・SameSite・CSRF対策の追加検証が必要です。
+
+方式の根拠: [Next.js CSPガイド](https://nextjs.org/docs/app/guides/content-security-policy)
+およびインストール済みNext.js 16.4.5の `node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md`。
 
 ## Firebase 依存の暫定対応
 
@@ -49,8 +75,7 @@ reCAPTCHA Enterpriseの `NEXT_PUBLIC_APP_CHECK_SITE_KEY` を設定します。
 実環境では `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL` を設定しません。
 NEXT_PUBLIC変数はビルド時に埋め込まれるため、変更後は再ビルドが必要です。
 APIの `API_CORS_ORIGINS` にはブラウザで開くポータルの正確なoriginも必要です。
-CSPを有効にする配信先では、実API・Firebase Auth/App Check・reCAPTCHAの必要なoriginを
-ポリシーへ組み込み、固定のself限定CSPをそのまま重ねないでください（#90/PR205の統合作業）。
+Next.js ProxyのCSPは同じ接続設定から許可先を生成します。配信先で固定のself限定CSPを重ねないでください。
 
 画面はメール/パスワードと登録済みTOTPの追加認証に対応します。TOTP以外のMFAは未対応です。
 トークンはメモリ内のみで、CookieやlocalStorageへ保存しません。リロードすると再ログインが必要です。
@@ -76,13 +101,28 @@ npx --yes firebase-tools@15.35.0 emulators:exec --project demo-mmr-dev \
 試験はFastifyの実entrypointを一時loopbackポートで起動し、Auth Emulatorでサインインした
 ID tokenを本番と同じfrontend APIクライアントへ渡します。所属なし403、運営所属あり200、
 所属失効403、無認証401、施設受信停止・冪等性・失効後の変更拒否、実Firestore由来の失敗ジョブ/監査一覧取得・監査の同時刻ページング・個人識別子と自由記述の非露出を検証します。
+E2E-006は独立した患者のAuth Emulator tokenと合成の確定問診票・現行同意を使い、停止前202→運営による停止→新規送信412、既存配送の不変・新規配送なし・送信済みキーの再試行で同じ結果・患者による既存配送の閲覧を検証します。
+ブラウザ試験を有効にすると、停止操作も実画面から実行します。患者アプリ画面そのものや、未完成の病院受信/詳細/職員管理画面のE2Eを代用するものではありません。
 この読取経路はStorage/RTDBへアクセスしませんが、BEの接続整合性検証のためそのloopback設定も明示します。
 実クラウドのApp Check/MFA/CORS受入や、他の画面のAPI接続をこの試験だけで完了扱いにしません。
 
 macOSでChromeをインストールしている場合は、同じコマンドに `HOSPITAL_BROWSER_SMOKE=true` を
-追加すると、実画面でのログイン・実BEからの一覧表示・監査一覧表示・確認前の未変更・施設受信停止・ログアウトも確認します。
+追加すると、実画面でのログイン・実BEからの一覧/監査表示・施設審査の承認/却下・確認前の未変更・施設受信停止・ログアウトと、CSP違反が発生しないことも確認します。
 Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータルはloopback:33090で起動し、
 試験後にChromeの一時プロファイル・起動プロセスを終了します。このブラウザ試験は任意実行です。
 
 参照: [App Check custom backend](https://firebase.google.com/docs/app-check/web/custom-resource)、
 [TOTP MFA](https://firebase.google.com/docs/auth/web/totp-mfa)。
+
+
+## 運営施設審査（O-001）
+
+`/operator`の「運営施設審査」で実BEの施設一覧を取得し、施設を選択して検証証跡サマリーを確認します。
+原本を別途確認し、4検証項目・検証文書参照を入力して確認画面から既存承認APIを実行します。
+未審査施設は理由を付けて却下できます。再認証要求時はログアウトして再ログインしてください。
+承認しても受付は自動で有効になりません。却下はpendingだけで、承認済み/停止中の緊急対応は受付停止操作を使います。
+文書参照原文・連絡先・審査者UID・メモは一覧APIから取得せず、患者情報は入力しません。
+
+実環境への公開前に`facilityVerificationRecords: facilityId ASC, createdAt DESC`のindexを
+`firebase/firestore.indexes.json`から通常のRules/indexesデプロイ手順で作成し、利用可能状態を確認してください。
+API/画面とindexのデプロイ、正規MFA/App Check付きのクラウド受入は、このローカル検証だけで完了扱いにしません。

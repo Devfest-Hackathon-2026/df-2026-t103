@@ -1,7 +1,7 @@
 # infra/terraform — クラウド基盤の Terraform 構成
 
 これまで `gcloud` スクリプト＋宣言 YAML で整備してきた GCP 基盤（Issue #29/#31/#32/#35）を
-Terraform（google provider v6）で宣言的に管理する版。IaC を Terraform に統一する場合の正本。
+Terraform（google provider v6）で宣言的に管理する版。採用判断と境界は [ADR-0021](../../docs/adr/0021_単一プロジェクトのIaC管理方針.md)、初期構築・既存環境の引継ぎは [REBUILD.md](REBUILD.md) を参照。ADRはPR承認で確定する。
 
 ## 管理対象
 
@@ -27,26 +27,26 @@ Terraform（google provider v6）で宣言的に管理する版。IaC を Terraf
 
 ## 使い方
 
-```sh
-cd infra/terraform
-cp terraform.tfvars.example terraform.tfvars   # project_id を実IDに
-terraform init        # GCS backend を versions.tf で有効化（要バケット）
-terraform plan
-terraform apply       # owner 権限（IAM 付与を含むため owner/projectIamAdmin 必須）
-```
+実環境の操作は [REBUILD.md](REBUILD.md) の順序で行う。対象は単一project
+`project-7efcc4c4-6c86-490c-ba5`。既存資源とstateの照合・importを先に行い、
+未作成の場合だけbootstrapする。既定の初期imageをそのままapplyしない。
 
-検証のみ（provider 取得のみ、バックエンド不要）:
+クラウドを変更しない検証（clean checkout、backend.local.tfなし）:
 
 ```sh
-terraform fmt -recursive -check
-terraform init -backend=false && terraform validate
+export TF_VAR_project_id="project-7efcc4c4-6c86-490c-ba5"
+terraform init -backend=false -input=false -lockfile=readonly
+terraform validate
 ```
+
+remote stateの設定は `backend.tf.example` をローカルの `backend.local.tf` へコピーし、
+既存管理者へ確認したbucket/prefixを指定する。認証情報、state、保存planはコミットしない。
 
 ## 注意
 
-- **apply には owner 権限が必要**（IAM・SA 作成を含む。`roles/editor` では不可）。
+- **apply には管理対象ごとの権限が必要**。IAM・SA作成を含むためEditorだけでは不足する。必要権限を管理者が付与し、Ownerの一律配布はしない。
 - `project_id` は `.firebaserc` の `moshimoshimonshin` ではなく Firebase 実体
   （`project-7efcc4c4-...`）を確定して使う。
 - `terraform.tfvars` と `*.tfstate` はコミットしない（`.gitignore` 済）。状態は GCS backend。
 - 既存の `gcloud`/YAML 版（`infra/cloud-run/*.yaml`・`infra/*.sh`）は手動運用・参照用として残す。
-  Terraform を正本にする場合は重複 apply を避けるため運用をどちらかに寄せること。
+  管理対象資源はTerraformを正本とし、同じ資源へ手動gcloud/YAMLを並行適用しない（ADR-0021）。

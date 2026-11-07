@@ -21,6 +21,8 @@ test("production requires both credentials before issuing a network request", as
   const api = createApiClient({ apiBaseUrl: "https://invalid.example/v1", emulator: false, idToken: async () => "id-token", appCheckToken: async () => null });
   await assert.rejects(api.jobFailures("ocr"), { status: 401 });
   await assert.rejects(api.auditEvents(), { status: 401 });
+  await assert.rejects(api.reviewFacilities(), { status: 401 });
+  await assert.rejects(api.verificationRecords("facility-1"), { status: 401 });
   await assert.rejects(api.disableFacility("synthetic-facility", "drill"), { status: 401 });
 });
 

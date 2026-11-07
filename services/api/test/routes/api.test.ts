@@ -19,6 +19,8 @@ async function setup(): Promise<{ deps: TestDeps; app: FastifyInstance }> {
   return { deps, app };
 }
 
+// /healthz は LB 用の疎通確認であり、認証・接続先の真正性・Auth emulator の状態は
+// 検証しない。emulator フラグは設定値の表示であって、UI や本番接続の安全性を保証しない。
 describe("GET /healthz", () => {
   it("200 + 依存状態 ok を返す（認証不要）", async () => {
     const { app } = await setup();
@@ -46,7 +48,23 @@ describe("GET /healthz", () => {
     const body = res.json();
     expect(body.status).toBe("degraded");
     expect(body.checks.firestore).toBe("error");
+    expect(res.headers["cache-control"]).toBe("no-store");
     await app.close();
+  });
+
+  it("emulator フラグは設定値をそのまま返す（接続先の検証ではない）", async () => {
+    for (const [config, expected] of [
+      [{}, true],
+      [{ emulator: false, projectId: "real-project" }, false],
+    ] as const) {
+      const deps = makeTestDeps(config);
+      const app = buildTestApp(deps);
+      const res = await app.inject({ method: "GET", url: "/healthz" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().emulator).toBe(expected);
+      expect(res.headers["cache-control"]).toBe("no-store");
+      await app.close();
+    }
   });
 
   it("Firestore がハングしてもプローブタイムアウトで 503 になる", async () => {

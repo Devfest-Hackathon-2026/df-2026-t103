@@ -104,20 +104,22 @@ class _OfflineDraftScreenState extends State<OfflineDraftScreen> {
     if (value && _queued > 0) {
       final flushed = _queued;
       setState(() => _queued = 0);
-      ScaffoldMessenger.of(context).showSnackBar(
+      final messenger = ScaffoldMessenger.of(context)..clearSnackBars();
+      messenger.showSnackBar(
         SnackBar(content: Text('接続が戻ったので、送信待ちの$flushed件を送信しました（デモ）。')),
       );
     }
   }
 
   void _send() {
+    final messenger = ScaffoldMessenger.of(context)..clearSnackBars();
     if (_online) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('送信しました（デモ）。')),
       );
     } else {
       setState(() => _queued++);
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('オフラインのため、送信待ちに入れました（デモ）。')),
       );
     }

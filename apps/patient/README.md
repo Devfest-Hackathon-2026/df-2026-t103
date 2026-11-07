@@ -57,3 +57,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5056 -t lib/demo_a
 ```
 
 Passkey は審査承認まで既定で非表示です。表示状態だけを確認する場合は、承認済みのレビュー環境に限り `--dart-define=PASSKEY_AUTH_ENABLED=true` を追加します。このフラグは公開承認を意味しません。
+
+## 薬の一覧プレビュー
+
+薬剤一覧（P-020）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5053 を開きます。確認後は Ctrl+C で停止します。現在・過去・不明の薬剤を、服薬状況・登録元・確認日とともに表示します。このプレビューは API に接続せず、編集・削除はメモリ上のみ、追加（P-021 処方箋撮影）は未接続です。実患者情報は入力しないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5053 -t lib/demo_medication_list_preview.dart
+```

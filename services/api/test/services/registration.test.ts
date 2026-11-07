@@ -412,6 +412,93 @@ describe("registerEmail", () => {
     expect((await deps.db.collection("accounts").get()).size).toBe(0);
   });
 
+  it("別キーはdisabled Authとonboarding_pending account/consentを引き継がず変更せず409", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    const uid = "pending-orphan-owner";
+    deps.fakeAuthAdmin.users.set(uid, {
+      email: validBody.email,
+      password: "fake-password-only",
+      emailVerified: false,
+      disabled: true,
+    });
+    const accountRef = deps.db.doc(`accounts/${uid}`);
+    await accountRef.set({
+      uid,
+      accountStatus: "onboarding_pending",
+      onboardingState: "profile_pending",
+      emailVerified: false,
+      providers: ["password"],
+      schemaVersion: "1",
+      createdAt: "fake-created-at",
+      updatedAt: "fake-updated-at",
+    });
+    const consentRef = deps.db.collection("legalConsents").doc("fake-consent");
+    await consentRef.set({
+      subjectUid: uid,
+      consentType: "terms_of_service",
+      documentVersion: "fake-version",
+      documentHash: "fake-hash",
+      decision: "accepted",
+      method: "explicit_checkbox",
+      registrationSource: "email_registration",
+      occurredAt: "fake-consent-time",
+      revokedAt: null,
+      schemaVersion: "1",
+    });
+    const originalAccount = (await accountRef.get()).data();
+    const originalConsent = (await consentRef.get()).data();
+    const recreatedUids: string[] = [];
+    const reenabledUids: string[] = [];
+    const deletedUids: string[] = [];
+    const originalCreateUser = deps.fakeAuthAdmin.createUser.bind(
+      deps.fakeAuthAdmin,
+    );
+    deps.fakeAuthAdmin.createUser = async (props) => {
+      recreatedUids.push(props.uid);
+      return originalCreateUser(props);
+    };
+    const originalUpdateUser = deps.fakeAuthAdmin.updateUser.bind(
+      deps.fakeAuthAdmin,
+    );
+    deps.fakeAuthAdmin.updateUser = async (userUid, props) => {
+      if (props.disabled === false) reenabledUids.push(userUid);
+      return originalUpdateUser(userUid, props);
+    };
+    const originalDeleteUser = deps.fakeAuthAdmin.deleteUser.bind(
+      deps.fakeAuthAdmin,
+    );
+    deps.fakeAuthAdmin.deleteUser = async (userUid) => {
+      deletedUids.push(userUid);
+      return originalDeleteUser(userUid);
+    };
+
+    await expect(
+      registerEmail(deps, {
+        body: validBody,
+        idempotencyKey: "different-operation-key",
+        requestId: "pending-orphan-req",
+      }),
+    ).rejects.toMatchObject({ code: "REGISTRATION_CONFLICT" });
+
+    expect(deps.fakeAuthAdmin.users.get(uid)).toEqual({
+      email: validBody.email,
+      password: "fake-password-only",
+      emailVerified: false,
+      disabled: true,
+    });
+    expect(reenabledUids).not.toContain(uid);
+    expect(deletedUids).not.toContain(uid);
+    expect(recreatedUids).not.toContain(uid);
+    expect((await accountRef.get()).data()).toEqual(originalAccount);
+    expect((await consentRef.get()).data()).toEqual(originalConsent);
+    expect((await deps.db.collection("accounts").get()).size).toBe(1);
+    expect((await deps.db.collection("legalConsents").get()).size).toBe(1);
+    const operations = await deps.db.collection("registrationOperations").get();
+    expect(operations.size).toBe(1);
+    expect(operations.docs[0]!.data().uid).not.toBe(uid);
+  });
+
   it("同一キー+異なる本文は 409 REGISTRATION_CONFLICT", async () => {
     const deps = makeTestDeps();
     await seedLegalDocuments(deps);

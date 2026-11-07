@@ -84,6 +84,17 @@ export function WorkspaceShell({
       active: pathname === "/deliveries" || pathname.startsWith("/deliveries/"),
     },
     { href: "/facilities", label: "施設の切替", icon: "building", active: pathname === "/facilities" },
+    // H-005 は施設管理者専用。非管理者には導線を出さない（API側でも403で拒否）
+    ...(selectedFacility?.role === "facility_admin"
+      ? [
+          {
+            href: "/staff",
+            label: "職員管理",
+            icon: "users" as const,
+            active: pathname === "/staff",
+          },
+        ]
+      : []),
   ];
 
   async function handleSignOut() {

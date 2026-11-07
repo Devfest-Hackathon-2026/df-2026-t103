@@ -54,9 +54,12 @@ export async function hxApi<T = unknown>(
   }
   const data: unknown = await response.json().catch(() => null);
   if (!response.ok) {
+    // APIのエラーエンベロープは { error: { code, message } }
+    const errObj = data && typeof data === "object" ? (data as { error?: unknown }).error : null;
     const code =
-      data && typeof data === "object" && typeof (data as { code?: unknown }).code === "string"
-        ? ((data as { code: string }).code)
+      errObj && typeof errObj === "object" &&
+      typeof (errObj as { code?: unknown }).code === "string"
+        ? (errObj as { code: string }).code
         : "error";
     throw new HxApiError(response.status, code, messageFor(response.status));
   }

@@ -157,6 +157,7 @@ export class FlakyFirestore implements FirestoreLike {
 type AuthAdminMethod =
   | "createUser"
   | "updateUser"
+  | "getUser"
   | "getUserByEmail"
   | "deleteUser"
   | "revokeRefreshTokens";
@@ -194,6 +195,10 @@ export class FlakyAuthAdmin implements AuthAdmin {
   ) {
     this.gate("updateUser");
     return this.auth.updateUser(uid, props);
+  }
+  getUser(uid: string) {
+    this.gate("getUser");
+    return this.auth.getUser(uid);
   }
   getUserByEmail(email: string) {
     this.gate("getUserByEmail");

@@ -94,6 +94,92 @@ describe("staff management", () => {
     await app.close();
   });
 
+  it("職員一覧は施設メンバーと保留中招待を返す（facility_admin 専用）", async () => {
+    const { app, deps } = await setup();
+    await deps.db.doc("facilityMemberships/clinician").set({
+      userUid: "clinician", facilityId, role: "facility_clinician", status: "revoked", mfaEnforced: true,
+    });
+    // 他施設のメンバー・確定済み招待は含まれないこと
+    await deps.db.doc("facilityMemberships/other").set({
+      userUid: "other", facilityId: "facility-2", role: "facility_staff", status: "active",
+    });
+    await deps.db.doc("facilityInvitations/inv-pending").set({
+      facilityId, email: "pending@example.com", role: "facility_staff", status: "pending",
+    });
+    await deps.db.doc("facilityInvitations/inv-accepted").set({
+      facilityId, email: "accepted@example.com", role: "facility_staff", status: "accepted",
+    });
+    await deps.db.doc("facilityInvitations/inv-other-facility").set({
+      facilityId: "facility-2", email: "other@example.com", role: "facility_staff", status: "pending",
+    });
+    deps.fakeAuthAdmin.users.set("admin", { email: "admin@example.com", password: "", emailVerified: true, disabled: false });
+    deps.fakeAuthAdmin.users.set("staff", { email: "staff@example.com", password: "", emailVerified: true, disabled: false });
+    // clinician は Auth 未登録 → email: null で返ること
+
+    const url = `/v1/hospitals/${facilityId}/staff`;
+    expect((await app.inject({ method: "GET", url, headers: authHeader("staff") })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url, headers: authHeader("outsider") })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url })).statusCode).toBe(401);
+
+    const res = await app.inject({ method: "GET", url, headers: authHeader("admin") });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.members).toHaveLength(3);
+    const byUid = Object.fromEntries(body.members.map((m: { userUid: string }) => [m.userUid, m]));
+    expect(byUid["admin"].email).toBe("admin@example.com");
+    expect(byUid["staff"].email).toBe("staff@example.com");
+    expect(byUid["clinician"].email).toBeNull();
+    expect(byUid["clinician"].status).toBe("revoked");
+    expect(byUid["other"]).toBeUndefined();
+
+    expect(body.invitations).toHaveLength(1);
+    expect(body.invitations[0].email).toBe("pending@example.com");
+    await app.close();
+  });
+
+  it("職員以外のロールや異常な状態のメンバーシップは一覧から除外し500にしない", async () => {
+    const { app, deps } = await setup();
+    await deps.db.doc("facilityMemberships/platform").set({
+      userUid: "plat", facilityId, role: "platform_security_admin", status: "active",
+    });
+    await deps.db.doc("facilityMemberships/odd").set({
+      userUid: "odd", facilityId, role: "facility_staff", status: "suspended",
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: `/v1/hospitals/${facilityId}/staff`,
+      headers: authHeader("admin"),
+    });
+    expect(res.statusCode).toBe(200);
+    const uids = res.json().members.map((m: { userUid: string }) => m.userUid);
+    expect(uids).not.toContain("plat");
+    expect(uids).not.toContain("odd");
+    expect(uids).toEqual(expect.arrayContaining(["admin", "staff"]));
+    await app.close();
+  });
+
+  it("管理者は自身の停止・降格を行えない（最終管理者の喪失防止）", async () => {
+    const { app } = await setup();
+    const url = `/v1/hospitals/${facilityId}/memberships/admin`;
+    const self = await app.inject({
+      method: "PATCH", url, headers: authHeader("admin"), payload: { status: "revoked" },
+    });
+    expect(self.statusCode).toBe(403);
+    const demote = await app.inject({
+      method: "PATCH", url, headers: authHeader("admin"), payload: { role: "facility_staff" },
+    });
+    expect(demote.statusCode).toBe(403);
+    // 他施設のメンバーシップIDを指定しても対象施設のメンバーとして解決されない
+    const cross = await app.inject({
+      method: "PATCH",
+      url: `/v1/hospitals/${facilityId}/memberships/other`,
+      headers: authHeader("admin"),
+      payload: { status: "revoked" },
+    });
+    expect(cross.statusCode).toBe(404);
+    await app.close();
+  });
+
   it("変更のない PATCH は監査を発行しない", async () => {
     const { app, deps } = await setup();
     const base = `/v1/hospitals/${facilityId}/memberships`;

@@ -26,14 +26,14 @@ test("production HTTP responses retain CSP, fresh script nonces and no-store", {
     });
     const marker = "SYNTHETIC_PRIVATE_INPUT_90";
     const nonces = new Set();
-    for (const path of ["/", "/", "/not-found.html", "/faviconXico-private"]) {
+    for (const path of ["/", "/", "/operator", "/not-found.html", "/faviconXico-private"]) {
       const response = await fetch(`${origin}${path}`, { headers: {
         cookie: `session=${marker}`,
         authorization: `Bearer ${marker}`,
         "x-nonce": "attacker",
         "content-security-policy": "script-src 'unsafe-inline'",
       } });
-      assert.equal(response.status, path === "/" ? 200 : 404);
+      assert.equal(response.status, ["/", "/operator"].includes(path) ? 200 : 404);
       const csp = response.headers.get("content-security-policy");
       const nonce = csp?.match(/'nonce-([^']+)'/)?.[1];
       assert.ok(nonce);

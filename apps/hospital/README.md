@@ -12,10 +12,9 @@ Node.js 22 以降で `npm ci`、`npm run dev` を実行し、http://localhost:30
 
 `proxy.ts` はHTML・RSC・prefetch・404を含む応答に `Cache-Control: private, no-store`、
 nonce付きCSP、フレーム埋め込み拒否、no-referrer、nosniff、機器権限制限を付与します。
-本番ではHSTSとHTTPSへのupgradeを有効化し、開発時のみHMR・ローカルEmulatorを許可します。
+実環境ではHSTSとHTTPSへのupgradeを有効化します。HMRは開発時のみ許可し、明示的なEmulator設定では指定したloopback接続先だけを許可します。
 nonceはクライアントのヘッダを上書きし、リクエストごとに生成します。
-外部サービス未接続の現デモでは本番 `connect-src` はself限定です。将来のAuth/API連携時は
-必要な正確なoriginを追加し、ワイルドカードで解除しないでください。
+接続設定を検証したうえで、実APIのorigin、Firebase Authのidentitytoolkit/securetoken、SDKのApp Check接続先content-firebaseappcheckとreCAPTCHAを許可します。reCAPTCHAのframe-srcも公式指定のURLに限定します。設定不足・不正値ならself限定のままです。ワイルドカードでは許可しません。
 
 root layoutの `connection()` によりリクエスト時に描画します。PHIをサーバ側で取得せず、
 HTML/RSC・JS/CSS・静的ファイル・ログへ入れない設計制約は引き続き適用します。
@@ -29,9 +28,8 @@ HTML/RSC・JS/CSS・静的ファイル・ログへ入れない設計制約は引
 
 `npm run build && npm run test:security` は本番ビルドをloopback上で起動し、
 HTTPヘッダ、nonceの更新・全bootstrap scriptへの一致、静的JS取得、404、RSC、prefetchを検証します。
-実ブラウザでのCSP施行や認証後のPHI検証は別途必要です。
-現デモはCookieを発行せず、変更APIもありません。Cookie/CSRFは未実装の#82に依存するため、
-`HttpOnly`・`Secure`・`SameSite`・CSRF token・サーバでの認可の最終確認を省略できません。
+実ブラウザでのCSP施行は、後述の任意ブラウザ試験で実Auth/BEへの接続とともに検証します。実クラウドApp Check/MFAと将来の患者データ取得経路のPHI検証は別途必要です。
+現在のログイン・変更APIはメモリ内Bearer token方式で、API fetchはcredentials: omitを使います。サーバ側の認証/App Check/運営権限/再認証を回避しません。将来Cookie認証を導入する場合はHttpOnly・Secure・SameSite・CSRF対策の追加検証が必要です。
 
 方式の根拠: [Next.js CSPガイド](https://nextjs.org/docs/app/guides/content-security-policy)
 およびインストール済みNext.js 16.4.5の `node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md`。
@@ -77,8 +75,7 @@ reCAPTCHA Enterpriseの `NEXT_PUBLIC_APP_CHECK_SITE_KEY` を設定します。
 実環境では `NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL` を設定しません。
 NEXT_PUBLIC変数はビルド時に埋め込まれるため、変更後は再ビルドが必要です。
 APIの `API_CORS_ORIGINS` にはブラウザで開くポータルの正確なoriginも必要です。
-CSPを有効にする配信先では、実API・Firebase Auth/App Check・reCAPTCHAの必要なoriginを
-ポリシーへ組み込み、固定のself限定CSPをそのまま重ねないでください（#90/PR205の統合作業）。
+Next.js ProxyのCSPは同じ接続設定から許可先を生成します。配信先で固定のself限定CSPを重ねないでください。
 
 画面はメール/パスワードと登録済みTOTPの追加認証に対応します。TOTP以外のMFAは未対応です。
 トークンはメモリ内のみで、CookieやlocalStorageへ保存しません。リロードすると再ログインが必要です。
@@ -108,7 +105,7 @@ ID tokenを本番と同じfrontend APIクライアントへ渡します。所属
 実クラウドのApp Check/MFA/CORS受入や、他の画面のAPI接続をこの試験だけで完了扱いにしません。
 
 macOSでChromeをインストールしている場合は、同じコマンドに `HOSPITAL_BROWSER_SMOKE=true` を
-追加すると、実画面でのログイン・実BEからの一覧表示・確認前の未変更・施設受信停止・ログアウトも確認します。
+追加すると、実画面でのログイン・実BEからの一覧表示・確認前の未変更・施設受信停止・ログアウトと、CSP違反が発生しないことも確認します。
 Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータルはloopback:33090で起動し、
 試験後にChromeの一時プロファイル・起動プロセスを終了します。このブラウザ試験は任意実行です。
 

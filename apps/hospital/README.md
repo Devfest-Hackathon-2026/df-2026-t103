@@ -4,6 +4,16 @@
 
 Node.js 22 以降で `npm ci`、`npm run dev` を実行し、http://localhost:3000 を開きます。`npm run lint`、`npm test`、`npm run build` で検証できます。Docker Compose では既存の hospital サービスを使用します。
 
+## デザインシステム（HX）
+
+`docs/10_デザインシステム.md` のHX（医療機関向け）仕様に基づく共通基盤です。
+
+- トークンは `app/globals.css` の `@theme` で定義（色 `hx-*`、タイポグラフィ `text-hx-*`、形状 radius）。個別画面で任意の色・文字サイズを直書きせず、必ずトークン経由のユーティリティを使います。
+- 共通コンポーネントは `components/design-system/`（`HxButton` / `HxField` / `HxStatusBadge` / `HxDataTable` / `HxPageHeader` / `HxAppShell` / `HxDialog` / `HxConfirmActionDialog` / `HxLoadingState` / `HxEmptyState` / `HxErrorPanel` / `HxSkeleton` など）に配置します。
+- 未認証ページの共通ヘッダーは `components/layout/portal-header.tsx`、認証後のシェルは `HxAppShell` を使い、画面ごとにヘッダーを自前実装しません。
+- 開発時のみ `http://localhost:3000/dev/catalog` で各コンポーネントの状態を確認できます（本番ビルドでは404）。
+- 状態バッジのラベルは `components/design-system/hx-status-badge.ts(x)` の `DELIVERY_STATUS` を唯一の対応表とし、色だけで状態を伝えません。
+
 `lib/firebase-demo.ts` は将来のデモ向けの明示的な初期化関数です。`NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-mmr-dev`、`NEXT_PUBLIC_USE_FIREBASE_EMULATOR=true` と Compose が指定する localhost の Auth / Firestore / Storage エミュレータのアドレスがすべて必要で、異なる設定は拒否します。この旧ヘルパーは既存のSDK結合試験用です。業務画面は `lib/firebase-client.ts` のAuth＋APIクライアントを利用し、Firestoreから業務データを直接取得しません。
 
 本番配信基盤は未決定です。以下のnonce方式はNext.jsサーバーを必要とするため、既存のHosting静的配信案との調整が必要です。実用化には認証・施設単位の認可・監査・医療情報保護の実装と検証も必要です。

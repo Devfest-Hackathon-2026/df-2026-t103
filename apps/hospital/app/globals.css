@@ -1,3 +1,86 @@
 @import "tailwindcss";
 
-body { background: #f1f5f9; color: #172554; font-family: Arial, sans-serif; }
+/* HX（医療機関向け）デザイントークン — docs/10_デザインシステム.md §4.3/§4.4/§5.3/§7.1 */
+@theme {
+  --color-hx-primary: #164c73;
+  --color-hx-primary-hover: #103c5c;
+  --color-hx-on-primary: #ffffff;
+  --color-hx-canvas: #f5f7fa;
+  --color-hx-surface: #ffffff;
+  --color-hx-surface-subtle: #eff3f7;
+  --color-hx-text: #172b4d;
+  --color-hx-text-subtle: #42526e;
+  --color-hx-border: #cdd5df;
+  --color-hx-divider: #e2e8f0;
+  --color-hx-row-hover: #f2f7fc;
+  --color-hx-row-selected: #e5f1fb;
+  --color-hx-focus: #0b5cad;
+  --color-hx-nav-active: #e7f1fa;
+
+  --color-hx-success: #126b45;
+  --color-hx-success-bg: #e8f7ee;
+  --color-hx-warning: #7a4b00;
+  --color-hx-warning-bg: #fff3d6;
+  --color-hx-danger: #a21d32;
+  --color-hx-danger-hover: #8a1929;
+  --color-hx-danger-bg: #fff0f2;
+  --color-hx-info: #164c73;
+  --color-hx-info-bg: #eaf3fa;
+  --color-hx-neutral: #42526e;
+  --color-hx-neutral-bg: #eef1f4;
+
+  /* HX 形状トークン（§7.1）。本アプリはHXのみのため標準名で定義する */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+
+  --font-sans:
+    Inter, "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI",
+    system-ui, -apple-system, sans-serif;
+
+  /* HX タイポグラフィロール（§5.3） */
+  --text-hx-page-title: 1.5rem;
+  --text-hx-page-title--line-height: 1.35;
+  --text-hx-section-title: 1.125rem;
+  --text-hx-section-title--line-height: 1.45;
+  --text-hx-body: 0.875rem;
+  --text-hx-body--line-height: 1.55;
+  --text-hx-detail: 1rem;
+  --text-hx-detail--line-height: 1.65;
+  --text-hx-label: 0.8125rem;
+  --text-hx-label--line-height: 1.45;
+  --text-hx-caption: 0.75rem;
+  --text-hx-caption--line-height: 1.5;
+  --text-hx-metric: 1.75rem;
+  --text-hx-metric--line-height: 1.2;
+  --text-hx-table-header: 0.8125rem;
+  --text-hx-table-header--line-height: 1.35;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-hx-canvas font-sans text-hx-body text-hx-text antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-hx-focus);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

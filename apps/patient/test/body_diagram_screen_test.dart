@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:patient/body_diagram_screen.dart';
 import 'package:patient/demo_body_diagram_preview.dart';
 
 void main() {

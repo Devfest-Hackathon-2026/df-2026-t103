@@ -165,3 +165,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5065 -t lib/demo_n
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5066 -t lib/demo_offline_draft_preview.dart
 ```
+
+## 身体図プレビュー
+
+身体図（P-011）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5067 を開きます。確認後は Ctrl+C で停止します。前面／背面を切り替えて部位を複数タップで選べ、図が使いにくい場合は文字からも選べます。部位が分からなければスキップして進めます。選択はメモリ上のみで、保存・送信（symptoms API）は未接続です。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5067 -t lib/demo_body_diagram_preview.dart
+```

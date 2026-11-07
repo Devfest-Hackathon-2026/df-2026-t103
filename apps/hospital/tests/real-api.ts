@@ -11,6 +11,7 @@ import { initFirebase } from "../../../services/api/src/firebase";
 import { DEV_LEGAL_DOCUMENTS } from "../../../services/api/src/domain/legalDocuments";
 import { createApiClient } from "../lib/api-client";
 import { browserSmoke } from "./browser-smoke.mjs";
+import { hospitalTenantSmoke } from "./hospital-tenant-smoke";
 
 test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)", { timeout: 90000 }, async () => {
   assert.equal(process.env.FIREBASE_PROJECT_ID, "demo-mmr-dev");
@@ -148,6 +149,7 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
     assert.equal(patientStatus.status, 200);
     assert.equal((await patientStatus.json() as { status: string }).status, "delivered");
     assert.equal((await firebase.firestore.collection("deliveries").where("senderUid", "==", patientUid).get()).size, 1);
+    await hospitalTenantSmoke({ firebase, apiBaseUrl: `http://127.0.0.1:${port}/v1`, facilityId: uid, otherFacilityId: `${uid}-reject`, deliveryId: deliveredId!, hmacSecret: loadConfig().hmacSecret });
     await api.disableFacility(uid, "Synthetic repeat");
     assert.deepEqual((await facility.get()).data(), stopped, "Repeated stop must be idempotent");
     await assert.rejects(api.disableFacility(`${uid}-missing`, "Synthetic emergency drill"), { status: 404 });

@@ -19,3 +19,9 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 -m unittest discover -s infra/storage -p 'test_*.py' -v
+      - name: Test Firestore backup configuration failures (no cloud access)
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          bash -n infra/firestore/backup-export.sh
+          python3 -m unittest discover -s infra/firestore -p 'test_*.py' -v

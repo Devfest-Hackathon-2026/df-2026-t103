@@ -60,7 +60,8 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     await tester.pumpWidget(const CommonCatalogPreview());
-    await tester.pumpAndSettle();
+    // loading のスピナーが常時アニメーションするため pumpAndSettle は使わない。
+    await tester.pump();
     expect(find.text('状態: 読み込み中'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('共通文言: 医療行為でない'),

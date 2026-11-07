@@ -4,10 +4,11 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { staffManagementBrowser } from "./staff-management-browser.mjs";
 
 // Optional real-browser extension of test:api. Uses the real UI + SDK + BE;
 // no page routes, API responses, or Firebase services are intercepted.
-export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, staffIdToken, assertStillPending, assertStillReceiving, assertBrowserDelivery }) {
+export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, staffIdToken, assertStillPending, assertStillReceiving, assertBrowserDelivery, staffManagement }) {
   const profile = await mkdtemp(join(tmpdir(), "hospital-browser-"));
   const origin = "http://127.0.0.1:33090";
   const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", "33090"], {
@@ -141,6 +142,7 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     await evaluate("document.querySelector('a[href=\"/deliveries\"]').click()");
     await poll(`[...document.querySelectorAll('tbody tr')].some(row=>row.querySelector('a[href="/deliveries/${browserDeliveryId}"]') && row.innerText.includes('受領確認済み'))`);
     await assertBrowserDelivery("acknowledged");
+    await staffManagementBrowser({ evaluate, poll, typeText: (text) => send("Input.insertText", { text }, sessionId), fixture: staffManagement });
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('ログアウト')).click()");
     await poll("!!document.querySelector('input[name=email]') && !document.querySelector('tbody') && !document.querySelector('[data-audit-summary]')");
     assert.deepEqual(await evaluate("window.cspViolations"), [], "Real UI/Auth/BE workflow must not violate CSP");

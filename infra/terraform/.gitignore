@@ -8,3 +8,6 @@ terraform.tfvars
 *.auto.tfvars
 override.tf
 override.tf.json
+# Remote-state bootstrap settings and saved plans (may contain sensitive data)
+backend.local.tf
+*.tfplan

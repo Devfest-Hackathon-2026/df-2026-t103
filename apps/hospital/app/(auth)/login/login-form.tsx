@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useState, useSyncExternalStore, type FormEvent } from "react";
 import {
   getMultiFactorResolver,
   multiFactor,
@@ -24,6 +24,10 @@ type Step =
   | { kind: "mfa"; resolver: MultiFactorResolver; hintUid: string }
   | { kind: "enroll"; secret: TotpSecret };
 
+const subscribe = () => () => {};
+const clientReady = () => true;
+const serverReady = () => false;
+
 const GENERIC_AUTH_ERROR = "メールアドレスまたはパスワードが正しくありません。";
 
 function errorMessage(error: unknown): string {
@@ -41,6 +45,7 @@ export function LoginForm({ next }: { next: string }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>({ kind: "credentials" });
   const [busy, setBusy] = useState(false);
+  const ready = useSyncExternalStore(subscribe, clientReady, serverReady);
   const [message, setMessage] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [resetSent, setResetSent] = useState(false);
@@ -157,7 +162,7 @@ export function LoginForm({ next }: { next: string }) {
 
   if (step.kind === "mfa") {
     return (
-      <form onSubmit={submitMfa} className="space-y-5 rounded-md border border-hx-border bg-hx-surface p-6">
+      <form method="post" onSubmit={submitMfa} className="space-y-5 rounded-md border border-hx-border bg-hx-surface p-6">
         <div className="space-y-1">
           <h2 className="text-hx-section-title font-semibold">多要素認証</h2>
           <p className="text-hx-body text-hx-text-subtle">
@@ -180,7 +185,7 @@ export function LoginForm({ next }: { next: string }) {
           <HxButton variant="subtle" onClick={() => void backToCredentials()} disabled={busy}>
             ログインに戻る
           </HxButton>
-          <HxButton type="submit" loading={busy}>確認する</HxButton>
+          <HxButton type="submit" disabled={!ready} loading={busy}>確認する</HxButton>
         </div>
       </form>
     );
@@ -188,7 +193,7 @@ export function LoginForm({ next }: { next: string }) {
 
   if (step.kind === "enroll") {
     return (
-      <form onSubmit={submitEnroll} className="space-y-5 rounded-md border border-hx-border bg-hx-surface p-6">
+      <form method="post" onSubmit={submitEnroll} className="space-y-5 rounded-md border border-hx-border bg-hx-surface p-6">
         <div className="space-y-1">
           <h2 className="text-hx-section-title font-semibold">多要素認証の設定</h2>
           <p className="text-hx-body text-hx-text-subtle">
@@ -218,14 +223,14 @@ export function LoginForm({ next }: { next: string }) {
           <HxButton variant="subtle" onClick={() => void backToCredentials()} disabled={busy}>
             ログインに戻る
           </HxButton>
-          <HxButton type="submit" loading={busy}>登録する</HxButton>
+          <HxButton type="submit" disabled={!ready} loading={busy}>登録する</HxButton>
         </div>
       </form>
     );
   }
 
   return (
-    <form onSubmit={submitCredentials} className="space-y-5 rounded-md border border-hx-border bg-hx-surface p-6">
+    <form method="post" onSubmit={submitCredentials} className="space-y-5 rounded-md border border-hx-border bg-hx-surface p-6">
       <HxField label="メールアドレス" required>
         <input
           id="hx-login-email"
@@ -262,11 +267,11 @@ export function LoginForm({ next }: { next: string }) {
         </p>
       ) : null}
       <div className="space-y-3">
-        <HxButton type="submit" block loading={busy}>ログイン</HxButton>
+        <HxButton type="submit" block disabled={!ready} loading={busy}>ログイン</HxButton>
         <button
           type="button"
           onClick={() => void resetPassword()}
-          disabled={busy}
+          disabled={busy || !ready}
           className="w-full text-center text-hx-caption font-semibold text-hx-primary underline-offset-2 hover:underline"
         >
           パスワードをお忘れですか

@@ -175,3 +175,5 @@ Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータル�
 実環境への公開前に`facilityVerificationRecords: facilityId ASC, createdAt DESC`のindexを
 `firebase/firestore.indexes.json`から通常のRules/indexesデプロイ手順で作成し、利用可能状態を確認してください。
 API/画面とindexのデプロイ、正規MFA/App Check付きのクラウド受入は、このローカル検証だけで完了扱いにしません。
+
+職員の認証フォームはPOSTを明示し、画面初期化前の送信を無効にします。初期化前の標準GET送信によって認証情報がURLへ入ることを防ぎます。任意の実ブラウザ結合試験は`/login`のSSRでPOST・送信無効を確認し、初期化後に送信可能になることも確認します。CSP/no-storeは既存の本番HTTP試験で継続確認します。

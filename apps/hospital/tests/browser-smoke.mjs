@@ -95,6 +95,13 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('ログアウト')).click()");
     await poll("!!document.querySelector('input[name=email]') && !document.querySelector('tbody') && !document.querySelector('[data-audit-summary]')");
     assert.deepEqual(await evaluate("window.cspViolations"), [], "Real UI/Auth/BE workflow must not violate CSP");
+    const loginHtml = await (await fetch(`${origin}/login`)).text();
+    assert.match(loginHtml, /<form[^>]*method="post"/);
+    assert.match(loginHtml, /<button[^>]*type="submit"[^>]*disabled=""/);
+    await send("Page.navigate", { url: `${origin}/login` }, sessionId);
+    await poll("!!document.querySelector('#hx-login-email') && !!document.querySelector('button[type=submit]:not(:disabled)')");
+    assert.equal(await evaluate("document.querySelector('form').method"), "post");
+    assert.equal(await evaluate("location.search"), "");
   } finally {
     socket?.close();
     for (const process of [chrome, next]) {

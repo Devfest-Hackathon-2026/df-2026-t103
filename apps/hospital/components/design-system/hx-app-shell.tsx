@@ -16,6 +16,8 @@ export interface HxNavItem {
 export interface HxAppShellProps {
   /** 業務コンテキストの証拠としてヘッダーに常時表示（§17.1）。未選択時は null。 */
   facilityName: string | null;
+  /** 施設バッジの押下先（H-002 の施設切替）。未指定なら非リンク表示。 */
+  facilityHref?: string;
   staffName?: string | null;
   navItems: HxNavItem[];
   onSignOut?: () => void;
@@ -51,18 +53,33 @@ function NavLink({ item, collapsed, onNavigate }: { item: HxNavItem; collapsed?:
   );
 }
 
-function FacilityBadge({ name }: { name: string | null }) {
-  return (
-    <span className="inline-flex min-w-0 items-center gap-1.5 rounded-sm bg-hx-surface-subtle px-2.5 py-1 text-hx-label font-semibold">
+function FacilityBadge({ name, href }: { name: string | null; href?: string }) {
+  const body = (
+    <>
       <HxIcon name="building" size={16} className="shrink-0" />
       <span className="truncate">{name ?? "施設未選択"}</span>
-    </span>
+    </>
   );
+  const cls = "inline-flex min-w-0 items-center gap-1.5 rounded-sm bg-hx-surface-subtle px-2.5 py-1 text-hx-label font-semibold";
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className={`${cls} hover:bg-hx-row-hover`}
+        aria-label={`${name ?? "施設未選択"}、施設を切り替える`}
+        title="施設を切り替える"
+      >
+        {body}
+      </Link>
+    );
+  }
+  return <span className={cls}>{body}</span>;
 }
 
 // §6.3: <1024px はドロワー、1024–1199px は72pxアイコンレール、1200–1439px は220px、≥1440px は240px。
 export function HxAppShell({
   facilityName,
+  facilityHref,
   staffName,
   navItems,
   onSignOut,
@@ -137,7 +154,7 @@ export function HxAppShell({
           もしもし問診
         </Link>
         <span aria-hidden="true" className="hidden h-5 w-px bg-hx-border sm:block" />
-        <FacilityBadge name={facilityName} />
+        <FacilityBadge name={facilityName} href={facilityHref} />
         <div className="ml-auto flex items-center gap-3">
           {staffName ? (
             <span className="hidden items-center gap-1.5 text-hx-body text-hx-text-subtle sm:inline-flex">

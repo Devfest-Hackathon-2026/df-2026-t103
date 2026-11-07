@@ -16,19 +16,19 @@ function toLogout(pathname: string) {
 }
 
 const MembershipsContext = createContext<StaffMembership[]>([]);
+const SelectedFacilityContext = createContext<StaffMembership | null>(null);
 
 export function useMemberships(): StaffMembership[] {
   return useContext(MembershipsContext);
 }
 
+/** サーバでメンバーシップ照合済みの選択施設。未選択・無効値は null。 */
+export function useSelectedFacility(): StaffMembership | null {
+  return useContext(SelectedFacilityContext);
+}
+
 /** ID トークン寿命（約60分）に先立つ定期的なセッションCookie更新間隔。 */
 const RENEW_INTERVAL_MS = 10 * 60 * 1000;
-
-function goLogin(pathname: string) {
-  const next = pathname && pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : "";
-  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 全面遷移でFirebaseのインメモリ状態も確実に破棄する
-  location.assign(`/login${next}`);
-}
 
 function SessionKeeper({
   pathname,
@@ -66,35 +66,47 @@ function SessionKeeper({
 
 export function WorkspaceShell({
   memberships,
+  selectedFacility,
   children,
 }: {
   memberships: StaffMembership[];
+  selectedFacility: StaffMembership | null;
   children: ReactNode;
 }) {
   const pathname = usePathname();
   const [staffName, setStaffName] = useState<string | null>(null);
 
   const navItems: HxNavItem[] = [
-    { href: "/facilities", label: "所属施設", icon: "building", active: pathname === "/facilities" },
+    {
+      href: "/deliveries",
+      label: "受信問診",
+      icon: "inbox",
+      active: pathname === "/deliveries" || pathname.startsWith("/deliveries/"),
+    },
+    { href: "/facilities", label: "施設の切替", icon: "building", active: pathname === "/facilities" },
   ];
 
   async function handleSignOut() {
     await signOut(firebaseClient().auth).catch(() => undefined);
     await destroySession();
-    goLogin("/");
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- 全面遷移でFirebaseのインメモリ状態も確実に破棄する
+    location.assign("/login");
   }
 
   return (
     <MembershipsContext.Provider value={memberships}>
-      <SessionKeeper pathname={pathname} onUserChange={setStaffName} />
-      <HxAppShell
-        facilityName={null}
-        staffName={staffName}
-        navItems={navItems}
-        onSignOut={handleSignOut}
-      >
-        {children}
-      </HxAppShell>
+      <SelectedFacilityContext.Provider value={selectedFacility}>
+        <SessionKeeper pathname={pathname} onUserChange={setStaffName} />
+        <HxAppShell
+          facilityName={selectedFacility?.facility?.displayName ?? null}
+          facilityHref="/facilities"
+          staffName={staffName}
+          navItems={navItems}
+          onSignOut={handleSignOut}
+        >
+          {children}
+        </HxAppShell>
+      </SelectedFacilityContext.Provider>
     </MembershipsContext.Provider>
   );
 }

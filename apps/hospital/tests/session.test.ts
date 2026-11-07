@@ -7,6 +7,7 @@ import {
   portalJson,
 } from "../lib/session-shared";
 import { proxy } from "../proxy";
+import { FACILITY_ID_PATTERN, facilityCookieName } from "../lib/facility-shared";
 
 // テスト実行時に clientConfig() が読む環境変数（Emulator向けの明示設定）
 process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATOR ??= "true";
@@ -78,6 +79,14 @@ test("proxy: セッションCookieがあれば業務画面を通し、/login で
   assert.equal(authed.headers.get("location"), null);
   const login = proxy(request("http://localhost:3000/login", {}, { "mmr-session": "token" }));
   assert.equal(new URL(login.headers.get("location")!).pathname, "/facilities");
+});
+
+test("施設コンテキスト: Cookie名とID検証", () => {
+  assert.equal(facilityCookieName(), "mmr-facility");
+  for (const ok of ["fac-001", "abc_DEF-123"]) assert.ok(FACILITY_ID_PATTERN.test(ok));
+  for (const bad of ["", "a".repeat(129), "fac/..", "施設", "a b"]) {
+    assert.ok(!FACILITY_ID_PATTERN.test(bad));
+  }
 });
 
 test("proxy: 公開画面は Cookie 有無に関わらずそのまま通す", () => {

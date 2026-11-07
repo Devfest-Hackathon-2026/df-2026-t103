@@ -9,6 +9,7 @@ import {
   SESSION_COOKIE_DEV,
   SESSION_COOKIE_PROD,
 } from "./session-shared";
+import { FACILITY_COOKIE_DEV, FACILITY_COOKIE_PROD } from "./facility-shared";
 
 export {
   assertPortalClient,
@@ -71,6 +72,8 @@ export async function clearSession(): Promise<void> {
     SESSION_COOKIE_DEV,
     APPCHECK_COOKIE_PROD,
     APPCHECK_COOKIE_DEV,
+    FACILITY_COOKIE_PROD, // 施設コンテキストも共有端末の次ユーザに残さない
+    FACILITY_COOKIE_DEV,
   ]) {
     jar.delete(name);
   }

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { readSession, sessionApiFetch } from "../../lib/session";
 import { PATHNAME_HEADER } from "../../lib/session-shared";
+import { readFacilityCookie } from "../../lib/facility-context";
 import type { MembershipsResponse } from "../../lib/memberships";
 import { HxErrorPanel } from "../../components/design-system/hx-feedback";
 import { WorkspaceShell } from "./workspace-shell";
@@ -38,18 +39,19 @@ function UpstreamError({
  * 5xx や接続失敗はログアウトさせず、再試行可能なエラー画面を出す。
  */
 export default async function WorkspaceLayout({ children }: { children: React.ReactNode }) {
-  const session = await readSession();
-  if (!session) {
-    // 無効・空値などの残留Cookieも消してからログインへ戻す
-    redirect("/api/session/logout");
-  }
-
   // RSC データ要求に付く _rsc パラメータだけを落として元URLを復元する
   const rawPath = (await headers()).get(PATHNAME_HEADER) ?? "/facilities";
-  const retryParams = new URLSearchParams(rawPath.split("?")[1] ?? "");
+  const qIndex = rawPath.indexOf("?");
+  const retryParams = new URLSearchParams(qIndex >= 0 ? rawPath.slice(qIndex + 1) : "");
   retryParams.delete("_rsc");
   const query = retryParams.toString();
-  const currentPath = `${rawPath.split("?")[0]}${query ? `?${query}` : ""}`;
+  const currentPath = `${qIndex >= 0 ? rawPath.slice(0, qIndex) : rawPath}${query ? `?${query}` : ""}`;
+
+  const session = await readSession();
+  if (!session) {
+    // 無効・空値などの残留Cookieも消してからログインへ戻す（next も保持）
+    redirect(`/api/session/logout?next=${encodeURIComponent(currentPath)}`);
+  }
 
   const upstream = await sessionApiFetch(session, "/me/facility-memberships").catch(
     () => null,
@@ -94,5 +96,17 @@ export default async function WorkspaceLayout({ children }: { children: React.Re
       />
     );
   }
-  return <WorkspaceShell memberships={memberships.items}>{children}</WorkspaceShell>;
+  // H-002: Cookie の facilityId はメンバーシップとの照合にのみ使い、
+  // 含まれない値（改ざん・失効）は未選択として扱う。
+  const selectedFacilityId = await readFacilityCookie();
+  const selected =
+    selectedFacilityId !== null
+      ? (memberships.items.find((m) => m.facilityId === selectedFacilityId) ?? null)
+      : null;
+
+  return (
+    <WorkspaceShell memberships={memberships.items} selectedFacility={selected}>
+      {children}
+    </WorkspaceShell>
+  );
 }

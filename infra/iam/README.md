@@ -129,3 +129,31 @@ log view/IAM/アプリそれぞれの許可・拒否試験、継承経路のレ�
 - [Log views](https://docs.cloud.google.com/logging/docs/logs-views)
 - [Log bucket retention](https://docs.cloud.google.com/logging/docs/buckets)
 - [Service account authentication roles](https://docs.cloud.google.com/iam/docs/service-account-permissions)
+
+## 2026-11-07 委任に基づく初期運用設定
+
+- 事業PO/初期の承認責任者: taichi。グループの個人メンバーやメールは公開しない。
+- 監査証跡: 東京 `operator-audit` bucket、400日、限定view `security-audit`。
+  年次レビューをまたぐ調査期間として選定した運用値で、法定保持期間とは主張しない。
+  retention lockは適用しない。短縮や削除は別途変更レビューを必要とする。
+- アプリ監査とCloud Audit Logsをsinkで選別する。bucket内のviewは単一projectのsourceに限定。
+  Google CloudのData Accessログは別途有効化が必要で、sink追加だけでは生成されない。
+- 開発には通常GCP権限を付けない。運用はmonitoring.viewer、セキュリティはiam.securityReviewer、
+  監査/セキュリティには対象viewのviewAccessorのみ。実在確認したGoogle Groupだけ入力可能。
+- グループ値の既定は空集合。Cloud Identityの実在グループを確認できない間は誰にも新しい
+  権限を付けない。架空のアドレス、空の運営用SA、個人へのOwner追加で代用しない。
+- 四半期/異動時のアクセス棚卸し。メンバー追加・承認・実行は非公開台帳へ記録。
+  独立監査担当が未配置の初期段階では職務分離は未達であり、本番利用可とはしない。
+
+実装: `infra/terraform/operator_audit.tf`。既存IAM bindingを上書きするpolicy/bindingリソースを
+使わずmember単位で追加する。既存の4人のEditorと1人のOwnerは調査で確認したが、
+在籍・依存関係を推測して削除していない。Editor経由の広いデータ権限という残存リスクは解消していない。
+
+このセッションの認証を `testIamPermissions` で検査した結果、
+`resourcemanager.projects.setIamPolicy` / `logging.buckets.create` /
+`logging.sinks.create` / `logging.views.setIamPolicy` がなく、実適用はブロックされる。
+設定値の再確認ではなく、権限を持つ実行者による適用と実グループの作成・メンバー照合が必要。
+本書とTerraformの追加だけでIssue完了とはしない。
+
+同一project内のlog bucketへのsinkはwriter用の追加project IAM付与が不要:
+https://docs.cloud.google.com/logging/docs/export/configure_export_v2

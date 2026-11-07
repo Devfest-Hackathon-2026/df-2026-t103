@@ -124,6 +124,20 @@ export function createApiClient(config: {
       const body: unknown = await response.json();
       if (!body || typeof body !== "object" || !("facilityId" in body) || body.facilityId !== facilityId || !("receivingEnabled" in body) || body.receivingEnabled !== false) throw new Error("停止結果を確認できませんでした。");
     },
+    async enableFacility(facilityId: string, signal?: AbortSignal): Promise<void> {
+      if (!/^[A-Za-z0-9_-]{1,200}$/.test(facilityId)) throw new Error("施設IDを確認してください。");
+      const headers = await authHeaders();
+      const response = await fetch(`${config.apiBaseUrl}/operator/facilities/${encodeURIComponent(facilityId)}/enable`, {
+        method: "POST", cache: "no-store", credentials: "omit", redirect: "error", signal, headers,
+      });
+      if (!response.ok) {
+        // Inspect one known code only; never expose API messages or private fields.
+        const body = await response.json().catch(() => null);
+        throw new ApiError(response.status, response.status === 403 && body?.error?.code === "REAUTH_REQUIRED");
+      }
+      const body: unknown = await response.json();
+      if (!body || typeof body !== "object" || !("facilityId" in body) || body.facilityId !== facilityId || !("receivingEnabled" in body) || body.receivingEnabled !== true) throw new Error("再開結果を確認できませんでした。");
+    },
     async jobFailures(type: JobType, cursor?: string, signal?: AbortSignal): Promise<JobFailurePage> {
       const headers = await authHeaders();
       const query = new URLSearchParams({ type, limit: "20" });

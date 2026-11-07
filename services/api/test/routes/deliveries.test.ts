@@ -125,6 +125,81 @@ describe("delivery routes (#17, API-029/030)", () => {
     expect(body.deliveryId).toMatch(/^dlv_/);
   });
 
+  it("POST /deliveries は includeProfile 同意時に本人確認スナップショットと表示名を保存する", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+    const ts = FieldValue.serverTimestamp();
+    await deps.db.doc(`patientProfiles/${UID}`).set({
+      patientUid: UID,
+      familyName: "山田",
+      givenName: "太郎",
+      familyNameKana: "やまだ",
+      givenNameKana: "たろう",
+      birthDate: "1980-01-01",
+      phoneNumber: "090-0000-0000",
+      locale: "ja-JP",
+      profileComplete: true,
+      updatedAt: ts,
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-key-identity" },
+      payload: deliveryPayload(qid),
+    });
+    expect(res.statusCode).toBe(202);
+    const { deliveryId } = res.json() as { deliveryId: string };
+    const doc = (await deps.db.doc(`deliveries/${deliveryId}`).get()).data() as {
+      patientIdentitySnapshot: Record<string, unknown>;
+      patientDisplayName: string | null;
+    };
+    expect(doc.patientIdentitySnapshot).toMatchObject({
+      familyName: "山田",
+      givenName: "太郎",
+      birthDate: "1980-01-01",
+      phoneNumber: "090-0000-0000",
+    });
+    expect(doc.patientDisplayName).toBe("山田 太郎");
+  });
+
+  it("POST /deliveries は includeProfile 非同意なら本人確認情報を保存しない", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+    await deps.db.doc(`patientProfiles/${UID}`).set({
+      patientUid: UID,
+      familyName: "山田",
+      givenName: "太郎",
+      locale: "ja-JP",
+      profileComplete: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-key-noprofile" },
+      payload: {
+        ...deliveryPayload(qid),
+        shareScope: {
+          includeProfile: false,
+          includeConfirmedMedications: true,
+          includePrescriptionImages: false,
+        },
+      },
+    });
+    expect(res.statusCode).toBe(202);
+    const { deliveryId } = res.json() as { deliveryId: string };
+    const doc = (await deps.db.doc(`deliveries/${deliveryId}`).get()).data() as {
+      patientIdentitySnapshot: Record<string, unknown>;
+      patientDisplayName: string | null;
+    };
+    expect(doc.patientIdentitySnapshot).toEqual({});
+    expect(doc.patientDisplayName).toBeNull();
+  });
+
   it("POST /deliveries is idempotent — same key returns same deliveryId", async () => {
     const { deps, app } = await setup();
     const qid = await makeFinalizedQuestionnaire(app);

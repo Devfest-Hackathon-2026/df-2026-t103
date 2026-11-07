@@ -345,9 +345,11 @@ export interface FacilityDoc {
   serviceAgreementVersion: string;
   verifiedAt?: unknown;
   verificationRecordId?: string;
-  /** 運営の受付停止（API-037）時刻・理由。receivingEnabled=false の根拠。 */
+  /** 受付停止（API-037運営 or H-006施設管理者）時刻・理由。receivingEnabled=false の根拠。 */
   receivingDisabledAt?: unknown;
   receivingDisabledReason?: string;
+  /** 受付を止めた主体。未設定は運営停止とみなす（後方互換）。 */
+  receivingDisabledBy?: "platform" | "staff";
   createdAt: unknown;
   updatedAt: unknown;
 }
@@ -392,6 +394,8 @@ export interface DeliveryDoc {
     includePrescriptionImages: boolean;
   };
   patientIdentitySnapshot: Record<string, unknown>;
+  /** 一覧表示・前方一致検索用の患者表示名（同意時のみ。非同意は null）。 */
+  patientDisplayName?: string | null;
   questionnaireSnapshot: Record<string, unknown>;
   snapshotSha256: string;
   status: DeliveryStatus;

@@ -50,6 +50,7 @@ export interface DeliveryListItem {
   questionnaireId: string;
   questionnaireRevisionId: string;
   status: DeliveryDoc["status"];
+  patientDisplayName: string | null;
   createdAt: unknown;
   deliveredAt: unknown;
   acknowledgedAt: unknown;
@@ -60,49 +61,99 @@ export interface DeliveryListResult {
   nextCursor: string | null;
 }
 
+/** Firestore SDK がカーソル位置エラーで投げる INVALID_ARGUMENT を検知する。 */
+function isCursorArgumentError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  if (code === 3 || code === "invalid-argument") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /INVALID_ARGUMENT|invalid argument|cursor position is outside/i.test(message);
+}
+
 /**
  * 施設の受信一覧（receivedAt=deliveredAt 降順、自院スコープ、20件カーソルページング）。
  * senderUid は一覧に含めない（03_機能仕様書 §3.8）。
+ * 絞り込み・検索はサーバ側のみで行い、全件をクライアントへ送らない（H-003 検索制限）。
  */
 export async function listDeliveriesByFacility(
   db: FirestoreLike,
   facilityId: string,
-  opts?: { cursor?: string; limit?: number },
+  opts?: {
+    cursor?: string;
+    limit?: number;
+    status?: DeliveryDoc["status"];
+    /** 患者表示名の前方一致（自院スコープ内のみ） */
+    q?: string;
+  },
 ): Promise<DeliveryListResult> {
   const pageSize = opts?.limit ?? 20;
+  const q = opts?.q && opts.q.length > 0 ? opts.q : null;
 
   // カーソルは直前ページ末尾の deliveryId。そのスナップショットで startAfter し、
   // ソート値が同一のドキュメント間でも一意に分割できるようにする。
   // 失効・他院のカーソルは空ページを返し、ページネーションを安全に打ち切る。
+  // 名前検索中はソート先頭が patientDisplayName のため、カーソル doc が
+  // 表示名を持ち現在の前方一致範囲内であることも検証する
+  // （範囲外・欠損カーソルは実 Firestore で INVALID_ARGUMENT=500 になる）。
   let startAfterDoc: DocumentSnapshot | undefined;
   if (opts?.cursor) {
     const curSnap = await db.doc(`deliveries/${opts.cursor}`).get();
     const cur = curSnap.data() as DeliveryDoc | undefined;
+    const cursorName = cur?.patientDisplayName;
     if (
       !curSnap.exists ||
       !cur ||
       cur.facilityId !== facilityId ||
       cur.deliveredAt == null ||
-      cur.createdAt == null
+      cur.createdAt == null ||
+      (q !== null &&
+        (typeof cursorName !== "string" || cursorName < q || cursorName >= `${q}ﾀ`))
     ) {
       return { items: [], nextCursor: null };
     }
     startAfterDoc = curSnap;
   }
 
-  const rows = await queryDocs<DeliveryDoc>(
-    db,
-    "deliveries",
-    [{ field: "facilityId", op: "==", value: facilityId }],
-    {
-      orderBy: [
-        { field: "deliveredAt", direction: "desc" },
-        { field: "createdAt", direction: "desc" },
-      ],
-      ...(startAfterDoc ? { startAfterDoc } : {}),
-      limit: pageSize + 1,
-    },
-  );
+  const filters: Array<{ field: string; op: "==" | ">=" | "<=" | "<"; value: unknown }> = [
+    { field: "facilityId", op: "==", value: facilityId },
+  ];
+  if (opts?.status) filters.push({ field: "status", op: "==", value: opts.status });
+
+  // 名前検索は表示名の範囲クエリ（前方一致）で、順序は deliveredAt から
+  // patientDisplayName へ切り替える（別複合索引）。
+  const orderBy = q
+    ? [
+        { field: "patientDisplayName", direction: "asc" as const },
+        { field: "deliveredAt", direction: "desc" as const },
+      ]
+    : [
+        { field: "deliveredAt", direction: "desc" as const },
+        { field: "createdAt", direction: "desc" as const },
+      ];
+  if (q) {
+    filters.push(
+      { field: "patientDisplayName", op: ">=", value: q },
+      { field: "patientDisplayName", op: "<", value: `${q}\uf8ff` },
+    );
+  }
+
+  // 上記で検証済みでも索引未適用・SDK差異によるカーソル範囲エラーは
+  // 500 ではなく安全な空ページに落とす
+  let rows;
+  try {
+    rows = await queryDocs<DeliveryDoc>(
+      db,
+      "deliveries",
+      filters,
+      {
+        orderBy,
+        ...(startAfterDoc ? { startAfterDoc } : {}),
+        limit: pageSize + 1,
+      },
+    );
+  } catch (error) {
+    if (isCursorArgumentError(error)) return { items: [], nextCursor: null };
+    throw error;
+  }
 
   let items = rows;
   let nextCursor: string | null = null;
@@ -118,6 +169,7 @@ export async function listDeliveriesByFacility(
       questionnaireId: r.data.questionnaireId,
       questionnaireRevisionId: r.data.questionnaireRevisionId,
       status: r.data.status,
+      patientDisplayName: r.data.patientDisplayName ?? null,
       createdAt: r.data.createdAt,
       deliveredAt: r.data.deliveredAt ?? null,
       acknowledgedAt: r.data.acknowledgedAt ?? null,

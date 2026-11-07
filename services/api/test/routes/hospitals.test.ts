@@ -45,6 +45,27 @@ async function seedMembership(
   });
 }
 
+/** テスト用施設を直接シードする。 */
+async function seedFacility(
+  deps: TestDeps,
+  facilityId: string,
+  overrides: Record<string, unknown> = {},
+): Promise<void> {
+  const now = Timestamp.fromDate(new Date("2026-01-01T00:00:00Z"));
+  await deps.db.doc(`facilities/${facilityId}`).set({
+    facilityId,
+    legalName: "医療法人テスト会テスト病院",
+    displayName: "テスト病院",
+    address: { formatted: "東京都千代田区1-1-1" },
+    verificationStatus: "verified",
+    receivingEnabled: true,
+    serviceAgreementVersion: "v1",
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  });
+}
+
 /** テスト用配送物を直接シードする。 */
 async function seedDelivery(
   deps: TestDeps,
@@ -173,6 +194,134 @@ describe("hospital receive routes (#18, API-031〜033)", () => {
       };
       expect(p2.deliveries.map((d) => d.deliveryId)).toEqual(["d-page-2"]);
       expect(p2.nextCursor).toBeNull();
+    });
+
+    it("patientDisplayName を一覧に返す（senderUid は返さない）", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      await seedDelivery(deps, "d-name", FACILITY_A, {
+        patientDisplayName: "山田 太郎",
+      });
+      await seedDelivery(deps, "d-no-name", FACILITY_A);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as {
+        deliveries: Array<{ deliveryId: string; patientDisplayName: string | null }>;
+      };
+      const named = body.deliveries.find((d) => d.deliveryId === "d-name");
+      const unnamed = body.deliveries.find((d) => d.deliveryId === "d-no-name");
+      expect(named?.patientDisplayName).toBe("山田 太郎");
+      expect(unnamed?.patientDisplayName).toBeNull();
+    });
+
+    it("status で絞り込める", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      await seedDelivery(deps, "d-del", FACILITY_A);
+      await seedDelivery(deps, "d-ack", FACILITY_A, {
+        status: "acknowledged",
+        acknowledgedAt: Timestamp.fromDate(new Date("2026-01-02T00:00:00Z")),
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries?status=acknowledged`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { deliveries: Array<{ deliveryId: string }> };
+      expect(body.deliveries.map((d) => d.deliveryId)).toEqual(["d-ack"]);
+    });
+
+    it("q は患者表示名の前方一致で自院スコープに限定される", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      await seedDelivery(deps, "d-yamada", FACILITY_A, {
+        patientDisplayName: "山田 太郎",
+      });
+      await seedDelivery(deps, "d-sato", FACILITY_A, {
+        patientDisplayName: "佐藤 花子",
+      });
+      // 他院の同名患者は混ざらない
+      await seedDelivery(deps, "d-b-yamada", FACILITY_B, {
+        patientDisplayName: "山田 次郎",
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries?q=${encodeURIComponent("山田")}`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { deliveries: Array<{ deliveryId: string }> };
+      expect(body.deliveries.map((d) => d.deliveryId)).toEqual(["d-yamada"]);
+    });
+
+    it("他院のカーソルは空ページを返す", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      await seedDelivery(deps, "d-b-cursor", FACILITY_B);
+      await seedDelivery(deps, "d-a", FACILITY_A);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries?cursor=d-b-cursor`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { deliveries: unknown[] };
+      expect(body.deliveries).toHaveLength(0);
+    });
+
+    it("q 検索中に表示名を持たないカーソルは空ページを返す（範囲外カーソルの500防止）", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      // patientDisplayName なし（非同意/旧データ相当）
+      await seedDelivery(deps, "d-unnamed", FACILITY_A);
+      await seedDelivery(deps, "d-yamada2", FACILITY_A, {
+        patientDisplayName: "山田 太郎",
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries?q=${encodeURIComponent("山田")}&cursor=d-unnamed`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { deliveries: unknown[] };
+      expect(body.deliveries).toHaveLength(0);
+    });
+
+    it("status と q を併用できる", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A);
+      await seedDelivery(deps, "d-y-ack", FACILITY_A, {
+        patientDisplayName: "山田 太郎",
+        status: "acknowledged",
+        acknowledgedAt: Timestamp.fromDate(new Date("2026-01-02T00:00:00Z")),
+      });
+      await seedDelivery(deps, "d-y-del", FACILITY_A, {
+        patientDisplayName: "山田 次郎",
+      });
+      await seedDelivery(deps, "d-s-ack", FACILITY_A, {
+        patientDisplayName: "佐藤 花子",
+        status: "acknowledged",
+        acknowledgedAt: Timestamp.fromDate(new Date("2026-01-02T00:00:00Z")),
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/deliveries?status=acknowledged&q=${encodeURIComponent("山田")}`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { deliveries: Array<{ deliveryId: string }> };
+      expect(body.deliveries.map((d) => d.deliveryId)).toEqual(["d-y-ack"]);
     });
 
     it("失効したカーソルは空ページを返す", async () => {
@@ -441,6 +590,242 @@ describe("hospital receive routes (#18, API-031〜033)", () => {
         headers: authHeader(STAFF_B),
       });
       expect(res.statusCode).toBe(403);
+    });
+  });
+
+  describe("GET/PATCH /v1/hospitals/:facilityId/settings (H-006)", () => {
+    it("施設管理者は設定を参照できる", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      await seedFacility(deps, FACILITY_A);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.legalName).toBe("医療法人テスト会テスト病院");
+      expect(body.displayName).toBe("テスト病院");
+      expect(body.formattedAddress).toBe("東京都千代田区1-1-1");
+      expect(body.verificationStatus).toBe("verified");
+      expect(body.receivingEnabled).toBe(true);
+    });
+
+    it("施設自身が停止した場合は停止理由を参照できる", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      await seedFacility(deps, FACILITY_A, {
+        receivingEnabled: false,
+        receivingDisabledBy: "staff",
+        receivingDisabledReason: "年末年始休診",
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().receivingDisabledReason).toBe("年末年始休診");
+    });
+
+    it("管理者以外・未所属は403、施設なしは404", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A); // facility_staff
+      await seedMembership(deps, STAFF_B, FACILITY_B, "facility_admin");
+      await seedFacility(deps, FACILITY_A);
+
+      for (const uid of [STAFF_A, STAFF_B, "outsider"]) {
+        const res = await app.inject({
+          method: "GET",
+          url: `/v1/hospitals/${FACILITY_A}/settings`,
+          headers: authHeader(uid),
+        });
+        expect(res.statusCode).toBe(403);
+      }
+      const missing = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_B}/settings`,
+        headers: authHeader(STAFF_B),
+      });
+      expect(missing.statusCode).toBe(404);
+    });
+
+    it("管理者が理由付きで受付を停止できる（監査あり）", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      await seedFacility(deps, FACILITY_A);
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+        payload: { receivingEnabled: false, reason: "年末年始休診" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().receivingEnabled).toBe(false);
+
+      const fac = (await deps.db.doc(`facilities/${FACILITY_A}`).get()).data()!;
+      expect(fac.receivingEnabled).toBe(false);
+      expect(fac.receivingDisabledBy).toBe("staff");
+      expect(fac.receivingDisabledReason).toBe("年末年始休診");
+
+      const audits = await deps.db.collection("auditEvents").get();
+      const actions = audits.docs.map((d) => d.data().action);
+      expect(actions).toContain("FACILITY_RECEIVING_DISABLED");
+    });
+
+    it("理由なしの停止は400", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      await seedFacility(deps, FACILITY_A);
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+        payload: { receivingEnabled: false },
+      });
+      expect(res.statusCode).toBe(400);
+      expect((await deps.db.doc(`facilities/${FACILITY_A}`).get()).data()!.receivingEnabled).toBe(true);
+    });
+
+    it("施設側の停止は再開できる（監査あり・停止情報をクリア）", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      await seedFacility(deps, FACILITY_A, {
+        receivingEnabled: false,
+        receivingDisabledBy: "staff",
+        receivingDisabledReason: "年末年始休診",
+      });
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+        payload: { receivingEnabled: true },
+      });
+      expect(res.statusCode).toBe(200);
+      const fac = (await deps.db.doc(`facilities/${FACILITY_A}`).get()).data()!;
+      expect(fac.receivingEnabled).toBe(true);
+      expect(fac.receivingDisabledBy).toBeNull();
+      expect(fac.receivingDisabledReason).toBeNull();
+      expect(fac.receivingDisabledAt).toBeNull();
+
+      const audits = await deps.db.collection("auditEvents").get();
+      const actions = audits.docs.map((d) => d.data().action);
+      expect(actions).toContain("FACILITY_RECEIVING_ENABLED");
+    });
+
+    it("運営による停止は施設側で再開できない（409）", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      await seedFacility(deps, FACILITY_A, {
+        receivingEnabled: false,
+        receivingDisabledBy: "platform",
+        receivingDisabledReason: "運営緊急停止",
+      });
+      // 既存データ（receivingDisabledBy 未設定）も運営停止とみなす
+      await seedFacility(deps, FACILITY_B, {
+        receivingEnabled: false,
+        receivingDisabledReason: "旧データ",
+      });
+      await seedMembership(deps, STAFF_A, FACILITY_B, "facility_admin");
+
+      for (const fac of [FACILITY_A, FACILITY_B]) {
+        const res = await app.inject({
+          method: "PATCH",
+          url: `/v1/hospitals/${fac}/settings`,
+          headers: authHeader(STAFF_A),
+          payload: { receivingEnabled: true },
+        });
+        expect(res.statusCode).toBe(409);
+      }
+    });
+
+    it("PATCHは管理者以外403・施設なし404・空白のみの理由は400", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A); // facility_staff
+      await seedMembership(deps, STAFF_B, FACILITY_B, "facility_admin");
+      await seedFacility(deps, FACILITY_A);
+
+      const staffPatch = await app.inject({
+        method: "PATCH",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+        payload: { receivingEnabled: false, reason: "x" },
+      });
+      expect(staffPatch.statusCode).toBe(403);
+
+      const missing = await app.inject({
+        method: "PATCH",
+        url: `/v1/hospitals/${FACILITY_B}/settings`,
+        headers: authHeader(STAFF_B),
+        payload: { receivingEnabled: false, reason: "x" },
+      });
+      expect(missing.statusCode).toBe(404);
+
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      const blank = await app.inject({
+        method: "PATCH",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+        payload: { receivingEnabled: false, reason: "   " },
+      });
+      expect(blank.statusCode).toBe(400);
+    });
+
+    it("運営停止時の停止理由は施設へ返さない（運営記録は非公開）", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      await seedFacility(deps, FACILITY_A, {
+        receivingEnabled: false,
+        receivingDisabledBy: "platform",
+        receivingDisabledReason: "緊急: 不正申請の疑い",
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().receivingDisabledBy).toBe("platform");
+      expect(res.json().receivingDisabledReason).toBeNull();
+    });
+
+    it("再認証が古い場合は403 REAUTH_REQUIRED", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      await seedFacility(deps, FACILITY_A);
+      deps.fakeAuth.authTimeByToken.set(`token-${STAFF_A}`, 1);
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+        payload: { receivingEnabled: false, reason: "x" },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe("REAUTH_REQUIRED");
+    });
+
+    it("状態遷移がないPATCHは冪等成功で監査も発行しない", async () => {
+      const { deps, app } = await setup();
+      await seedMembership(deps, STAFF_A, FACILITY_A, "facility_admin");
+      await seedFacility(deps, FACILITY_A); // receivingEnabled: true
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/v1/hospitals/${FACILITY_A}/settings`,
+        headers: authHeader(STAFF_A),
+        payload: { receivingEnabled: true },
+      });
+      expect(res.statusCode).toBe(200);
+      const audits = await deps.db.collection("auditEvents").get();
+      expect(audits.docs).toHaveLength(0);
     });
   });
 });

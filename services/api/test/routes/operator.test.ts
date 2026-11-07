@@ -247,6 +247,7 @@ describe("POST /v1/operator/facilities/:facilityId/disable", () => {
       .data() as FacilityDoc;
     expect(fac.receivingEnabled).toBe(false);
     expect(fac.receivingDisabledReason).toBe("緊急: 不正申請の疑い");
+    expect(fac.receivingDisabledBy).toBe("platform");
     expect(fac.receivingDisabledAt).toBeTruthy();
     // 停止は審査状態を変更しない（verified のまま）
     expect(fac.verificationStatus).toBe("verified");
@@ -277,6 +278,40 @@ describe("POST /v1/operator/facilities/:facilityId/disable", () => {
     const fac = (await deps.db.doc(`facilities/${FAC}`).get())
       .data() as FacilityDoc;
     expect(fac.receivingDisabledReason).toBeUndefined();
+    await app.close();
+  });
+
+  it("施設自身による停止中は運営停止へ引き上げる（H-006 再開封じ）", async () => {
+    const { app, deps } = await setup();
+    await seedFacility(deps, {
+      verificationStatus: "verified",
+      receivingEnabled: false,
+    });
+    await deps.db.doc(`facilities/${FAC}`).update({
+      receivingDisabledBy: "staff",
+      receivingDisabledReason: "休診",
+      receivingDisabledAt: FieldValue.serverTimestamp(),
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url,
+      headers: authHeader(OP),
+      payload: { reason: "緊急: 不正申請の疑い" },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const fac = (await deps.db.doc(`facilities/${FAC}`).get())
+      .data() as FacilityDoc;
+    expect(fac.receivingDisabledBy).toBe("platform");
+    expect(fac.receivingDisabledReason).toBe("緊急: 不正申請の疑い");
+    // 停止開始時刻は実際に止まった施設側の時刻を保持する
+    expect(fac.receivingDisabledAt).toBeTruthy();
+
+    // 引き上げは遷移なので監査を発行する
+    const events = await auditActions(deps, "FACILITY_RECEIVING_DISABLED");
+    expect(events).toHaveLength(1);
+    expect(events[0]!.actorType).toBe("platform");
     await app.close();
   });
 
@@ -316,6 +351,94 @@ describe("POST /v1/operator/facilities/:facilityId/disable", () => {
         })
       ).statusCode,
     ).toBe(400);
+    await app.close();
+  });
+});
+
+describe("POST /v1/operator/facilities/:facilityId/enable (API-050)", () => {
+  const url = `/v1/operator/facilities/${FAC}/enable`;
+
+  it("運営停止を再開し停止情報をクリア、監査を発行する", async () => {
+    const { app, deps } = await setup();
+    await seedFacility(deps, {
+      verificationStatus: "verified",
+      receivingEnabled: false,
+    });
+    await deps.db.doc(`facilities/${FAC}`).update({
+      receivingDisabledBy: "platform",
+      receivingDisabledReason: "緊急: 不正申請の疑い",
+      receivingDisabledAt: FieldValue.serverTimestamp(),
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url,
+      headers: authHeader(OP),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().receivingEnabled).toBe(true);
+
+    const fac = (await deps.db.doc(`facilities/${FAC}`).get())
+      .data() as FacilityDoc;
+    expect(fac.receivingEnabled).toBe(true);
+    expect(fac.receivingDisabledBy).toBeNull();
+    expect(fac.receivingDisabledReason).toBeNull();
+    expect(fac.receivingDisabledAt).toBeNull();
+
+    const events = await auditActions(deps, "FACILITY_RECEIVING_ENABLED");
+    expect(events).toHaveLength(1);
+    expect(events[0]!.actorType).toBe("platform");
+    await app.close();
+  });
+
+  it("既受付中は冪等に成功し監査を発行しない", async () => {
+    const { app, deps } = await setup();
+    await seedFacility(deps, {
+      verificationStatus: "verified",
+      receivingEnabled: true,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url,
+      headers: authHeader(OP),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await auditActions(deps, "FACILITY_RECEIVING_ENABLED")).toHaveLength(0);
+    await app.close();
+  });
+
+  it("非運営403・存在しない施設404・再認証が古い場合403", async () => {
+    const { app, deps } = await setup();
+    await seedFacility(deps, {
+      verificationStatus: "verified",
+      receivingEnabled: false,
+    });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          headers: authHeader("not-operator"),
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/v1/operator/facilities/fac-missing/enable",
+          headers: authHeader(OP),
+        })
+      ).statusCode,
+    ).toBe(404);
+    deps.fakeAuth.authTimeByToken.set(`token-${OP}`, 1);
+    const stale = await app.inject({
+      method: "POST",
+      url,
+      headers: authHeader(OP),
+    });
+    expect(stale.statusCode).toBe(403);
+    expect(stale.json().error.code).toBe("REAUTH_REQUIRED");
     await app.close();
   });
 });

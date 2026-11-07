@@ -27,6 +27,10 @@ export interface AuthAdmin {
     props: { disabled?: boolean; emailVerified?: boolean },
   ): Promise<unknown>;
   getUserByEmail(email: string): Promise<{ uid: string; disabled: boolean }>;
+  /** 職員一覧等の表示用。未登録uidは実装により null または例外（呼び出し側で吸収する）。 */
+  getUser(
+    uid: string,
+  ): Promise<{ uid: string; email?: string; displayName?: string; disabled: boolean } | null>;
   deleteUser(uid: string): Promise<void>;
   revokeRefreshTokens(uid: string): Promise<void>;
 }

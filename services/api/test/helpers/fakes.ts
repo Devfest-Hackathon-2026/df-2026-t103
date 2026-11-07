@@ -117,6 +117,13 @@ export class FakeAuthAdmin implements AuthAdmin {
     throw FakeAuthAdmin.notFound();
   }
 
+  async getUser(
+    uid: string,
+  ): Promise<{ uid: string; email?: string; disabled: boolean } | null> {
+    const u = this.users.get(uid);
+    return u ? { uid, email: u.email, disabled: u.disabled } : null;
+  }
+
   async deleteUser(uid: string): Promise<void> {
     if (this.failOn.has("delete")) throw new Error("auth/delete failed");
     if (!this.users.delete(uid)) throw FakeAuthAdmin.notFound();

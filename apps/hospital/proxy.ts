@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { validateClientConfig, type ClientConfigInput } from "./lib/client-config";
+import {
+  PATHNAME_HEADER,
+  SESSION_COOKIE_DEV,
+  SESSION_COOKIE_PROD,
+  sessionCookieName,
+} from "./lib/session-shared";
 
 function serviceSources(input: ClientConfigInput) {
   try {
@@ -49,6 +55,15 @@ export function securityHeaders(nonce: string, development: boolean, input: Clie
   };
 }
 
+/** (workspace) グループ配下の業務ページ。セッションCookieの有無で楽観的に振り分ける。 */
+const PROTECTED_PREFIXES = ["/facilities", "/deliveries", "/staff", "/settings"];
+
+/**
+ * セキュリティヘッダー付与（#90）＋楽観的認証ガード（H-001）。
+ * Cookieの有無だけを見て素早くリダイレクトし、本検証はページ側の
+ * (workspace)/layout.tsx が API 経由で行う（Proxyは認可の正本にしない）。
+ * no-store は securityHeaders 側で全レスポンスに付与される。
+ */
 export function proxy(request: NextRequest) {
   const nonce = randomBytes(32).toString("base64");
   const headers = securityHeaders(nonce, process.env.NODE_ENV === "development", {
@@ -61,11 +76,40 @@ export function proxy(request: NextRequest) {
     appCheckSiteKey: process.env.NEXT_PUBLIC_APP_CHECK_SITE_KEY,
     authEmulatorUrl: process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL,
   });
+  const { pathname, search } = request.nextUrl;
+  // 環境で有効なCookie名・非空値だけを見る（旧名・空値の残留Cookieによるガードループを防ぐ）
+  // 設定不全でも Proxy 自体は落とさず両方のCookie名を確認する
+  let hasSession = false;
+  try {
+    hasSession = Boolean(request.cookies.get(sessionCookieName())?.value);
+  } catch {
+    hasSession = Boolean(
+      request.cookies.get(SESSION_COOKIE_PROD)?.value ||
+        request.cookies.get(SESSION_COOKIE_DEV)?.value,
+    );
+  }
+  const isProtected = PROTECTED_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  );
+
+  // レイアウトが next パラメータ復元に使う内部ヘッダーとCSP nonceを常時付与する
   const requestHeaders = new Headers(request.headers);
+  requestHeaders.set(PATHNAME_HEADER, `${pathname}${search}`);
   // Overwrite untrusted client headers before Next.js extracts the script nonce.
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", headers["Content-Security-Policy"]);
-  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  const pass = () => NextResponse.next({ request: { headers: requestHeaders } });
+
+  let response: NextResponse;
+  if (isProtected && !hasSession) {
+    const url = new URL("/login", request.url);
+    url.searchParams.set("next", `${pathname}${search}`);
+    response = NextResponse.redirect(url);
+  } else if (pathname === "/login" && hasSession) {
+    response = NextResponse.redirect(new URL("/facilities", request.url));
+  } else {
+    response = pass();
+  }
   for (const [key, value] of Object.entries(headers)) response.headers.set(key, value);
   return response;
 }

@@ -1,6 +1,8 @@
 # 医療機関ポータル
 
-`/operator` はFirebase Authでログインし、実装済みBEの `GET /v1/operator/job-failures` を呼び出す運営管理者向け画面です。画像処理/削除処理の失敗一覧とカーソルページングを利用できます。`GET /v1/operator/audit-events` から権限変更等の監査サマリーも新しい順に取得します。イベント種別・操作者区分・UTC日時・認可判断・結果だけを表示し、患者/職員/施設の識別子・ハッシュ・自由記述は表示しません。実API `POST /v1/operator/facilities/{facilityId}/disable` で施設受信の緊急停止も行えます。対象IDと理由の確認後に明示的に実行し、サーバで直近の認証と運営権限を検証します。再認証を求められたらログアウトして再ログインしてください。通信失敗時は処理済みの可能性を表示し、自動再試行しません。固定データ・モックAPIへの自動切替はありません。職員の問診受信・閲覧等は別途実装中です。
+`/operator` はFirebase Authでログインし、実装済みBEの `GET /v1/operator/job-failures` を呼び出す運営管理者向け画面です。画像処理/削除処理の失敗一覧とカーソルページングを利用できます。`GET /v1/operator/audit-events` から権限変更等の監査サマリーも新しい順に取得します。イベント種別・操作者区分・UTC日時・認可判断・結果だけを表示し、患者/職員/施設の識別子・ハッシュ・自由記述は表示しません。実API `POST /v1/operator/facilities/{facilityId}/disable` で施設受信の緊急停止、`POST /v1/operator/facilities/{facilityId}/enable` で運営停止の解除も行えます。対象IDと理由の確認後に明示的に実行し、サーバで直近の認証と運営権限を検証します。再認証を求められたらログアウトして再ログインしてください。通信失敗時は処理済みの可能性を表示し、自動再試行しません。固定データ・モックAPIへの自動切替はありません。
+
+職員向けは `/login`（H-001）でメール/パスワード＋TOTP多要素認証を行い、成功時に HttpOnly Cookie のセッションを確立します。`/facilities`（H-002）で業務を行う施設を選択すると、選択は `/api/facility-context` がメンバーシップ照合のうえコンテキスト Cookie に保持し、ヘッダーの施設名に反映されます。施設バッジまたはナビからいつでも切り替えられ、切替は施設別の画面状態をリセットします。`/deliveries`（H-003）は選択中施設の受信問診一覧です。表示は患者氏名・受信日時・状態・問診票IDのみで、検索（氏名の前方一致）と状態絞り込みはサーバ側で自院スコープ内に限定して行い、20件ずつのカーソルページングで取得します。行を開くと問診詳細（H-004）へ進み、同意範囲の患者情報・確定問診票・確認済み薬剤・既往歴を確認して「受領確認」を実行できます（受領は予約ではなく受取の記録で、閲覧・受領はすべて監査記録されます）。施設管理者は `/staff`（H-005）で所属職員と保留中の招待を一覧し、職員の招待・役割変更・停止/再有効化を実行できます（自身の管理者権限の変更・停止はできません。操作は監査記録され、招待先メールアドレスは監査に残しません）。施設管理者は `/settings`（H-006）で施設の宛先確認情報（正式名称・表示名・所在地・審査ステータス）を確認し、問診票の受付を停止・再開できます。
 
 Node.js 22 以降で `npm ci`、`npm run dev` を実行し、http://localhost:3000 を開きます。`npm run lint`、`npm test`、`npm run build` で検証できます。Docker Compose では既存の hospital サービスを使用します。
 
@@ -14,7 +16,31 @@ Node.js 22 以降で `npm ci`、`npm run dev` を実行し、http://localhost:30
 - 開発時のみ `http://localhost:3000/dev/catalog` で各コンポーネントの状態を確認できます（本番ビルドでは404）。
 - 状態バッジのラベルは `components/design-system/hx-status-badge.ts(x)` の `DELIVERY_STATUS` を唯一の対応表とし、色だけで状態を伝えません。
 
+## 職員認証・セッション（H-001）
+
+施設選択・切替ではNextの画面遷移とサーバコンテキスト更新を使い、Firebaseのメモリ内認証を保持します。施設IDが変わると業務シェルを再生成し、前施設の一覧・検索条件・管理者ナビを引き継ぎません。
+
+- `/login` で Firebase Auth（メール/パスワード）にサインインし、MFA 未登録なら TOTP 登録、登録済みなら TOTP 検証を経て、`POST /api/session` が実 API で credential を検証し（本番ではMFAクレームも確認）、HttpOnly Cookie（本番 `__Host-mmr-session`、SameSite=Strict、最長55分）を発行します。失敗してもアカウントの存在有無を示さない応答にします。
+- 業務画面は `app/(workspace)/layout.tsx` がセッション Cookie と `GET /v1/me/facility-memberships` で検証します。401/403 なら `GET /api/session/logout` で Cookie を消して `/login` へ、5xx・接続失敗ではセッションを維持したまま再試行可能なエラー画面を出します。`proxy.ts` は Cookie の有無だけの楽観的リダイレクトで、認可の正本は API 側です。
+- クライアントの API 呼び出しは `lib/hx-api.ts` 経由で `/api/hx/*` のみを使い、サーバ側が Bearer + App Check を付けて転送します。`/api/session` と `/api/hx/*` は必須カスタムヘッダー `x-hx-client: portal`・`Sec-Fetch-Site`/`Origin` の同一オリジン確認で CSRF を防ぎます。
+- セッション維持は `workspace-shell.tsx` の `SessionKeeper` が Firebase の ID トークン変更・定期更新・タブ復帰を監視して行います。サインアウト・失効・再読み込み後の未認証では `GET /api/session/logout` 経由で Cookie を削除して `/login` に戻ります（Firebase はインメモリ永続化のため再読み込みは再ログイン）。
+
 `lib/firebase-demo.ts` は将来のデモ向けの明示的な初期化関数です。`NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-mmr-dev`、`NEXT_PUBLIC_USE_FIREBASE_EMULATOR=true` と Compose が指定する localhost の Auth / Firestore / Storage エミュレータのアドレスがすべて必要で、異なる設定は拒否します。この旧ヘルパーは既存のSDK結合試験用です。業務画面は `lib/firebase-client.ts` のAuth＋APIクライアントを利用し、Firestoreから業務データを直接取得しません。
+
+## 職員管理（H-005）
+
+- `/staff` は施設管理者（`facility_admin`）専用です。非管理者にはナビ導線を出さず、画面も権限なし表示にします。認可の正本は API 側の `requireFacilityRole` で、クライアントの表示制御は UX のみです。
+- `GET /v1/hospitals/{facilityId}/staff` が所属メンバー（有効・停止中）と保留中招待を返します。メールアドレスは `facilityMemberships` に保存せず、Firebase Auth のユーザー情報から都度解決します。Auth にユーザーが存在しない（退会済み等）場合は `email: null` で返し、一覧取得自体は失敗させません。
+- 招待は `POST /v1/hospitals/{facilityId}/staff-invitations`（同一施設・同一メールの保留中招待は409）、役割変更・停止・再有効化は `PATCH /v1/hospitals/{facilityId}/memberships/{membershipId}` です。停止は `status=revoked` にし即時アクセスを失わせます。再有効化は `status=active` で `revokedAt` をクリアします。
+- 管理者は自身のメンバーシップを停止・降格できません（最終管理者喪失の防止。API が403で拒否し、画面側でも操作を出しません）。他の管理者を停止・降格する場合も、API がトランザクション内で施設に有効な管理者が残ることを確認し、残らない変更は409で拒否します。役割変更・停止は確認ダイアログを挟み、変更のない PATCH は監査を発行しません。直近認証が期限切れの操作（招待・権限変更）は再ログインへ誘導します。
+
+## 施設設定（H-006）
+
+- `/settings` は施設管理者（`facility_admin`）専用です。非管理者にはナビ導線を出さず、画面も権限なし表示にします。認可の正本は API 側の `requireFacilityRole` です。
+- `GET /v1/hospitals/{facilityId}/settings`（API-048）が正式名称・表示名・所在地・審査ステータス・受付状態を返します。正式名称・表示名・所在地は患者の宛先確認に使われる審査済み情報のため画面からは変更できず、変更には運営の再審査が必要である旨を案内します（17.14）。
+- 受付の停止/再開は `PATCH /v1/hospitals/{facilityId}/settings`（API-049、直近認証必須）です。停止は新規配送の受付を止めるだけで、受信済みの問診票は引き続き閲覧できます。停止には理由の入力が必須で、理由・日時・操作主体が監査に記録されます（`FACILITY_RECEIVING_DISABLED`/`FACILITY_RECEIVING_ENABLED`）。
+- 運営による受付停止（API-037、`receivingDisabledBy=platform` または未設定）は施設側で再開できず、API が409で拒否します。画面でも再開操作を無効化し、運営への問い合わせを案内します。運営側の解除は `POST /v1/operator/facilities/{facilityId}/enable`（API-050）が担います。施設自身が停止した場合（`receivingDisabledBy=staff`）のみ管理者が再開できます。受付状態は `receivingEnabled` 単一フィールドが正本で、患者側の送信可否・施設情報表示と同一の値です。
+- 停止理由は運営記録のため `receivingDisabledBy=staff`（施設自身が記入）の場合のみ画面に表示します。運営停止時の理由は返却されません。
 
 本番配信基盤は未決定です。以下のnonce方式はNext.jsサーバーを必要とするため、既存のHosting静的配信案との調整が必要です。実用化には認証・施設単位の認可・監査・医療情報保護の実装と検証も必要です。
 
@@ -28,7 +54,7 @@ nonceはクライアントのヘッダを上書きし、リクエストごとに
 
 root layoutの `connection()` によりリクエスト時に描画します。PHIをサーバ側で取得せず、
 HTML/RSC・JS/CSS・静的ファイル・ログへ入れない設計制約は引き続き適用します。
-現在の検証は合成入力が応答へ反射しないことまでで、未実装の患者データ取得経路の保証ではありません。
+通常の`test:api`（CIを含む）では、患者APIで配送した合成問診を職員BFFから取得できることと、同じ患者情報が認証後の一覧・詳細のSSR HTML/RSCに含まれないことを確認します。これは実患者データやすべての将来の取得経路を保証するものではありません。
 
 このnonce方式は `next start` 等のNext.jsサーバーを必要とし、静的exportはできません。
 `firebase.json` のhospital `public: apps/hospital/out` は静的配信案のままです。
@@ -39,7 +65,7 @@ HTML/RSC・JS/CSS・静的ファイル・ログへ入れない設計制約は引
 `npm run build && npm run test:security` は本番ビルドをloopback上で起動し、
 HTTPヘッダ、nonceの更新・全bootstrap scriptへの一致、静的JS取得、404、RSC、prefetchを検証します。
 実ブラウザでのCSP施行は、後述の任意ブラウザ試験で実Auth/BEへの接続とともに検証します。実クラウドApp Check/MFAと将来の患者データ取得経路のPHI検証は別途必要です。
-現在のログイン・変更APIはメモリ内Bearer token方式で、API fetchはcredentials: omitを使います。サーバ側の認証/App Check/運営権限/再認証を回避しません。将来Cookie認証を導入する場合はHttpOnly・Secure・SameSite・CSRF対策の追加検証が必要です。
+運営画面はメモリ内Bearer token方式（API fetchはcredentials: omit）、職員画面は上記のCookie/BFF方式です。通常の`test:api`は、実Auth Emulatorのトークンを既存のセッションAPIで検証してCookieを発行し、HttpOnly・SameSite=Strict・Path・55分期限、未認証/不正トークン拒否、CSRF拒否、施設コンテキストの認可、BFFの別院拒否・所属失効、ログアウト時のCookie消去、認証後応答のno-storeを確認します。試験が実Nextサーバーを動的なloopbackポートで起動・終了するため、Chromeや事前のポータル起動は不要です。テスト用の認可回避やレスポンス差し替えはありません。このHTTP接続試験は職員ログインUIのMFA手順を通しません。EmulatorのHTTP設定で行うため、本番のSecure Cookie・MFA・App Check・HTTPS配信の受入は別途必要です。
 
 方式の根拠: [Next.js CSPガイド](https://nextjs.org/docs/app/guides/content-security-policy)
 およびインストール済みNext.js 16.4.5の `node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md`。
@@ -88,10 +114,14 @@ APIの `API_CORS_ORIGINS` にはブラウザで開くポータルの正確なori
 Next.js ProxyのCSPは同じ接続設定から許可先を生成します。配信先で固定のself限定CSPを重ねないでください。
 
 画面はメール/パスワードと登録済みTOTPの追加認証に対応します。TOTP以外のMFAは未対応です。
-トークンはメモリ内のみで、CookieやlocalStorageへ保存しません。リロードすると再ログインが必要です。
-本番でMFA済みtokenがなければAPI呼び出しを止めますが、これはUX上の追加チェックであり、
-サーバ側のMFA強制・運営権限の認可を代替しません。権限はBEがfacilityMemberships正本で判定します。
-MFA登録・職員向けCookie認証・他の運営機能は完成扱いにしません。
+職員画面は HttpOnly Cookie セッション＋`/api/hx/*` BFF 経由で API を呼び、ID トークンを
+ブラウザ JS・localStorage に置きません（ADR-0020）。運営画面の既存経路はトークンをメモリ内に
+保持する方式のままです。Firebase Auth はインメモリ永続化のため、ブラウザの再読み込みでは
+Firebase 側の認証状態が消え、Cookie も消去して再ログインになります。
+本番では `/api/session` 側でもMFA済みトークンのクレームを確認し、未MFAの Cookie 発行を
+拒否します（サーバ側のMFA強制・運営権限の認可は引き続きBEが担います）。
+権限はBEがfacilityMemberships正本で判定します。
+MFA登録は初回ログイン時の画面で行います。他の運営機能は完成扱いにしません。
 APIエラー本文やtokenはログへ出さず、レスポンスはAPI-038の公開フィールドだけを画面へ渡します。
 
 ### モックを使わないAPI結合試験
@@ -117,7 +147,12 @@ E2E-006は独立した患者のAuth Emulator tokenと合成の確定問診票・
 患者が実APIで作成した配送を自院一覧→詳細→受領確認へ進め、閲覧だけでは状態を変えないこと、
 受領の再試行が冪等で成功監査も重複しないことを確認します。別院一覧/詳細/受領は拒否し、
 自院URLに別院の配送IDを指定した場合は存在しないIDと同じ404、配送の無変更、拒否監査を確認します。
-所属取消後は同じログインtokenで一覧/詳細/受領が403になります。
+所属取消は管理者の実APIから実行し、同じログインtokenで一覧/詳細/受領が403になることを確認します。
+職員管理は招待201・重複409、ロール変更、所属取消の冪等性と監査、一般職員の管理操作拒否、
+別院管理者の拒否、他院所属IDの404、管理者自身の降格/取消拒否を検証します。招待は台帳登録まででメール配信の試験ではありません。
+施設設定（H-006）は運営停止中の参照（理由非公開）・施設側再開409・遷移なしPATCHの冪等・
+理由必須の受付停止と再開、施設監査の発行を実経路で検証します。運営側の受付再開は
+`api.enableFacility`（API-050）経由で確認します。
 このAPI結合試験は未完成の病院画面・Cookie/CSRF経路・職員管理画面のブラウザE2Eを代用しません。
 この読取経路はStorage/RTDBへアクセスしませんが、BEの接続整合性検証のためそのloopback設定も明示します。
 実クラウドのApp Check/MFA/CORS受入や、他の画面のAPI接続をこの試験だけで完了扱いにしません。
@@ -126,6 +161,8 @@ macOSでChromeをインストールしている場合は、同じコマンドに
 追加すると、実画面でのログイン・実BEからの一覧/監査表示・施設審査の承認/却下・確認前の未変更・施設受信停止・ログアウトと、CSP違反が発生しないことも確認します。
 Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータルはloopback:33090で起動し、
 試験後にChromeの一時プロファイル・起動プロセスを終了します。このブラウザ試験は任意実行です。
+同じ合成ユーザーに運営権限と施設所属を与え、実SDKでのサインインと既存セッションAPIのトークン検証後に、職員の施設選択→実受信一覧→別施設への切替→元の施設への復帰も検証します。施設切替時の絞り込みリセットと管理者ナビの分離を確認し、職員ログインUIのTOTP登録・検証を受入済みとは扱いません。
+患者APIから別の合成配送を作り、一覧→詳細→受領確認のキャンセル→確定→一覧の受領済み表示まで操作します。閲覧・キャンセル・別施設コンテキストからの閲覧/受領拒否では配送不変、確定後は受領日時・問診スナップショット維持・成功監査1件を実DBで検証します。受信停止・テナント境界の既存試験には別の配送を使い、受領操作で前提を変えません。
 
 参照: [App Check custom backend](https://firebase.google.com/docs/app-check/web/custom-resource)、
 [TOTP MFA](https://firebase.google.com/docs/auth/web/totp-mfa)。
@@ -142,3 +179,5 @@ Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータル�
 実環境への公開前に`facilityVerificationRecords: facilityId ASC, createdAt DESC`のindexを
 `firebase/firestore.indexes.json`から通常のRules/indexesデプロイ手順で作成し、利用可能状態を確認してください。
 API/画面とindexのデプロイ、正規MFA/App Check付きのクラウド受入は、このローカル検証だけで完了扱いにしません。
+
+職員の認証フォームはPOSTを明示し、画面初期化前の送信を無効にします。初期化前の標準GET送信によって認証情報がURLへ入ることを防ぎます。任意の実ブラウザ結合試験は`/login`のSSRでPOST・送信無効を確認し、初期化後に送信可能になることも確認します。CSP/no-storeは既存の本番HTTP試験で継続確認します。

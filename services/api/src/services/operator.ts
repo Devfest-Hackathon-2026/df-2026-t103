@@ -109,7 +109,8 @@ export async function verifyFacility(
  * API-037 施設受付の緊急停止（O-002 緊急対応手順）。
  * receivingEnabled を false にする。審査状態自体は変更しない
  * （verificationStatus は真正性、receivingEnabled は運用キルスイッチ）。
- * 既停止は冪等に成功し、遷移がないため監査も発行しない。
+ * 既に運営停止済みなら冪等に成功し監査も発行しないが、施設自身による
+ * 停止中は運営停止へ引き上げて監査する（引き上げないと施設側で再開可能なまま）。
  */
 export async function disableFacilityReceiving(
   deps: Deps,
@@ -129,12 +130,21 @@ export async function disableFacilityReceiving(
     if (!snap.exists || !fac) {
       throw ApiError.notFound("施設が見つかりません。");
     }
-    if (fac.receivingEnabled === false) return; // 既停止: 遷移なし
+    // 既停止で主体が施設でなければ（運営停止・未設定の旧データ）遷移なし。
+    // 施設自身による停止は運営停止へ引き上げる
+    // （引き上げないと施設側で再開でき、緊急停止が実効を失う）
+    if (fac.receivingEnabled === false && fac.receivingDisabledBy !== "staff") {
+      return;
+    }
     const now = FieldValue.serverTimestamp();
+    const escalating = fac.receivingEnabled === false;
     await tx.update(ref, {
       receivingEnabled: false,
-      receivingDisabledAt: now,
+      // 施設停止の引き上げは停止主体と理由を運営のものに置き換える。
+      // 停止開始時刻（receivingDisabledAt）は実際に止まった時刻のまま保持する
+      ...(escalating ? {} : { receivingDisabledAt: now }),
       receivingDisabledReason: params.reason,
+      receivingDisabledBy: "platform",
       updatedAt: now,
     });
     committedAudits.push(
@@ -145,13 +155,59 @@ export async function disableFacilityReceiving(
         resourceType: "facility",
         resourceIdHash: auditResourceHash(deps, params.facilityId),
         outcome: "success",
-        details: { from: "enabled" },
+        details: { from: escalating ? "staff_disabled" : "enabled" },
         ...(params.requestId ? { requestId: params.requestId } : {}),
       }),
     );
   });
   for (const e of committedAudits) logAuditEvent(deps, e);
   return { facilityId: params.facilityId, receivingEnabled: false };
+}
+
+/**
+ * API-050 施設受付の再開（運営）。施設側で解除できない運営停止を戻す導線。
+ * 既受付中は冪等に成功し、遷移がないため監査も発行しない。
+ */
+export async function enableFacilityReceiving(
+  deps: Deps,
+  params: {
+    facilityId: string;
+    operatorUid: string;
+    requestId?: string;
+  },
+): Promise<{ facilityId: string; receivingEnabled: true }> {
+  const committedAudits: AuditEventDoc[] = [];
+  await deps.db.runTransaction(async (tx) => {
+    committedAudits.length = 0;
+    const ref = deps.db.doc(`facilities/${params.facilityId}`);
+    const snap = await tx.get(ref);
+    const fac = snap.data() as FacilityDoc | undefined;
+    if (!snap.exists || !fac) {
+      throw ApiError.notFound("施設が見つかりません。");
+    }
+    if (fac.receivingEnabled === true) return; // 既受付中: 遷移なし
+    await tx.update(ref, {
+      receivingEnabled: true,
+      receivingDisabledAt: null,
+      receivingDisabledReason: null,
+      receivingDisabledBy: null,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    committedAudits.push(
+      auditInTransaction(tx, deps, {
+        actorType: "platform",
+        actorUidHash: auditUidHash(deps, params.operatorUid),
+        action: AUDIT_ACTIONS.FACILITY_RECEIVING_ENABLED,
+        resourceType: "facility",
+        resourceIdHash: auditResourceHash(deps, params.facilityId),
+        outcome: "success",
+        details: { from: "disabled" },
+        ...(params.requestId ? { requestId: params.requestId } : {}),
+      }),
+    );
+  });
+  for (const e of committedAudits) logAuditEvent(deps, e);
+  return { facilityId: params.facilityId, receivingEnabled: true };
 }
 
 /**

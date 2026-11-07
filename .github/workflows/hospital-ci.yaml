@@ -44,4 +44,4 @@ jobs:
           FIRESTORE_EMULATOR_HOST: 127.0.0.1:18081
           FIREBASE_STORAGE_EMULATOR_HOST: 127.0.0.1:19199
           FIREBASE_DATABASE_EMULATOR_HOST: 127.0.0.1:19000
-        run: npx --yes firebase-tools@15.35.0 emulators:exec --project demo-mmr-dev --config tests/api-emulators.json --only auth,firestore 'npm run test:api'
+        run: npx --yes firebase-tools@15.35.0 emulators:exec --project demo-mmr-dev --config ../../firebase.hospital-test.json --only auth,firestore 'npm run test:api'

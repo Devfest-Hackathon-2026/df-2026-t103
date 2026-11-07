@@ -70,7 +70,7 @@ FIRESTORE_EMULATOR_HOST=127.0.0.1:18081 \
 FIREBASE_STORAGE_EMULATOR_HOST=127.0.0.1:19199 \
 FIREBASE_DATABASE_EMULATOR_HOST=127.0.0.1:19000 \
 npx --yes firebase-tools@15.35.0 emulators:exec --project demo-mmr-dev \
-  --config tests/api-emulators.json --only auth,firestore 'npm run test:api'
+  --config ../../firebase.hospital-test.json --only auth,firestore 'npm run test:api'
 ```
 
 試験はFastifyの実entrypointを一時loopbackポートで起動し、Auth Emulatorでサインインした

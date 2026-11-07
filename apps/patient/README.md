@@ -133,3 +133,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5061 -t lib/demo_p
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5062 -t lib/demo_withdrawal_preview.dart
 ```
+
+## プロフィール登録プレビュー
+
+プロフィール登録（P-006）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5064 を開きます。確認後は Ctrl+C で停止します。氏名・カナ・生年月日・電話・郵便番号・住所の必須項目と任意の持病を分けて表示し、妥当性を検証します。入力は画面内に保持されますが、保存（PATCH /me/profile）は未接続です。実在する個人情報は入力しないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5064 -t lib/demo_profile_form_preview.dart
+```

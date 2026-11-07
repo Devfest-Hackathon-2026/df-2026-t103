@@ -67,3 +67,13 @@ resource "google_service_account_iam_member" "api_signed_uploads" {
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${google_service_account.api_run.email}"
 }
+
+# Browser clients reach the API using Firebase ID tokens and App Check,
+# including OPTIONS without Google IAM credentials. Authorization is enforced
+# by the API gates; the worker keeps its restricted ingress/invoker policy.
+resource "google_cloud_run_v2_service_iam_member" "api_browser_invoker" {
+  name     = google_cloud_run_v2_service.api.name
+  location = var.region
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}

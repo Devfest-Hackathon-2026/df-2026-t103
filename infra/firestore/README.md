@@ -38,16 +38,23 @@ firebase deploy --only firestore:rules,firestore:indexes \
 
 ## 複合インデックス（docs/04 §8/§11）
 
-`firebase/firestore.indexes.json` は docs/04 §11 の運用クエリ表を満たす:
+`firebase/firestore.indexes.json` は **API実装（`services/api`）の実クエリと照合済み**の
+現在有効な索引のみを収録する。docs/04 §8 の候補のうち、対応クエリが未実装の
+ものは実装時に追加する:
 
-| クエリ | インデックス | 定義 |
+| クエリ | インデックス | 状態 |
 |---|---|---|
-| 本人問診一覧 | `intakes` patientUid+updatedAt | ✓ |
-| 本人薬剤一覧 | `medications` patientUid+currentStatus+updatedAt | ✓ |
-| 病院受信一覧 | `deliveries` facilityId+deliveredAt | ✓ |
-| 病院状態別一覧 | `deliveries` facilityId+status+deliveredAt | ✓ |
-| 退会対象ジョブ | `deletionJobs` status+executeAfter | ✓ |
-| 施設職員所属 | `facilityMemberships` userUid+status | ✓ |
+| 本人問診一覧 | `intakes` patientUid+updatedAt | 未実装（一覧APIなし。追加時に索引も追加） |
+| 本人薬剤一覧 | `medications` patientUid+updatedAt | ✓ 定義済み（currentStatus フィルタ未使用） |
+| 病院受信一覧 | `deliveries` facilityId+deliveredAt+createdAt | ✓ 定義済み |
+| 病院状態別一覧 | `deliveries` facilityId+status+deliveredAt | 未実装（statusフィルタなし。追加時に索引も追加） |
+| 退会対象ジョブ | `deletionJobs` status+executeAfter ほか3件 | ✓ 定義済み |
+| 施設職員所属 | `facilityMemberships` userUid+status | ✓ 定義済み |
+
+このほか uploads・ocrJobs・pushDevices・legalConsents・questionnaires の
+実クエリ分を含む。未使用索引の削除はデプロイ時に上書きではなく
+**追加のみ**行われる（`firebase deploy --only firestore:indexes` は既存索引を
+消さない）。不要索引の消去はコンソール/`firebase firestore:indexes` で個別実施。
 
 実際に必要な索引は Firestore エミュレータ／Explain で継続検証する（§8）。
 

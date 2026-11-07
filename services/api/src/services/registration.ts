@@ -34,6 +34,23 @@ export interface RegisterResult {
 }
 
 const OPERATION_TTL_MS = 24 * 3600_000;
+const ACCOUNT_STATUSES = new Set([
+  "onboarding_pending",
+  "active",
+  "suspended",
+  "pending_deletion",
+  "deleted",
+]);
+const AUTH_ENABLE_ACCOUNT_STATUSES = new Set([
+  "onboarding_pending",
+  "active",
+]);
+const ONBOARDING_STATES = new Set([
+  "not_started",
+  "legal_pending",
+  "profile_pending",
+  "completed",
+]);
 
 function errorClass(err: unknown): string {
   if (err && typeof err === "object" && "code" in err) {
@@ -61,15 +78,203 @@ async function loadOperation(
 
 async function saveOperation(
   deps: Deps,
-  operationHash: string,
+  operation: RegistrationOperationDoc,
   patch: Partial<RegistrationOperationDoc>,
+): Promise<"saved" | "enabled" | "preserved_checkpoint" | "missing" | "mismatch" | "invalid_state"> {
+  const operationHash = operation.operationHash;
+  const ref = registrationOperationRef(deps.db, operationHash);
+  return deps.db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return "missing";
+
+    const current = snap.data() as RegistrationOperationDoc;
+    if (
+      current.operationHash !== operationHash ||
+      current.requestHash !== operation.requestHash ||
+      current.uid !== operation.uid
+    ) {
+      return "mismatch";
+    }
+    const targetStatus = patch.status;
+    if (targetStatus === "enabled") {
+      if (current.status === "enabled" || current.status === "consents_committed") {
+        const accountSnap = await tx.get(deps.db.doc(`accounts/${operation.uid}`));
+        if (!isAuthEnableEligibleAccount(accountSnap.data(), operation.uid)) {
+          return "invalid_state";
+        }
+        if (current.status === "enabled") return "enabled";
+      } else {
+        return "invalid_state";
+      }
+    } else {
+      // Account, consents and this status are committed atomically. A delayed
+      // retry/error path must not regress that durable checkpoint.
+      if (current.status === "consents_committed" || current.status === "enabled") {
+        return "preserved_checkpoint";
+      }
+      if (
+        targetStatus !== undefined &&
+        current.status !== "reserved" &&
+        current.status !== "auth_created" &&
+        current.status !== "failed"
+      ) {
+        return "invalid_state";
+      }
+    }
+
+    tx.set(
+      ref,
+      {
+        ...patch,
+        updatedAt: FieldValue.serverTimestamp(),
+      } as DocumentData,
+      { merge: true },
+    );
+    return targetStatus === "enabled" ? "enabled" : "saved";
+  });
+}
+
+function isConsistentRegistrationAccount(
+  data: DocumentData | undefined,
+  uid: string,
+): boolean {
+  return (
+    !!data &&
+    data.uid === uid &&
+    typeof data.accountStatus === "string" &&
+    ACCOUNT_STATUSES.has(data.accountStatus) &&
+    typeof data.onboardingState === "string" &&
+    ONBOARDING_STATES.has(data.onboardingState)
+  );
+}
+
+function isAuthEnableEligibleAccount(
+  data: DocumentData | undefined,
+  uid: string,
+): boolean {
+  const accountStatus = data?.accountStatus;
+  return (
+    isConsistentRegistrationAccount(data, uid) &&
+    typeof accountStatus === "string" &&
+    AUTH_ENABLE_ACCOUNT_STATUSES.has(accountStatus)
+  );
+}
+
+async function verifyEnabledOperation(
+  deps: Deps,
+  operation: RegistrationOperationDoc,
+  operationHash: string,
+  reqHash: string,
+): Promise<"verified" | "missing" | "mismatch" | "invalid_state"> {
+  try {
+    return await deps.db.runTransaction(async (tx) => {
+      const operationRef = registrationOperationRef(deps.db, operationHash);
+      const operationSnap = await tx.get(operationRef);
+      if (!operationSnap.exists) return "missing";
+
+      const current = operationSnap.data() as RegistrationOperationDoc;
+      if (
+        current.operationHash !== operationHash ||
+        current.requestHash !== reqHash ||
+        current.uid !== operation.uid ||
+        typeof operation.uid !== "string" ||
+        operation.uid.length === 0
+      ) {
+        return "mismatch";
+      }
+      if (current.status !== "enabled") return "invalid_state";
+
+      const accountSnap = await tx.get(deps.db.doc(`accounts/${operation.uid}`));
+      return isConsistentRegistrationAccount(accountSnap.data(), operation.uid)
+        ? "verified"
+        : "invalid_state";
+    });
+  } catch (cause) {
+    throw new ApiError(
+      503,
+      ErrorCodes.UPSTREAM_UNAVAILABLE,
+      "登録済み状態の確認に失敗しました。時間を置いて再試行してください。",
+      { retryable: true, cause },
+    );
+  }
+}
+
+async function verifyCommittedCheckpoint(
+  deps: Deps,
+  operation: RegistrationOperationDoc,
+  operationHash: string,
+  reqHash: string,
+): Promise<
+  | "consents_committed"
+  | "enabled"
+  | "missing"
+  | "mismatch"
+  | "invalid_state"
+> {
+  try {
+    return await deps.db.runTransaction(async (tx) => {
+      const operationSnap = await tx.get(
+        registrationOperationRef(deps.db, operationHash),
+      );
+      if (!operationSnap.exists) return "missing";
+
+      const current = operationSnap.data() as RegistrationOperationDoc;
+      if (
+        current.operationHash !== operationHash ||
+        current.requestHash !== reqHash ||
+        current.uid !== operation.uid ||
+        typeof operation.uid !== "string" ||
+        operation.uid.length === 0
+      ) {
+        return "mismatch";
+      }
+      if (current.status !== "consents_committed" && current.status !== "enabled") {
+        return "invalid_state";
+      }
+
+      const accountSnap = await tx.get(deps.db.doc(`accounts/${operation.uid}`));
+      const account = accountSnap.data();
+      return isAuthEnableEligibleAccount(account, operation.uid)
+        ? current.status
+        : "invalid_state";
+    });
+  } catch (cause) {
+    throw new ApiError(
+      503,
+      ErrorCodes.UPSTREAM_UNAVAILABLE,
+      "登録再開状態の確認に失敗しました。時間を置いて再試行してください。",
+      { retryable: true, cause },
+    );
+  }
+}
+
+async function assertEnabledOperation(
+  deps: Deps,
+  operation: RegistrationOperationDoc,
+  operationHash: string,
+  reqHash: string,
+  requestId: string,
 ): Promise<void> {
-  await registrationOperationRef(deps.db, operationHash).set(
-    {
-      ...patch,
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
+  const verification = await verifyEnabledOperation(
+    deps,
+    operation,
+    operationHash,
+    reqHash,
+  );
+  if (verification === "verified") return;
+
+  await audit(deps, {
+    actorType: "service",
+    action: AUDIT_ACTIONS.REGISTRATION_ATTEMPT,
+    outcome: "conflict",
+    requestId,
+    resourceType: "registrationOperation",
+    resourceIdHash: operationHash,
+    details: { reason: verification },
+  });
+  throw ApiError.conflict(
+    ErrorCodes.REGISTRATION_CONFLICT,
+    "登録済み状態を確認できないため処理を中断しました。サポートへお問い合わせください。",
   );
 }
 
@@ -97,7 +302,10 @@ export async function registerEmail(
   // ---- 操作台帳の照合（読み取りのみ、同意検証前にメールを永続化しない） ----
   let operation = await loadOperation(deps, operationHash);
   if (operation) {
-    if (operation.requestHash !== reqHash) {
+    if (
+      operation.operationHash !== operationHash ||
+      operation.requestHash !== reqHash
+    ) {
       await audit(deps, {
         actorType: "service",
         action: AUDIT_ACTIONS.REGISTRATION_ATTEMPT,
@@ -112,6 +320,13 @@ export async function registerEmail(
       );
     }
     if (operation.status === "enabled") {
+      await assertEnabledOperation(
+        deps,
+        operation,
+        operationHash,
+        reqHash,
+        params.requestId,
+      );
       return {
         registrationStatus: "created",
         nextAction: "sign_in",
@@ -179,61 +394,161 @@ export async function registerEmail(
         // uid-already-exists: 前回試行で作成済み（UIDはサーバ生成の乱数）。続行する。
       }
       operation = { ...operation, status: "auth_created" };
-      await saveOperation(deps, operationHash, { status: "auth_created" });
+      await saveOperation(deps, operation, { status: "auth_created" });
     }
 
     // ---- Firestore transaction: account + legalConsents + operation ----
-    // 操作台帳の状態更新も同一tx内で行う。tx後に失敗すると台帳が
-    // auth_created のまま残り、同一キー再試行で同意書が二重発行されるのを防ぐ。
+    // 操作台帳の状態更新も同一tx内で行う。台帳はコミット後に巻き戻らない
+    // （saveOperation が consents_committed/enabled を preserved_checkpoint
+    // として保護）が、TTL期限切れ上書きで reserved に戻り得るため、
+    // tx内ではaccount+同意書の実在でもコミット済みかを判定する
+    // （本 uid 由来のaccount/同意書はこの登録経路だけが作る）。
     if (operation.status === "auth_created" || operation.status === "reserved") {
-      await deps.db.runTransaction(async (tx) => {
+      const commitOutcome = await deps.db.runTransaction(async (tx) => {
         const opRef = registrationOperationRef(deps.db, operationHash);
         const accountRef = deps.db.doc(`accounts/${operation!.uid}`);
-        const [opSnap, accountSnap] = await Promise.all([
-          tx.get(opRef),
-          tx.get(accountRef),
-        ]);
-        const committedStatus = (
-          opSnap.data() as RegistrationOperationDoc | undefined
-        )?.status;
+        const opSnap = await tx.get(opRef);
+        if (!opSnap.exists) return "missing_operation" as const;
+
+        const currentOperation = opSnap.data() as RegistrationOperationDoc;
         if (
-          committedStatus === "consents_committed" ||
-          committedStatus === "enabled"
+          currentOperation.operationHash !== operationHash ||
+          currentOperation.requestHash !== reqHash ||
+          currentOperation.uid !== operation!.uid
         ) {
-          return;
+          return "operation_mismatch" as const;
         }
+
+        const currentStatus = currentOperation.status;
+        const alreadyCommitted =
+          currentStatus === "consents_committed" || currentStatus === "enabled";
+        if (
+          !alreadyCommitted &&
+          currentStatus !== "reserved" &&
+          currentStatus !== "auth_created" &&
+          currentStatus !== "failed"
+        ) {
+          return "unexpected_status" as const;
+        }
+
+        const [accountSnap, consentsSnap] = await Promise.all([
+          tx.get(accountRef),
+          tx.get(
+            deps.db
+              .collection("legalConsents")
+              .where("subjectUid", "==", operation!.uid),
+          ),
+        ]);
+        if (alreadyCommitted) {
+          return isConsistentRegistrationAccount(
+            accountSnap.data(),
+            operation!.uid,
+          )
+            ? ("already_committed" as const)
+            : ("account_mismatch" as const);
+        }
+        if (accountSnap.exists) {
+          // 台帳が期限切れ上書き等で進捗を失っても、account+同意書の
+          // コミット済み実在は原子書込の証跡。同一UIDの未完登録として再開する
+          // （本 uid 由来のaccount/同意書はこの登録経路だけが作る）。
+          return isConsistentRegistrationAccount(
+            accountSnap.data(),
+            operation!.uid,
+          ) && !consentsSnap.empty
+            ? ("already_committed" as const)
+            : ("account_mismatch" as const);
+        }
+        // accountが無いのに同意書だけ残る状態はこのtxの原子性上あり得ない
+        if (!consentsSnap.empty) return "unexpected_status" as const;
+
         const ts = FieldValue.serverTimestamp();
-        if (!accountSnap.exists) {
-          const account: AccountDoc = {
-            uid: operation!.uid,
-            accountStatus: "onboarding_pending",
-            onboardingState: "profile_pending",
-            emailVerified: false,
-            providers: ["password"],
-            schemaVersion: "1",
-            createdAt: ts,
-            updatedAt: ts,
-          };
-          tx.create(
-            accountRef,
-            account as unknown as DocumentData,
-          );
-        }
+        const account: AccountDoc = {
+          uid: operation!.uid,
+          accountStatus: "onboarding_pending",
+          onboardingState: "profile_pending",
+          emailVerified: false,
+          providers: ["password"],
+          schemaVersion: "1",
+          createdAt: ts,
+          updatedAt: ts,
+        };
+        tx.create(accountRef, account as unknown as DocumentData);
         writeConsentDocs(tx, deps, operation!.uid, grants, "email_registration");
         tx.set(
           opRef,
           { status: "consents_committed", updatedAt: ts } as DocumentData,
           { merge: true },
         );
+        return "committed" as const;
       });
+
+      if (
+        commitOutcome !== "committed" &&
+        commitOutcome !== "already_committed"
+      ) {
+        await audit(deps, {
+          actorType: "service",
+          action: AUDIT_ACTIONS.REGISTRATION_ATTEMPT,
+          outcome: "conflict",
+          requestId: params.requestId,
+          resourceType: "registrationOperation",
+          resourceIdHash: operationHash,
+          details: { reason: commitOutcome },
+        });
+        throw ApiError.conflict(
+          ErrorCodes.REGISTRATION_CONFLICT,
+          "登録操作の状態を確認できないため処理を中断しました。サポートへお問い合わせください。",
+        );
+      }
       operation = { ...operation, status: "consents_committed" };
     }
 
-    // ---- Auth 有効化 ----
+    // ---- Auth 有効化前のcheckpoint再確認 ----
     if (operation.status === "consents_committed") {
-      await deps.authAdmin.updateUser(operation.uid, { disabled: false });
-      operation = { ...operation, status: "enabled" };
-      await saveOperation(deps, operationHash, { status: "enabled" });
+      const checkpoint = await verifyCommittedCheckpoint(
+        deps,
+        operation,
+        operationHash,
+        reqHash,
+      );
+      if (checkpoint === "enabled") {
+        operation = { ...operation, status: "enabled" };
+      } else if (checkpoint !== "consents_committed") {
+        await audit(deps, {
+          actorType: "service",
+          action: AUDIT_ACTIONS.REGISTRATION_ATTEMPT,
+          outcome: "conflict",
+          requestId: params.requestId,
+          resourceType: "registrationOperation",
+          resourceIdHash: operationHash,
+          details: { reason: checkpoint },
+        });
+        throw ApiError.conflict(
+          ErrorCodes.REGISTRATION_CONFLICT,
+          "Auth有効化前に登録台帳とaccountの所有状態を確認できません。サポートへお問い合わせください。",
+        );
+      } else {
+        await deps.authAdmin.updateUser(operation.uid, { disabled: false });
+        operation = { ...operation, status: "enabled" };
+        const saveResult = await saveOperation(deps, operation, {
+          status: "enabled",
+        });
+        if (saveResult !== "enabled") {
+          await audit(deps, {
+            actorType: "service",
+            action: AUDIT_ACTIONS.REGISTRATION_ATTEMPT,
+            outcome: "conflict",
+            requestId: params.requestId,
+            resourceType: "registrationOperation",
+            resourceIdHash: operationHash,
+            details: { reason: saveResult },
+          });
+          throw ApiError.conflict(
+            ErrorCodes.REGISTRATION_CONFLICT,
+            "Auth有効化後に登録台帳の所有状態を確認できません。サポートへお問い合わせください。",
+          );
+        }
+      }
     }
   } catch (err) {
     if (err instanceof ApiError) throw err;
@@ -241,7 +556,7 @@ export async function registerEmail(
       { err, operationHash: operationHash.slice(0, 16), status: operation.status },
       "registration flow failed",
     );
-    await saveOperation(deps, operationHash, {
+    await saveOperation(deps, operation, {
       status: "failed",
       lastErrorClass: errorClass(err),
     }).catch(() => undefined);
@@ -262,6 +577,14 @@ export async function registerEmail(
     );
   }
 
+  await assertEnabledOperation(
+    deps,
+    operation,
+    operationHash,
+    reqHash,
+    params.requestId,
+  );
+
   await audit(deps, {
     actorType: "patient",
     actorUidHash: auditUidHash(deps, operation.uid),
@@ -280,6 +603,9 @@ export async function registerEmail(
 }
 
 function isExpired(op: RegistrationOperationDoc, now: Date): boolean {
+  // Once Firestore has atomically committed account/consents, expiry must not
+  // erase the checkpoint while the same operation is being resumed.
+  if (op.status === "consents_committed" || op.status === "enabled") return false;
   const exp = op.expiresAt as { toMillis?: () => number } | undefined;
   const expMs =
     exp && typeof exp.toMillis === "function" ? exp.toMillis() : undefined;
@@ -329,9 +655,8 @@ function buildVersionSet(
 /**
  * email-already-exists の突き合わせ。
  * - 保持者が本操作のUIDなら前回作成済み → 続行
- * - 保持者が「disabled かつ account 未作成」の孤児（失敗した過去登録の残骸）
- *   なら削除して createUser を再試行 → 版更新等で残された登録を回復
- * - 上記以外は実ユーザーのメール → 409
+ * - 保持者が別操作の disabled Auth ユーザーなら、account の有無だけで削除せず409
+ * - 上記以外は既存メール → 409
  */
 async function reconcileEmailConflict(
   deps: Deps,
@@ -342,32 +667,13 @@ async function reconcileEmailConflict(
 ): Promise<void> {
   const existing = await deps.authAdmin
     .getUserByEmail(body.email)
-    .catch(() => undefined);
+    .catch((err) => {
+      // 未存在のみ欠落扱い。一過性のAuth障害は409へ誤分類しないため再送する
+      if (isAuthError(err, "auth/user-not-found")) return undefined;
+      throw err;
+    });
   if (existing && existing.uid === operation.uid) {
     return;
-  }
-  if (existing?.disabled) {
-    const accountSnap = await deps.db.doc(`accounts/${existing.uid}`).get();
-    if (!accountSnap.exists) {
-      // 登録未完了の孤児Authユーザーを回収し、本操作のUIDで作成し直す
-      await deps.authAdmin.deleteUser(existing.uid);
-      await deps.authAdmin.createUser({
-        uid: operation.uid,
-        email: body.email,
-        password: body.password,
-        emailVerified: false,
-        disabled: true,
-      });
-      await audit(deps, {
-        actorType: "service",
-        action: AUDIT_ACTIONS.REGISTRATION_ATTEMPT,
-        outcome: "recovered",
-        requestId: params.requestId,
-        resourceType: "registrationOperation",
-        resourceIdHash: operationHash,
-      });
-      return;
-    }
   }
   await audit(deps, {
     actorType: "service",
@@ -410,12 +716,51 @@ async function reserveOperation(
     ),
   };
   const ref = registrationOperationRef(deps.db, operationHash);
-  try {
-    if (opts.overwrite) {
-      await ref.set(doc as unknown as DocumentData);
-    } else {
-      await ref.create(doc as unknown as DocumentData);
+  if (opts.overwrite) {
+    // The earlier read may be stale: another retry can have committed the
+    // Firestore checkpoint (or renewed the reservation) since then. Re-read
+    // and decide in a transaction so a stale expiry cannot reset its status.
+    const outcome = await deps.db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return { kind: "missing" as const };
+
+      const current = snap.data() as RegistrationOperationDoc;
+      if (
+        current.operationHash !== operationHash ||
+        current.requestHash !== reqHash
+      ) {
+        return { kind: "conflict" as const };
+      }
+      if (!isExpired(current, now)) {
+        return { kind: "existing" as const, operation: current };
+      }
+
+      const renewed = { ...doc, uid: current.uid };
+      tx.set(ref, renewed as unknown as DocumentData);
+      return { kind: "renewed" as const, operation: renewed };
+    });
+
+    if (outcome.kind === "missing" || outcome.kind === "conflict") {
+      await audit(deps, {
+        actorType: "service",
+        action: AUDIT_ACTIONS.REGISTRATION_ATTEMPT,
+        outcome: "conflict",
+        ...(opts.requestId !== undefined
+          ? { requestId: opts.requestId }
+          : {}),
+        resourceType: "registrationOperation",
+        resourceIdHash: operationHash,
+      });
+      throw ApiError.conflict(
+        ErrorCodes.REGISTRATION_CONFLICT,
+        "登録操作を安全に再開できません。新しい登録キーでやり直してください。",
+      );
     }
+    return outcome.operation;
+  }
+
+  try {
+    await ref.create(doc as unknown as DocumentData);
   } catch (writeErr) {
     // 同時予約の競合: 既存台帳を読み直して処理を再開する。
     // 既存docが無い場合は一過性エラー等の書込失敗なので原因をそのまま投げる
@@ -423,7 +768,9 @@ async function reserveOperation(
     const existing = await ref.get();
     if (existing.exists) {
       const data = existing.data() as RegistrationOperationDoc;
-      if (data.requestHash === reqHash) return data;
+      if (data.operationHash === operationHash && data.requestHash === reqHash) {
+        return data;
+      }
     } else {
       throw writeErr;
     }

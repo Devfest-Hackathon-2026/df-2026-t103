@@ -80,6 +80,14 @@ flutterfire configure --project=<project-id>   # firebase_options.dart を生成
 - ローカル開発はエミュレータ（`demo-mmr-dev`）を使うため、`flutterfire configure` は本番/stg向けの実プロジェクトが出来てから行う。
 - エミュレータ接続はアプリ側で明示する（例：`FirebaseAuth.instance.useAuthEmulator('localhost', 9099)`、`FirebaseFirestore.instance.useFirestoreEmulator('localhost', 8081)`）。接続先は `.env.local` の値と揃える。
 
+### Security Rules 単体テスト（`firebase/tests`）
+
+```bash
+make test-firebase-rules   # compose のエミュレータ起動中に実行
+# または: npm --prefix firebase/tests run test:compose
+# CI相当（エミュレータを自動起動）: firebase emulators:exec --only firestore,database,storage --project demo-mmr-dev "npm --prefix firebase/tests test"
+```
+
 ## 5. Firebase CLI（ホストで直接使う場合）
 
 通常はコンテナ内で動くため不要。直接触りたい場合のみ：
@@ -106,6 +114,14 @@ npm run build      # ビルド
 npm run lint       # Lint
 npm run test       # テスト
 npx tsc --noEmit   # TypeScriptの型チェックのみ
+```
+
+### API エミュレータ結合テスト（`services/api/test/integration`）
+
+```bash
+make test-api-emulator     # compose のエミュレータ起動中に実行
+# または: npm --prefix services/api run test:emulator:compose
+# CI相当（エミュレータを自動起動）: firebase emulators:exec --only auth,firestore --project demo-mmr-dev "npm --prefix services/api run test:emulator"
 ```
 
 ## 7. よくある確認・トラブル対処

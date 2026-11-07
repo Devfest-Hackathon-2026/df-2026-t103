@@ -90,13 +90,19 @@ export class FakeAuthAdmin implements AuthAdmin {
     return { uid: props.uid };
   }
 
+  private static notFound(): Error {
+    const err = new Error("no user") as Error & { code: string };
+    err.code = "auth/user-not-found";
+    return err;
+  }
+
   async updateUser(
     uid: string,
     props: { disabled?: boolean; emailVerified?: boolean },
   ): Promise<unknown> {
     if (this.failOn.has("update")) throw new Error("auth/update failed");
     const u = this.users.get(uid);
-    if (!u) throw new Error("auth/user-not-found");
+    if (!u) throw FakeAuthAdmin.notFound();
     if (props.disabled !== undefined) u.disabled = props.disabled;
     if (props.emailVerified !== undefined) u.emailVerified = props.emailVerified;
     return { uid };
@@ -108,12 +114,12 @@ export class FakeAuthAdmin implements AuthAdmin {
     for (const [uid, u] of this.users) {
       if (u.email === email) return { uid, disabled: u.disabled };
     }
-    throw new Error("auth/user-not-found");
+    throw FakeAuthAdmin.notFound();
   }
 
   async deleteUser(uid: string): Promise<void> {
     if (this.failOn.has("delete")) throw new Error("auth/delete failed");
-    this.users.delete(uid);
+    if (!this.users.delete(uid)) throw FakeAuthAdmin.notFound();
   }
 
   async revokeRefreshTokens(_uid: string): Promise<void> {

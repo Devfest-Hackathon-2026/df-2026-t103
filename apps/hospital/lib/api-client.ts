@@ -2,9 +2,19 @@ export type JobType = "ocr" | "deletion";
 export type JobFailure = { type: JobType; jobId: string; failureCode: string | null; attempts: number; failedAt: string | null };
 export type JobFailurePage = { items: JobFailure[]; nextCursor: string | null };
 
+const errorMessages: Record<number, string> = {
+  400: "入力内容を確認してください。",
+  401: "認証またはクライアントの検証に失敗しました。再ログインしてください。",
+  403: "運営管理者の権限がありません。",
+  404: "対象が見つかりません。施設IDを確認してください。",
+  429: "操作が多すぎます。時間をおいて再試行してください。",
+};
+
 export class ApiError extends Error {
-  constructor(public readonly status: number) {
-    super(status === 401 ? "認証またはクライアントの検証に失敗しました。再ログインしてください。" : status === 403 ? "運営管理者の権限がありません。" : "APIから取得できませんでした。時間をおいて再試行してください。");
+  constructor(public readonly status: number, public readonly reauthRequired = false) {
+    super(reauthRequired
+      ? "再認証が必要です。ログアウトして再ログイン後、対象施設を確認して操作してください。"
+      : errorMessages[status] ?? "APIへの接続に失敗しました。時間をおいて再試行してください。");
   }
 }
 
@@ -29,17 +39,36 @@ export function createApiClient(config: {
   appCheckToken: () => Promise<string | null>;
   emulator: boolean;
 }) {
+  async function authHeaders() {
+    const token = await config.idToken();
+    if (!token) throw new ApiError(401);
+    const appCheck = await config.appCheckToken();
+    if (!appCheck && !config.emulator) throw new ApiError(401);
+    return { Authorization: `Bearer ${token}`, ...(appCheck ? { "X-Firebase-AppCheck": appCheck } : {}) };
+  }
   return {
+    async disableFacility(facilityId: string, reason: string, signal?: AbortSignal): Promise<void> {
+      if (!/^[A-Za-z0-9_-]{1,200}$/.test(facilityId) || !reason.trim() || reason.length > 500) throw new Error("施設IDと停止理由を確認してください。");
+      const headers = await authHeaders();
+      const response = await fetch(`${config.apiBaseUrl}/operator/facilities/${encodeURIComponent(facilityId)}/disable`, {
+        method: "POST", cache: "no-store", credentials: "omit", redirect: "error", signal,
+        headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ reason: reason.trim() }),
+      });
+      if (!response.ok) {
+        // Inspect one known code only; never expose API messages or private fields.
+        const body = await response.json().catch(() => null);
+        throw new ApiError(response.status, response.status === 403 && body?.error?.code === "REAUTH_REQUIRED");
+      }
+      const body: unknown = await response.json();
+      if (!body || typeof body !== "object" || !("facilityId" in body) || body.facilityId !== facilityId || !("receivingEnabled" in body) || body.receivingEnabled !== false) throw new Error("停止結果を確認できませんでした。");
+    },
     async jobFailures(type: JobType, cursor?: string, signal?: AbortSignal): Promise<JobFailurePage> {
-      const token = await config.idToken();
-      if (!token) throw new ApiError(401);
-      const appCheck = await config.appCheckToken();
-      if (!appCheck && !config.emulator) throw new ApiError(401);
+      const headers = await authHeaders();
       const query = new URLSearchParams({ type, limit: "20" });
       if (cursor) query.set("cursor", cursor);
       const response = await fetch(`${config.apiBaseUrl}/operator/job-failures?${query}`, {
         method: "GET", cache: "no-store", credentials: "omit", redirect: "error", signal,
-        headers: { Authorization: `Bearer ${token}`, ...(appCheck ? { "X-Firebase-AppCheck": appCheck } : {}) },
+        headers,
       });
       if (!response.ok) throw new ApiError(response.status);
       return parseJobFailurePage(await response.json());

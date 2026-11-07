@@ -20,4 +20,44 @@ test("job page rejects malformed data and removes unknown private fields", () =>
 test("production requires both credentials before issuing a network request", async () => {
   const api = createApiClient({ apiBaseUrl: "https://invalid.example/v1", emulator: false, idToken: async () => "id-token", appCheckToken: async () => null });
   await assert.rejects(api.jobFailures("ocr"), { status: 401 });
+  await assert.rejects(api.disableFacility("synthetic-facility", "drill"), { status: 401 });
+});
+
+test("emergency stop validates input, authenticates POST, and checks server confirmation", async (t) => {
+  const api = createApiClient({ apiBaseUrl: "https://invalid.example/v1", emulator: false, idToken: async () => "synthetic-token", appCheckToken: async () => "synthetic-appcheck" });
+  let calls = 0;
+  let response = { facilityId: "facility-1", receivingEnabled: false };
+  t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    calls++;
+    assert.equal(url, "https://invalid.example/v1/operator/facilities/facility-1/disable");
+    assert.equal(options.method, "POST");
+    assert.equal(options.credentials, "omit");
+    assert.equal(options.cache, "no-store");
+    assert.equal(options.redirect, "error");
+    assert.deepEqual(options.headers, { Authorization: "Bearer synthetic-token", "X-Firebase-AppCheck": "synthetic-appcheck", "Content-Type": "application/json" });
+    assert.equal(options.body, JSON.stringify({ reason: "drill" }));
+    return Response.json(response);
+  });
+  for (const [id, reason] of [["../other", "drill"], ["facility-1", " "], ["facility-1", "a".repeat(501)]]) await assert.rejects(api.disableFacility(id, reason));
+  assert.equal(calls, 0);
+  await api.disableFacility("facility-1", " drill ");
+  response = { facilityId: "different-facility", receivingEnabled: false };
+  await assert.rejects(api.disableFacility("facility-1", "drill"));
+  response = { facilityId: "facility-1", receivingEnabled: true };
+  await assert.rejects(api.disableFacility("facility-1", "drill"));
+});
+
+test("emergency stop reports fresh-auth failure without disclosing server error fields or retrying", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return Response.json({ error: { code: "REAUTH_REQUIRED", message: "PRIVATE_SERVER_MESSAGE" } }, { status: 403 });
+  });
+  const api = createApiClient({ apiBaseUrl: "https://invalid.example/v1", emulator: true, idToken: async () => "synthetic-token", appCheckToken: async () => null });
+  await assert.rejects(api.disableFacility("facility-1", "drill"), (error: Error) => {
+    assert.match(error.message, /再認証/);
+    assert.doesNotMatch(error.message, /PRIVATE_SERVER_MESSAGE/);
+    return true;
+  });
+  assert.equal(calls, 1);
 });

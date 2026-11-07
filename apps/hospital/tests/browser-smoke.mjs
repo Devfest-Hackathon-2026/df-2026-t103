@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 // Optional real-browser extension of test:api. Uses the real UI + SDK + BE;
 // no page routes, API responses, or Firebase services are intercepted.
-export async function browserSmoke({ apiBaseUrl, authHost, email, password }) {
+export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, assertStillReceiving }) {
   const profile = await mkdtemp(join(tmpdir(), "hospital-browser-"));
   const origin = "http://127.0.0.1:33090";
   const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", "33090"], {
@@ -60,6 +60,11 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password }) {
     const body = await evaluate("document.body.innerText");
     assert.ok(body.includes("engine_unavailable"));
     assert.ok(!body.includes("SYNTHETIC_PRIVATE_VALUE"));
+    await evaluate(`document.querySelector('[name=facilityId]').value=${JSON.stringify(facilityId)}; document.querySelector('[name=reason]').value='Synthetic emergency drill'; document.querySelector('[name=facilityId]').form.requestSubmit();`);
+    await poll("[...document.querySelectorAll('button')].some(b=>b.textContent==='この施設の受信を停止する')");
+    await assertStillReceiving();
+    await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='この施設の受信を停止する').click()");
+    await poll("!!document.querySelector('[role=status]')?.textContent.includes('受信停止を確認しました')");
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('ログアウト')).click()");
     await poll("!!document.querySelector('input[name=email]') && !document.querySelector('tbody')");
   } finally {

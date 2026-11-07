@@ -69,3 +69,11 @@ Passkey は審査承認まで既定で非表示です。表示状態だけを確
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5053 -t lib/demo_medication_list_preview.dart
 ```
+
+## 薬の候補確認プレビュー
+
+OCR 候補の人手確認（P-023）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5054 を開きます。確認後は Ctrl+C で停止します。候補の名前・容量・用法・数量・処方日を確認・編集でき、全件を確認するまで「確定」はできません（自動確定しません）。このプレビューは API に接続せず、写真参照・確定（medications API）は未接続です。実患者情報は入力しないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5054 -t lib/demo_ocr_candidate_preview.dart
+```

@@ -33,6 +33,7 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      - run: npm run test:security
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

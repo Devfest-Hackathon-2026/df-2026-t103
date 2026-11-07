@@ -51,6 +51,9 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
       const alert = await evaluate("document.querySelector('[role=alert]')?.textContent || ''");
       throw new Error(`Browser UI did not reach expected state: ${alert}`);
     };
+    await send("Page.enable", {}, sessionId);
+    await send("Runtime.enable", {}, sessionId);
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: "window.cspViolations=[]; document.addEventListener('securitypolicyviolation', e => window.cspViolations.push(e.effectiveDirective));" }, sessionId);
     await send("Page.navigate", { url: `${origin}/operator` }, sessionId);
     await poll("!!document.querySelector('input[name=email]') && !!document.querySelector('button:not(:disabled)')");
     await evaluate(`document.querySelector('[name=email]').value=${JSON.stringify(email)}; document.querySelector('[name=password]').value=${JSON.stringify(password)}; document.querySelector('form').requestSubmit();`);
@@ -91,6 +94,7 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     await poll("[...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('受信停止を確認しました'))");
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('ログアウト')).click()");
     await poll("!!document.querySelector('input[name=email]') && !document.querySelector('tbody') && !document.querySelector('[data-audit-summary]')");
+    assert.deepEqual(await evaluate("window.cspViolations"), [], "Real UI/Auth/BE workflow must not violate CSP");
   } finally {
     socket?.close();
     for (const process of [chrome, next]) {

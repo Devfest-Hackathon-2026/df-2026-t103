@@ -1,4 +1,8 @@
 locals {
+  # Existing non-PHI status instance in Singapore; never use the US SDK fallback.
+  database_url = "https://${var.project_id}-status.asia-southeast1.firebasedatabase.app"
+  cors_origins = var.cors_origins != null ? var.cors_origins : "https://${var.project_id}.web.app"
+
   storage_bucket = var.storage_bucket != "" ? var.storage_bucket : google_storage_bucket.patient_uploads[0].name
 
   # ランタイム SA（Cloud Run が assume）

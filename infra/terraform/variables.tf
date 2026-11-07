@@ -23,6 +23,6 @@ variable "storage_bucket" {
 
 variable "cors_origins" {
   type        = string
-  description = "API_CORS_ORIGINS（カンマ区切りの許可 origin）。"
-  default     = "https://hospital.moshimoshimonshin.com"
+  description = "API_CORS_ORIGINS（カンマ区切り）。未指定なら対象projectの患者Hosting originのみ。追加originは実在確認後に指定する。"
+  default     = null
 }

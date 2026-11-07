@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:patient/body_location_screen.dart';
 import 'package:patient/demo_body_location_preview.dart';
 
 void main() {
@@ -94,5 +95,135 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('部位選択デモ'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('callbackがない既定画面は未接続表示のまま次へは無効', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: BodyLocationScreen()));
+
+    expect(find.text('API・次の画面への遷移は未接続です。'), findsOneWidget);
+    expect(
+      find.text('架空デモの接続点です。選択結果をメモリ上で次へ渡します（保存・送信なし）。'),
+      findsNothing,
+    );
+    expect(find.byType(ElevatedButton), findsOneWidget);
+    expect(
+      tester.widget<ElevatedButton>(find.byType(ElevatedButton)).onPressed,
+      isNull,
+    );
+  });
+
+  testWidgets('callback指定時のみ次へが有効になり選択結果のコピーを渡す', (tester) async {
+    final received = <List<String>>[];
+    await tester.pumpWidget(
+      MaterialApp(home: BodyLocationScreen(onNext: received.add)),
+    );
+
+    expect(find.text('API・次の画面への遷移は未接続です。'), findsNothing);
+    expect(
+      find.text('架空デモの接続点です。選択結果をメモリ上で次へ渡します（保存・送信なし）。'),
+      findsOneWidget,
+    );
+    expect(find.text('選択はメモリ上のみで、保存されません。'), findsOneWidget);
+    expect(find.byType(ElevatedButton), findsOneWidget);
+    expect(
+      tester.widget<ElevatedButton>(find.byType(ElevatedButton)).onPressed,
+      isNotNull,
+    );
+
+    await tester.ensureVisible(find.text('左腕'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('左腕'));
+    await tester.tap(find.text('右腕'));
+    await tester.pump();
+    expect(find.text('選択中: 左腕、右腕'), findsOneWidget);
+
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, '次へ'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, '次へ'));
+    await tester.pump();
+
+    expect(received, hasLength(1));
+    expect(received.single, ['左腕', '右腕']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('渡した引数は画面の選択状態と独立している', (tester) async {
+    final received = <List<String>>[];
+    await tester.pumpWidget(
+      MaterialApp(home: BodyLocationScreen(onNext: received.add)),
+    );
+
+    await tester.ensureVisible(find.text('頭'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('頭'));
+    await tester.tap(find.text('首'));
+    await tester.pump();
+    expect(find.text('選択中: 頭、首'), findsOneWidget);
+
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, '次へ'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, '次へ'));
+    await tester.pump();
+    expect(received.single, ['頭', '首']);
+
+    // 画面側の選択を変更しても、渡したリストは変わらない。
+    await tester.ensureVisible(find.text('頭'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('頭'));
+    await tester.pump();
+    expect(find.text('選択中: 首'), findsOneWidget);
+    expect(received.single, ['頭', '首']);
+
+    // 渡したリストを書き換えても、画面の選択は変わらない。
+    received.single.clear();
+    await tester.tap(find.text('胸'));
+    await tester.pump();
+    expect(find.text('選択中: 首、胸'), findsOneWidget);
+    expect(received.single, isEmpty);
+  });
+
+  testWidgets('未選択でも次へ進め、空の選択結果を渡す', (tester) async {
+    final received = <List<String>>[];
+    await tester.pumpWidget(
+      MaterialApp(home: BodyLocationScreen(onNext: received.add)),
+    );
+    expect(find.text('未選択'), findsOneWidget);
+
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, '次へ'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, '次へ'));
+    await tester.pump();
+
+    expect(received, hasLength(1));
+    expect(received.single, isEmpty);
+    expect(find.text('未選択'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('読み上げに次への有効・無効が伝わる', (tester) async {
+    final semantics = tester.ensureSemantics();
+
+    await tester.pumpWidget(const MaterialApp(home: BodyLocationScreen()));
+    await tester.ensureVisible(find.byType(ElevatedButton));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSemantics(find.byType(ElevatedButton)),
+      matchesSemantics(label: '次へ', isButton: true, hasEnabledState: true),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: BodyLocationScreen(onNext: (_) {})),
+    );
+    expect(
+      tester.getSemantics(find.byType(ElevatedButton)),
+      isSemantics(
+        label: '次へ',
+        isButton: true,
+        hasEnabledState: true,
+        isEnabled: true,
+        hasTapAction: true,
+      ),
+    );
+    semantics.dispose();
   });
 }

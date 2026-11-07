@@ -148,3 +148,21 @@ Cloud Runサービスは読み取り時点で0件のため、実API発行URLに�
 初回にCLIで作成したbucketをTerraformへ移管する場合は、共有backend初期化後に
 `terraform import -var='project_id=project-7efcc4c4-6c86-490c-ba5' 'google_storage_bucket.patient_uploads[0]' project-7efcc4c4-6c86-490c-ba5-patient-uploads`
 で取り込み、planで再作成/削除がないことを確認する。
+
+## 稼働APIとの接続整合性（#36）
+
+API/worker の `FIREBASE_STORAGE_BUCKET` は上記 `-patient-uploads`、
+`UPLOAD_DOC_TTL_DAYS=30`、`DATABASE_URL` は実在する
+`https://project-7efcc4c4-6c86-490c-ba5-status.asia-southeast1.firebasedatabase.app`
+へ揃える。Terraformの `cors_origins` 未指定時は患者Hosting originを使う。
+既存の `-app` bucketを削除・移行せず、新規uploadの接続先のみを揃える。
+既存uploadがある環境の切替は、bucket名を含まない既存参照への影響を確認してから行う。
+初回構築直後に旧bucketのlive objectが0件であることを確認して切替える。
+
+RTDBのstatus instanceとdeny-by-default Rulesは実適用済み。
+Cloud Runへ環境変数を反映してもApp CheckやFirebase Authの要件は緩和しない。
+実API発行URLを使う受入には、正規のテスト利用者・App Check付きクライアントが必要。
+
+Cloud Runの予約変数 `PORT` はTerraformから指定しない。
+[Cloud Run環境変数](https://docs.cloud.google.com/run/docs/configuring/services/environment-variables)と
+[RTDB Admin SDKの接続先](https://firebase.google.com/docs/database/admin/start)を参照。

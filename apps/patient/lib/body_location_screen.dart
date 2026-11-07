@@ -1,8 +1,17 @@
 import 'package:flutter/material.dart';
 
 /// 保存や画面遷移を行わない、身体部位のテキスト選択デモ。
+///
+/// 架空デモから [onNext] を明示的に渡したときだけ「次へ」が有効になり、
+/// 選択結果のコピーをメモリ上で返す。未指定の既定では従来どおり
+/// 未接続表示のまま「次へ」は操作できない。
 class BodyLocationScreen extends StatefulWidget {
-  const BodyLocationScreen({super.key});
+  const BodyLocationScreen({super.key, this.onNext});
+
+  /// 架空デモの接続点。渡す引数は画面の選択内容のコピーで、保存・送信はしない。
+  ///
+  /// `null` の既定では接続せず、従来どおり「次へ」は無効のまま遷移もしない。
+  final ValueChanged<List<String>>? onNext;
 
   @override
   State<BodyLocationScreen> createState() => _BodyLocationScreenState();
@@ -28,6 +37,10 @@ class _BodyLocationScreenState extends State<BodyLocationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final onNext = widget.onNext;
+    final connectionNote = onNext == null
+        ? 'API・次の画面への遷移は未接続です。'
+        : '架空デモの接続点です。選択結果をメモリ上で次へ渡します（保存・送信なし）。';
     return Scaffold(
       appBar: AppBar(title: const Text('部位選択デモ')),
       body: SingleChildScrollView(
@@ -62,8 +75,13 @@ class _BodyLocationScreenState extends State<BodyLocationScreen> {
               ),
             Text(_selected.isEmpty ? '未選択' : '選択中: ${_selected.join('、')}'),
             const SizedBox(height: 16),
-            const Text('API・次の画面への遷移は未接続です。'),
-            const ElevatedButton(onPressed: null, child: Text('次へ')),
+            Text(connectionNote),
+            ElevatedButton(
+              onPressed: onNext == null
+                  ? null
+                  : () => onNext(List.of(_selected)),
+              child: const Text('次へ'),
+            ),
           ],
         ),
       ),

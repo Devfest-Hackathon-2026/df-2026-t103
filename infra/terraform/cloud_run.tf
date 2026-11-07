@@ -41,12 +41,12 @@ resource "google_cloud_run_v2_service" "api" {
         value = "0.0.0.0"
       }
       env {
-        name  = "PORT"
-        value = "8080"
-      }
-      env {
         name  = "FIREBASE_PROJECT_ID"
         value = var.project_id
+      }
+      env {
+        name  = "DATABASE_URL"
+        value = local.database_url
       }
       env {
         name  = "FIREBASE_STORAGE_BUCKET"
@@ -66,7 +66,7 @@ resource "google_cloud_run_v2_service" "api" {
       }
       env {
         name  = "API_CORS_ORIGINS"
-        value = var.cors_origins
+        value = local.cors_origins
       }
       env {
         name  = "OCR_TASKS_LOCATION"
@@ -148,12 +148,12 @@ resource "google_cloud_run_v2_service" "worker" {
         value = "0.0.0.0"
       }
       env {
-        name  = "PORT"
-        value = "8080"
-      }
-      env {
         name  = "FIREBASE_PROJECT_ID"
         value = var.project_id
+      }
+      env {
+        name  = "DATABASE_URL"
+        value = local.database_url
       }
       env {
         name  = "FIREBASE_STORAGE_BUCKET"

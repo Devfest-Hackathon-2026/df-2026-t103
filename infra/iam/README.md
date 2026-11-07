@@ -85,7 +85,7 @@ Issue本文は別projectの監査保管先を要求するが、今回の実行�
 
 単一projectのOwner/IAM管理者はポリシーを変更でき、別projectの独立した
 管理境界と同等ではない。この残存リスクをPO/法務/セキュリティが評価する。
-監査保持日数と閲覧者が未確定なのでbucket/view/sinkは未作成。
+保持400日のbucket/view/sinkは作成済みです。正式な閲覧グループと許可・拒否の受入は未完了です。
 retention lockは不可逆な制約になるため、本案で自動適用しない。
 
 ## 権限レビューと失効
@@ -149,7 +149,7 @@ log view/IAM/アプリそれぞれの許可・拒否試験、継承経路のレ�
 使わずmember単位で追加する。既存の4人のEditorと1人のOwnerは調査で確認したが、
 在籍・依存関係を推測して削除していない。Editor経由の広いデータ権限という残存リスクは解消していない。
 
-このセッションの認証を `testIamPermissions` で検査した結果、
+初回調査時の認証を `testIamPermissions` で検査した結果、
 `resourcemanager.projects.setIamPolicy` / `logging.buckets.create` /
 `logging.sinks.create` / `logging.views.setIamPolicy` がなく、実適用はブロックされる。
 設定値の再確認ではなく、権限を持つ実行者による適用と実グループの作成・メンバー照合が必要。
@@ -168,3 +168,5 @@ GCP Project OwnerだけではCloud Identityのグループ管理者権限を意�
 API署名URL用のToken Creatorはapi-run-sa自身を同じSAへ紐付ける。project全体の
 Token Creatorを人間/運営グループへ付けない。合成アップロード検証用の人間のgrantは
 15分期限付き・同じSAだけに限定し、検証終了時に除去する。
+
+監査ログの限定view検索・抽出・保持と受入の手順は [監査運用手順](../audit/README.md) を参照してください。

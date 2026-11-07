@@ -51,6 +51,9 @@ services:
         - action: sync+restart
           path: firebase
           target: /workspace/firebase
+          # rules 単体テストの変更ではエミュレータを再起動しない
+          ignore:
+            - tests/
 
   api:
     build:

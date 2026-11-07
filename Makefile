@@ -46,7 +46,7 @@ endif
         stop-firebase stop-api stop-hospital stop-patient stop-watch \
         restart-firebase restart-api restart-hospital restart-patient restart-watch \
         logs logs-firebase logs-api logs-hospital logs-patient logs-watch \
-        install-templates
+        test-firebase-rules install-templates
 
 ##@ 基本
 
@@ -228,6 +228,10 @@ logs-watch: ## ファイル監視のログを表示
 	tail -f $(LOG_DIR)/compose-watch.log
 
 ##@ その他
+
+test-firebase-rules: ## Security Rules 単体テスト（compose のエミュレータ起動中に実行）
+	@[ -d firebase/tests/node_modules ] || npm --prefix firebase/tests ci
+	npm --prefix firebase/tests run test:compose
 
 install-templates: ## .github/template/ をGitHubの正式パスへコピー（PR/Issueテンプレ有効化）
 	@mkdir -p .github/ISSUE_TEMPLATE

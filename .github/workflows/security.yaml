@@ -171,7 +171,40 @@ jobs:
       - name: Compile Firestore & Storage security rules
         # emulators:exec はルールを読み込んでコンパイルするため、
         # 構文エラーがあればここで失敗する。実プロジェクトには接続しない。
-        run: npx -y firebase-tools emulators:exec --only firestore,storage --project demo-mmr "echo rules compiled"
+        run: npx -y firebase-tools@15.35.0 emulators:exec --only firestore,storage --project demo-mmr "echo rules compiled"
+
+  firebase-rules-test:
+    name: firebase-rules / emulator unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: firebase/tests/package-lock.json
+
+      - name: Set up Java (Firebase emulators requirement)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install rules test dependencies
+        working-directory: firebase/tests
+        run: npm ci
+
+      # チェックイン済み rules をエミュレータへロードし、許可/拒否を網羅検証する。
+      # emulators:exec が FIRESTORE/FIREBASE_DATABASE/FIREBASE_STORAGE_EMULATOR_HOST を設定する。
+      # プロジェクトは compose 既定と同じ demo-mmr-dev（singleProjectMode と整合）。
+      # firebase-tools は docker/firebase/Dockerfile の FIREBASE_TOOLS_VERSION と揃える。
+      - name: Run rules unit tests on emulators
+        run: >-
+          npx -y firebase-tools@15.35.0 emulators:exec
+          --only firestore,database,storage --project demo-mmr-dev
+          "npm --prefix firebase/tests test"
 
   workflow-lint:
     name: workflow-lint / yaml parse

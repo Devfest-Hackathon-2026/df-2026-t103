@@ -60,13 +60,18 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     const body = await evaluate("document.body.innerText");
     assert.ok(body.includes("engine_unavailable"));
     assert.ok(!body.includes("SYNTHETIC_PRIVATE_VALUE"));
+    await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='監査一覧を取得・再試行').click()");
+    await poll("!!document.querySelector('[data-audit-summary] tbody tr')");
+    const auditBody = await evaluate("document.querySelector('[data-audit-summary]').innerText");
+    assert.ok(auditBody.includes("職員権限・状態変更"));
+    assert.ok(!auditBody.includes("SYNTHETIC_AUDIT_PRIVATE_VALUE"));
     await evaluate(`document.querySelector('[name=facilityId]').value=${JSON.stringify(facilityId)}; document.querySelector('[name=reason]').value='Synthetic emergency drill'; document.querySelector('[name=facilityId]').form.requestSubmit();`);
     await poll("[...document.querySelectorAll('button')].some(b=>b.textContent==='この施設の受信を停止する')");
     await assertStillReceiving();
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='この施設の受信を停止する').click()");
     await poll("!!document.querySelector('[role=status]')?.textContent.includes('受信停止を確認しました')");
     await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.includes('ログアウト')).click()");
-    await poll("!!document.querySelector('input[name=email]') && !document.querySelector('tbody')");
+    await poll("!!document.querySelector('input[name=email]') && !document.querySelector('tbody') && !document.querySelector('[data-audit-summary]')");
   } finally {
     socket?.close();
     for (const process of [chrome, next]) {

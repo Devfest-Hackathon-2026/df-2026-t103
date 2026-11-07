@@ -20,6 +20,7 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
   const password = "Synthetic-only-connection-123!";
   const membership = firebase.firestore.doc(`facilityMemberships/${uid}`);
   const job = firebase.firestore.doc(`ocrJobs/${uid}`);
+  const auditFixtures = Array.from({ length: 25 }, (_, i) => firebase.firestore.doc(`auditEvents/${uid}-${i}`));
   const facility = firebase.firestore.doc(`facilities/${uid}`);
   const app = initializeApp({ projectId: "demo-mmr-dev", apiKey: "demo-key" }, uid);
   const auth = initializeAuth(app, { persistence: inMemoryPersistence });
@@ -47,6 +48,7 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
     await signInWithEmailAndPassword(auth, email, password);
     const api = createApiClient({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, emulator: true, idToken: () => auth.currentUser!.getIdToken(), appCheckToken: async () => null });
     await assert.rejects(api.jobFailures("ocr"), { status: 403 });
+    await assert.rejects(api.auditEvents(), { status: 403 });
     await assert.rejects(api.disableFacility(uid, "Synthetic emergency drill"), { status: 403 });
     await membership.set({ userUid: uid, facilityId: "synthetic-facility", role: "platform_security_admin", status: "active" });
     await job.set({ status: "failed", errorCode: "engine_unavailable", attempt: 2, updatedAt: new Date(), patientUid: "SYNTHETIC_PRIVATE_VALUE" });
@@ -54,6 +56,15 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
     assert.ok(page.items.some((item) => item.failureCode === "engine_unavailable" && item.attempts === 2));
     assert.ok(!JSON.stringify(page).includes("SYNTHETIC_PRIVATE_VALUE"));
     assert.ok(!JSON.stringify(page).includes(uid), "BE must pseudonymize the legacy job ID");
+    await Promise.all(auditFixtures.map((ref) => ref.set({ action: "STAFF_MEMBERSHIP_UPDATED", actorType: "staff", occurredAt: new Date("2020-01-01T00:00:00.000Z"), outcome: "success", details: { patient: "SYNTHETIC_AUDIT_PRIVATE_VALUE" }, facilityId: uid, actorUidHash: uid, requestId: uid })));
+    const audits = await api.auditEvents();
+    assert.ok(audits.nextCursor, "Real backend must paginate the audit records");
+    const olderAudits = await api.auditEvents(audits.nextCursor!);
+    const summaries = [...audits.items, ...olderAudits.items];
+    assert.equal(summaries.filter((item) => item.action === "STAFF_MEMBERSHIP_UPDATED").length, 25);
+    assert.equal(new Set(summaries.map((item) => item.eventId)).size, summaries.length);
+    assert.ok(!JSON.stringify({ audits, olderAudits }).includes("SYNTHETIC_AUDIT_PRIVATE_VALUE"));
+    assert.ok(!JSON.stringify({ audits, olderAudits }).includes(uid));
     await facility.set({ receivingEnabled: true, verificationStatus: "verified" });
     if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, assertStillReceiving: async () => assert.equal((await facility.get()).data()?.receivingEnabled, true) });
     await api.disableFacility(uid, "Synthetic emergency drill");
@@ -67,12 +78,13 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
     await membership.update({ status: "revoked" });
     await assert.rejects(api.jobFailures("ocr"), { status: 403 });
     await assert.rejects(api.disableFacility(uid, "Synthetic emergency drill"), { status: 403 });
+    await assert.rejects(api.auditEvents(), { status: 403 });
     assert.equal((await facility.get()).data()?.receivingEnabled, true, "Revoked operator must not stop receiving");
     const unauthenticated = await fetch(`http://127.0.0.1:${port}/v1/operator/job-failures?type=ocr`);
     assert.equal(unauthenticated.status, 401);
   } finally {
     if (child.exitCode === null) { const exited = once(child, "exit"); child.kill("SIGTERM"); await exited; }
-    await Promise.all([membership.delete(), job.delete(), facility.delete(), firebase.auth.deleteUser(uid).catch(() => {})]);
+    await Promise.all([membership.delete(), job.delete(), facility.delete(), ...auditFixtures.map((ref) => ref.delete()), firebase.auth.deleteUser(uid).catch(() => {})]);
     await deleteApp(app);
     await firebase.firestore.terminate();
     const { deleteApp: deleteAdminApp } = createRequire(new URL("../../../services/api/package.json", import.meta.url))("firebase-admin/app") as { deleteApp: (app: unknown) => Promise<void> };

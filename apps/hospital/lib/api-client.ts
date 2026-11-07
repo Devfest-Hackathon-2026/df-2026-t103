@@ -33,6 +33,26 @@ export function parseJobFailurePage(value: unknown): JobFailurePage {
   return { items, nextCursor: page.nextCursor };
 }
 
+export type AuditSummary = {
+  eventId: string; action: string; actorType: string; occurredAt: string | null;
+  decision: "allow" | "deny" | null; outcome: "success" | "failure" | "other" | null;
+};
+export type AuditSummaryPage = { items: AuditSummary[]; nextCursor: string | null };
+
+export function parseAuditSummaryPage(value: unknown): AuditSummaryPage {
+  const invalid = () => new Error("API応答の形式が不正です。");
+  if (!value || typeof value !== "object") throw invalid();
+  const page = value as Record<string, unknown>;
+  if (!Array.isArray(page.items) || page.items.length > 100 || !(page.nextCursor === null || typeof page.nextCursor === "string")) throw invalid();
+  const items = page.items.map((raw): AuditSummary => {
+    if (!raw || typeof raw !== "object") throw invalid();
+    const item = raw as Record<string, unknown>;
+    if (typeof item.eventId !== "string" || !/^ae_[0-9a-f]{64}$/.test(item.eventId) || typeof item.action !== "string" || !/^[A-Z][A-Z0-9_]{0,63}$/.test(item.action) || !["patient", "staff", "platform", "service", "unknown"].includes(String(item.actorType)) || !(item.occurredAt === null || typeof item.occurredAt === "string" && Number.isFinite(Date.parse(item.occurredAt))) || ![null, "allow", "deny"].includes(item.decision as string | null) || ![null, "success", "failure", "other"].includes(item.outcome as string | null)) throw invalid();
+    return { eventId: item.eventId, action: item.action, actorType: item.actorType as string, occurredAt: item.occurredAt as string | null, decision: item.decision as AuditSummary["decision"], outcome: item.outcome as AuditSummary["outcome"] };
+  });
+  return { items, nextCursor: page.nextCursor };
+}
+
 export function createApiClient(config: {
   apiBaseUrl: string;
   idToken: () => Promise<string>;
@@ -47,6 +67,16 @@ export function createApiClient(config: {
     return { Authorization: `Bearer ${token}`, ...(appCheck ? { "X-Firebase-AppCheck": appCheck } : {}) };
   }
   return {
+    async auditEvents(cursor?: string, signal?: AbortSignal): Promise<AuditSummaryPage> {
+      const headers = await authHeaders();
+      const query = new URLSearchParams({ limit: "20" });
+      if (cursor) query.set("cursor", cursor);
+      const response = await fetch(`${config.apiBaseUrl}/operator/audit-events?${query}`, {
+        method: "GET", cache: "no-store", credentials: "omit", redirect: "error", signal, headers,
+      });
+      if (!response.ok) throw new ApiError(response.status);
+      return parseAuditSummaryPage(await response.json());
+    },
     async disableFacility(facilityId: string, reason: string, signal?: AbortSignal): Promise<void> {
       if (!/^[A-Za-z0-9_-]{1,200}$/.test(facilityId) || !reason.trim() || reason.length > 500) throw new Error("施設IDと停止理由を確認してください。");
       const headers = await authHeaders();

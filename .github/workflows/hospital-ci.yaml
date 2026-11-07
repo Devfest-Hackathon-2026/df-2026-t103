@@ -25,8 +25,23 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: apps/hospital/package-lock.json
+          cache-dependency-path: |
+            apps/hospital/package-lock.json
+            services/api/package-lock.json
+      - run: npm ci --prefix ../../services/api
       - run: npm ci
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Real BE connection (Auth + Firestore Emulator)
+        env:
+          FIREBASE_PROJECT_ID: demo-mmr-dev
+          FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:19099
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:18081
+          FIREBASE_STORAGE_EMULATOR_HOST: 127.0.0.1:19199
+          FIREBASE_DATABASE_EMULATOR_HOST: 127.0.0.1:19000
+        run: npx --yes firebase-tools@15.35.0 emulators:exec --project demo-mmr-dev --config ../../firebase.hospital-test.json --only auth,firestore 'npm run test:api'

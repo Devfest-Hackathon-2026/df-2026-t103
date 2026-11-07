@@ -32,6 +32,38 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  api-emulator:
+    name: api / firebase emulator integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - name: Set up Java (Firebase emulators requirement)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install api dependencies
+        working-directory: services/api
+        run: npm ci
+
+      # demo-mmr-dev（demo- プレフィックスのため実プロジェクトへは接続しない）。
+      # emulators:exec が FIRESTORE/FIREBASE_AUTH_EMULATOR_HOST を設定する。
+      # firebase-tools は docker/firebase/Dockerfile の FIREBASE_TOOLS_VERSION と揃える。
+      - name: Run emulator integration tests
+        run: >-
+          npx -y firebase-tools@15.35.0 emulators:exec
+          --only auth,firestore --project demo-mmr-dev
+          "npm --prefix services/api run test:emulator"
+
   docker:
     name: docker / image build + compose config
     runs-on: ubuntu-latest

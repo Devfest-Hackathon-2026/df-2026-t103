@@ -12,6 +12,7 @@ import { DEV_LEGAL_DOCUMENTS } from "../../../services/api/src/domain/legalDocum
 import { createApiClient } from "../lib/api-client";
 import { browserSmoke } from "./browser-smoke.mjs";
 import { hospitalTenantSmoke } from "./hospital-tenant-smoke";
+import { staffSessionSmoke } from "./staff-session-smoke";
 
 test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)", { timeout: 90000 }, async () => {
   assert.equal(process.env.FIREBASE_PROJECT_ID, "demo-mmr-dev");
@@ -113,7 +114,9 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
       deliveredBeforeStop = (await firebase.firestore.doc(`deliveries/${deliveredId}`).get()).data();
       assert.equal((deliveredBeforeStop as { status: string }).status, "delivered");
     };
-    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver });
+    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver,
+      assertStaffSession: (origin: string) => staffSessionSmoke({ firebase, origin, facilityId: uid, otherFacilityId: `${uid}-reject`, deliveryId: deliveredId!, hmacSecret: loadConfig().hmacSecret }),
+    });
     else {
       await api.reviewFacility(uid, "verified", { checks: allChecks, verificationRecordId: "SYNTHETIC_REFERENCE" });
       await api.reviewFacility(`${uid}-reject`, "rejected", { checks: { ...allChecks, applicant: false }, verificationRecordId: "SYNTHETIC_REFERENCE", reason: "SYNTHETIC_REVIEW_PRIVATE_VALUE" });

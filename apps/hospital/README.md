@@ -52,7 +52,7 @@ nonceはクライアントのヘッダを上書きし、リクエストごとに
 
 root layoutの `connection()` によりリクエスト時に描画します。PHIをサーバ側で取得せず、
 HTML/RSC・JS/CSS・静的ファイル・ログへ入れない設計制約は引き続き適用します。
-現在の検証は合成入力が応答へ反射しないことまでで、未実装の患者データ取得経路の保証ではありません。
+任意の実ブラウザ結合試験では、患者APIで配送した合成問診を職員BFFから取得できることと、同じ患者情報が認証後の一覧・詳細のSSR HTML/RSCに含まれないことを確認します。これは実患者データやすべての将来の取得経路を保証するものではありません。
 
 このnonce方式は `next start` 等のNext.jsサーバーを必要とし、静的exportはできません。
 `firebase.json` のhospital `public: apps/hospital/out` は静的配信案のままです。
@@ -63,7 +63,7 @@ HTML/RSC・JS/CSS・静的ファイル・ログへ入れない設計制約は引
 `npm run build && npm run test:security` は本番ビルドをloopback上で起動し、
 HTTPヘッダ、nonceの更新・全bootstrap scriptへの一致、静的JS取得、404、RSC、prefetchを検証します。
 実ブラウザでのCSP施行は、後述の任意ブラウザ試験で実Auth/BEへの接続とともに検証します。実クラウドApp Check/MFAと将来の患者データ取得経路のPHI検証は別途必要です。
-現在のログイン・変更APIはメモリ内Bearer token方式で、API fetchはcredentials: omitを使います。サーバ側の認証/App Check/運営権限/再認証を回避しません。将来Cookie認証を導入する場合はHttpOnly・Secure・SameSite・CSRF対策の追加検証が必要です。
+運営画面はメモリ内Bearer token方式（API fetchはcredentials: omit）、職員画面は上記のCookie/BFF方式です。任意の実ブラウザ結合試験は、実Auth Emulatorのトークンを既存のセッションAPIで検証してCookieを発行し、HttpOnly・SameSite=Strict・Path・55分期限、未認証/不正トークン拒否、CSRF拒否、施設コンテキストの認可、BFFの別院拒否・所属失効、ログアウト時のCookie消去、認証後応答のno-storeを確認します。テスト用の認可回避やレスポンス差し替えはありません。このHTTP接続試験は職員ログインUIのMFA手順を通しません。EmulatorのHTTP設定で行うため、本番のSecure Cookie・MFA・App Check・HTTPS配信の受入は別途必要です。
 
 方式の根拠: [Next.js CSPガイド](https://nextjs.org/docs/app/guides/content-security-policy)
 およびインストール済みNext.js 16.4.5の `node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md`。

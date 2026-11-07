@@ -398,8 +398,11 @@ export async function registerEmail(
     }
 
     // ---- Firestore transaction: account + legalConsents + operation ----
-    // 操作台帳の状態更新も同一tx内で行う。tx後に失敗すると台帳が
-    // auth_created のまま残り、同一キー再試行で同意書が二重発行されるのを防ぐ。
+    // 操作台帳の状態更新も同一tx内で行う。台帳はコミット後に巻き戻らない
+    // （saveOperation が consents_committed/enabled を preserved_checkpoint
+    // として保護）が、TTL期限切れ上書きで reserved に戻り得るため、
+    // tx内ではaccount+同意書の実在でもコミット済みかを判定する
+    // （本 uid 由来のaccount/同意書はこの登録経路だけが作る）。
     if (operation.status === "auth_created" || operation.status === "reserved") {
       const commitOutcome = await deps.db.runTransaction(async (tx) => {
         const opRef = registrationOperationRef(deps.db, operationHash);
@@ -428,7 +431,14 @@ export async function registerEmail(
           return "unexpected_status" as const;
         }
 
-        const accountSnap = await tx.get(accountRef);
+        const [accountSnap, consentsSnap] = await Promise.all([
+          tx.get(accountRef),
+          tx.get(
+            deps.db
+              .collection("legalConsents")
+              .where("subjectUid", "==", operation!.uid),
+          ),
+        ]);
         if (alreadyCommitted) {
           return isConsistentRegistrationAccount(
             accountSnap.data(),
@@ -437,7 +447,19 @@ export async function registerEmail(
             ? ("already_committed" as const)
             : ("account_mismatch" as const);
         }
-        if (accountSnap.exists) return "account_mismatch" as const;
+        if (accountSnap.exists) {
+          // 台帳が期限切れ上書き等で進捗を失っても、account+同意書の
+          // コミット済み実在は原子書込の証跡。同一UIDの未完登録として再開する
+          // （本 uid 由来のaccount/同意書はこの登録経路だけが作る）。
+          return isConsistentRegistrationAccount(
+            accountSnap.data(),
+            operation!.uid,
+          ) && !consentsSnap.empty
+            ? ("already_committed" as const)
+            : ("account_mismatch" as const);
+        }
+        // accountが無いのに同意書だけ残る状態はこのtxの原子性上あり得ない
+        if (!consentsSnap.empty) return "unexpected_status" as const;
 
         const ts = FieldValue.serverTimestamp();
         const account: AccountDoc = {
@@ -645,7 +667,11 @@ async function reconcileEmailConflict(
 ): Promise<void> {
   const existing = await deps.authAdmin
     .getUserByEmail(body.email)
-    .catch(() => undefined);
+    .catch((err) => {
+      // 未存在のみ欠落扱い。一過性のAuth障害は409へ誤分類しないため再送する
+      if (isAuthError(err, "auth/user-not-found")) return undefined;
+      throw err;
+    });
   if (existing && existing.uid === operation.uid) {
     return;
   }

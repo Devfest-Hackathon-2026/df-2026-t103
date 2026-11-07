@@ -116,6 +116,14 @@ npm run test       # テスト
 npx tsc --noEmit   # TypeScriptの型チェックのみ
 ```
 
+### API エミュレータ結合テスト（`services/api/test/integration`）
+
+```bash
+make test-api-emulator     # compose のエミュレータ起動中に実行
+# または: npm --prefix services/api run test:emulator:compose
+# CI相当（エミュレータを自動起動）: firebase emulators:exec --only auth,firestore --project demo-mmr-dev "npm --prefix services/api run test:emulator"
+```
+
 ## 7. よくある確認・トラブル対処
 
 ```bash

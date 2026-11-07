@@ -86,3 +86,16 @@ Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータル�
 
 参照: [App Check custom backend](https://firebase.google.com/docs/app-check/web/custom-resource)、
 [TOTP MFA](https://firebase.google.com/docs/auth/web/totp-mfa)。
+
+
+## 運営施設審査（O-001）
+
+`/operator`の「運営施設審査」で実BEの施設一覧を取得し、施設を選択して検証証跡サマリーを確認します。
+原本を別途確認し、4検証項目・検証文書参照を入力して確認画面から既存承認APIを実行します。
+未審査施設は理由を付けて却下できます。再認証要求時はログアウトして再ログインしてください。
+承認しても受付は自動で有効になりません。却下はpendingだけで、承認済み/停止中の緊急対応は受付停止操作を使います。
+文書参照原文・連絡先・審査者UID・メモは一覧APIから取得せず、患者情報は入力しません。
+
+実環境への公開前に`facilityVerificationRecords: facilityId ASC, createdAt DESC`のindexを
+`firebase/firestore.indexes.json`から通常のRules/indexesデプロイ手順で作成し、利用可能状態を確認してください。
+API/画面とindexのデプロイ、正規MFA/App Check付きのクラウド受入は、このローカル検証だけで完了扱いにしません。

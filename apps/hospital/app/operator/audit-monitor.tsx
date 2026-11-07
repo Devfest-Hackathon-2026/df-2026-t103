@@ -9,7 +9,8 @@ const labels: Record<string, string> = {
   allow: "許可", deny: "拒否", success: "成功", failure: "失敗", other: "その他",
   STAFF_INVITED: "職員招待", STAFF_MEMBERSHIP_UPDATED: "職員権限・状態変更",
   MEMBERSHIP_REVOKED: "所属権限失効", FACILITY_RECEIVING_DISABLED: "施設受信停止",
-  FACILITY_VERIFIED: "施設審査承認", AUDIT_EVENTS_LISTED: "監査一覧閲覧",
+  FACILITY_VERIFIED: "施設審査承認", FACILITY_REJECTED: "施設審査却下",
+  FACILITY_REVIEWS_LISTED: "施設審査一覧閲覧", FACILITY_VERIFICATION_RECORDS_LISTED: "施設検証証跡閲覧", AUDIT_EVENTS_LISTED: "監査一覧閲覧",
   JOB_FAILURES_LISTED: "失敗ジョブ一覧閲覧", AUTH_FAIL: "認証失敗", UNKNOWN: "未分類",
 };
 

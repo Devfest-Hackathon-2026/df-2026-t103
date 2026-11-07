@@ -109,3 +109,11 @@ AI 質問 Q&A（P-013）の見た目を単独で確認できます。Flutter SDK
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5059 -t lib/demo_ai_question_preview.dart
 ```
+
+## 処方箋の取り込みプレビュー
+
+処方箋撮影・選択（P-021）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5061 を開きます。確認後は Ctrl+C で停止します。処方箋に個人情報が含まれる旨を説明し、カメラ・写真・PDF の取り込み方法と対応形式を案内します。このプレビューは image_picker/file_picker・uploads API に接続せず、読み取り（P-022）も未接続です。実際の処方箋は取り込まないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5061 -t lib/demo_prescription_capture_preview.dart
+```

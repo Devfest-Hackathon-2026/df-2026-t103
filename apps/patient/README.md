@@ -77,3 +77,11 @@ OCR 候補の人手確認（P-023）の見た目を単独で確認できます�
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5054 -t lib/demo_ocr_candidate_preview.dart
 ```
+
+## 送信前の確認プレビュー
+
+送信前確認・個別同意（P-032）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5058 を開きます。確認後は Ctrl+C で停止します。送信先・送信する内容・提供目的を明示し、送信するお薬を個別に選べます。要配慮情報の第三者提供についての個別同意を取るまで送信できません。このプレビューは送信 API に接続せず、実際の送信（deliveries API）は未接続です。実在する施設や実際の処方情報は入力しないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5058 -t lib/demo_send_confirm_preview.dart
+```

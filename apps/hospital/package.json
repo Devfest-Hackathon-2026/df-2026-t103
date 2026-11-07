@@ -8,6 +8,7 @@
     "start": "next start --hostname 0.0.0.0",
     "lint": "eslint .",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:security": "node --test tests/security-http.mjs",
     "test:emulator": "node --dns-result-order=ipv4first --import tsx --test tests/*.integration.ts"
   },
   "dependencies": {

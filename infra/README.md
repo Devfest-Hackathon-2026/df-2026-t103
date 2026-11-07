@@ -121,6 +121,11 @@ gcloud artifacts repositories create api \
   --description "moshimoshimonshin API container images"
 ```
 
+## Storage / RTDB（#36）
+
+[単一プロジェクトの設定案生成・適用・検証手順](storage/README.md)。
+保管日数と公開originの確定前はクラウドへ適用しない。
+
 ## 非同期ジョブ基盤（Issue #31）
 
 OCR・医療機関への送信・退会削除・期限/整合性スキャンを支える
@@ -191,4 +196,3 @@ gcloud run services add-iam-policy-binding worker \
 # （datastore.user / cloudtasks.enqueuer / secretmanager.secretAccessor /
 #   バケット単位 storage.objectAdmin）。上記「ランタイム SA」節と同手順。
 ```
-

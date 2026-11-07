@@ -20,9 +20,12 @@ export function createStorageGateway(
 
   return {
     async deleteObject(bucket, objectPath, generation) {
-      const file = storage.bucket(bucket).file(objectPath);
+      // Keep the generation as a string: GCS generations can exceed JS's safe
+      // integer range. A 412 must reach the worker so replacements are retained.
+      const file = storage.bucket(bucket).file(objectPath, generation === undefined
+        ? undefined
+        : { preconditionOpts: { ifGenerationMatch: generation } });
       await file.delete({ ignoreNotFound: true });
-      void generation; // generation一致確認はエミュレータ非対応のため省略（本運用で再検討）
     },
 
     async tombstoneObject(bucket, objectPath) {

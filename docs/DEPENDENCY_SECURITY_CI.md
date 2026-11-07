@@ -87,3 +87,15 @@ PR #158の初回CIでは次を検出した。閾値・ignore設定は変更し�
   [Debian tracker](https://security-tracker.debian.org/tracker/CVE-2026-114820)
 
 ベース/CLI更新だけで検出が解消したとはみなさず、変更後のCIを確認する。
+
+## Firebase Java trust store (2026-11-07)
+
+The emulator copies the digest-pinned Temurin 25.0.5+8 JRE and its bundled
+Mozilla trust store. Debian openjdk-25 was still affected by CVE-2026-114820.
+Temurin has the fix at an earlier version number than the upstream OpenJDK fix;
+version-number comparison across vendors is insufficient. The image build checks
+that both affected root CAs are absent, followed by four-emulator startup and the
+existing CRITICAL scan. No CVE exclusion or ignore-unfixed setting is added.
+
+Vendor evidence: https://adoptium.net/news/2026/10/temurin-october-2026-emudhra/
+The checks do not independently exercise every compromised signed-code chain.

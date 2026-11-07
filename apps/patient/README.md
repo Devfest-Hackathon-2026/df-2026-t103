@@ -125,3 +125,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5060 -t lib/demo_r
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5061 -t lib/demo_prescription_capture_preview.dart
 ```
+
+## 退会フロープレビュー
+
+退会フロー（P-040/P-041）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5062 を開きます。確認後は Ctrl+C で停止します。申請前は影響・30日保留・取消期限を示し、理解チェックと二重確認を経て申請します（本番では再認証が必要）。申請後は通常機能の停止を示し、退会を取り消せます。このプレビューは deletion-request / cancel API に接続しません。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5062 -t lib/demo_withdrawal_preview.dart
+```

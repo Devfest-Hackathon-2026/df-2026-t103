@@ -157,3 +157,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5064 -t lib/demo_p
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5065 -t lib/demo_notifications_preview.dart
 ```
+
+## オフライン・下書きプレビュー
+
+オフライン・下書き保持・中断再開 UX（E2E-002 / NFR-03）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5066 を開きます。確認後は Ctrl+C で停止します。通信のオン/オフを模擬でき、入力は端末内の下書きとして保持され、機内モードから復帰しても失われません。オフライン時の送信は送信待ちに積まれ、接続回復でまとめて送る想定を示します。このプレビューは保存・送信・再送 API に接続しません。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5066 -t lib/demo_offline_draft_preview.dart
+```

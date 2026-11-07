@@ -2,15 +2,18 @@ name: security
 
 # 横断的なCI検証（アプリ個別のci.yaml / patient-ci.yaml / hospital-ci.yaml を補完）。
 # - Secret誤コミット検出（gitleaks）
-# - 依存脆弱性スキャン（npm audit）
+# - 依存脆弱性スキャン（npm audit / Dart OSV）
+# - コンテナ脆弱性スキャン（Trivy）
 # - firebase.json / Firestore・Storage Rules / インデックス定義の検証
-# 参照: Issue #37、docs/06 §10、docs/02 §13.1
+# 参照: Issue #37 / #47、docs/06 §10、docs/02 §13.1
 
 on:
   pull_request:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "23 3 * * 1"
 
 permissions:
   contents: read
@@ -28,6 +31,9 @@ jobs:
         with:
           # gitleaks が履歴走査できるよう全履歴を取得
           fetch-depth: 0
+
+      - name: Reject tracked local environment files
+        run: python3 scripts/check-secret-paths.py
 
       - name: Install gitleaks
         env:
@@ -61,7 +67,7 @@ jobs:
 
       - name: npm ci
         working-directory: ${{ matrix.package }}
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # critical のみでCIを落とす（制御不能な推移的 moderate/high でPRを塞がない）。
       # high 以下は警告として残し、継続監視する。
@@ -73,6 +79,71 @@ jobs:
         if: always()
         working-directory: ${{ matrix.package }}
         run: npm audit --audit-level=high || echo "::warning::high以上の脆弱性が検出されました（${{ matrix.package }}）"
+
+  dart-dependency-audit:
+    name: dependency-audit / Dart OSV
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.0'
+          cache: false
+      - name: Install OSV-Scanner
+        run: go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.7.0
+      # pub get only warns; OSV exits nonzero for any known advisory, including
+      # advisories without severity. Scan the committed resolved versions.
+      - name: Audit Dart lockfile (any advisory fails)
+        run: osv-scanner scan source --lockfile=apps/patient/pubspec.lock
+
+  container-audit:
+    name: container-audit / ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            dockerfile: docker/api/Dockerfile
+            target: prod
+          # The portal is deployed as static files to Firebase Hosting.
+          # Its Docker image is used only for local development.
+          - image: hospital-dev
+            dockerfile: docker/hospital/Dockerfile
+            target: dev
+          - image: firebase-emulator
+            dockerfile: docker/firebase/Dockerfile
+            target: ''
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build scan image (no push)
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          TARGET: ${{ matrix.target }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          args=()
+          if [[ -n "$TARGET" ]]; then args+=(--target "$TARGET"); fi
+          docker build --file "$DOCKERFILE" "${args[@]}" --tag "local/$IMAGE:scan" .
+      - name: Smoke test Firebase emulators
+        if: matrix.image == 'firebase-emulator'
+        # Isolated demo ID: no real Firebase project or credentials are used.
+        run: >-
+          docker run --rm --entrypoint firebase local/firebase-emulator:scan
+          emulators:exec --project demo-mmr --only auth,firestore,database,storage
+          "echo emulator smoke passed"
+      - name: Scan OS and application packages (critical fails)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          image-ref: local/${{ matrix.image }}:scan
+          scanners: vuln
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: false
+          format: table
 
   firebase-config:
     name: firebase-config / rules + json validation

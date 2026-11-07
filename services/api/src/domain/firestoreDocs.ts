@@ -392,6 +392,8 @@ export interface DeliveryDoc {
     includePrescriptionImages: boolean;
   };
   patientIdentitySnapshot: Record<string, unknown>;
+  /** 一覧表示・前方一致検索用の患者表示名（同意時のみ。非同意は null）。 */
+  patientDisplayName?: string | null;
   questionnaireSnapshot: Record<string, unknown>;
   snapshotSha256: string;
   status: DeliveryStatus;

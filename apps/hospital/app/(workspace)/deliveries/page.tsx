@@ -1,6 +1,6 @@
 import { DeliveriesClient } from "./deliveries-client";
 
-/** H-003 受信問診一覧（本PRではコンテキスト導線のみ。一覧本体は #84 で実装）。 */
+/** H-003 受信問診一覧。自院スコープの配送一覧を検索・絞り込み・ページングして表示する。 */
 export default function DeliveriesPage() {
   return <DeliveriesClient />;
 }

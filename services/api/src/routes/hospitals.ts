@@ -29,7 +29,6 @@ const HOSPITAL_ROLES = [
 
 const timestampOrNull = z
   .union([z.string(), z.null()])
-  .optional()
   .describe("ISO8601 UTC or null");
 
 const deliveryListItemSchema = z.object({
@@ -38,6 +37,7 @@ const deliveryListItemSchema = z.object({
   questionnaireId: z.string(),
   questionnaireRevisionId: z.string(),
   status: z.enum(["created", "delivered", "acknowledged", "failed", "revoked"]),
+  patientDisplayName: z.string().nullable(),
   createdAt: timestampOrNull,
   deliveredAt: timestampOrNull,
   acknowledgedAt: timestampOrNull,
@@ -103,6 +103,11 @@ export function registerHospitalRoutes(app: FastifyInstance, deps: Deps): void {
           // deliveryId は dlv_<base36><base64url> 形式のみ許可し doc パスを安全にする
           cursor: z.string().regex(/^[A-Za-z0-9_-]+$/).max(200).optional(),
           limit: z.coerce.number().int().min(1).max(50).optional(),
+          status: z
+            .enum(["created", "delivered", "acknowledged", "failed", "revoked"])
+            .optional(),
+          // 患者表示名の前方一致。自院スコープ内でのみ有効（検索制限 FR-H09）
+          q: z.string().trim().min(1).max(100).optional(),
         }),
         response: {
           200: deliveryListResponseSchema,
@@ -123,6 +128,8 @@ export function registerHospitalRoutes(app: FastifyInstance, deps: Deps): void {
         {
           ...(req.query.cursor !== undefined && { cursor: req.query.cursor }),
           ...(req.query.limit !== undefined && { limit: req.query.limit }),
+          ...(req.query.status !== undefined && { status: req.query.status }),
+          ...(req.query.q !== undefined && { q: req.query.q }),
         },
       );
       return {
@@ -132,6 +139,7 @@ export function registerHospitalRoutes(app: FastifyInstance, deps: Deps): void {
           questionnaireId: item.questionnaireId,
           questionnaireRevisionId: item.questionnaireRevisionId,
           status: item.status,
+          patientDisplayName: item.patientDisplayName,
           createdAt: toIso(item.createdAt),
           deliveredAt: toIso(item.deliveredAt),
           acknowledgedAt: toIso(item.acknowledgedAt),

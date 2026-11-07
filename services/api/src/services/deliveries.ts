@@ -123,6 +123,37 @@ export async function createDelivery(
       }
       const snapshotSha256 = sha256Hex(canonicalJson(snapshot));
 
+      // 患者表示情報: 同意された範囲の identity のみ Firestore から取得してスナップショット化。
+      // リクエスト本文の氏名は信頼しない（04 §5.10: 明示的に送信した氏名/連絡先等だけ）。
+      let identity: Record<string, unknown> = {};
+      let patientDisplayName: string | null = null;
+      if (body.shareScope.includeProfile) {
+        const profileSnap = await tx.get(deps.db.doc(`patientProfiles/${senderUid}`));
+        const profile = profileSnap.data() as
+          | {
+              familyName?: string;
+              givenName?: string;
+              familyNameKana?: string;
+              givenNameKana?: string;
+              birthDate?: string;
+              phoneNumber?: string;
+            }
+          | undefined;
+        if (profile) {
+          identity = {
+            ...(profile.familyName ? { familyName: profile.familyName } : {}),
+            ...(profile.givenName ? { givenName: profile.givenName } : {}),
+            ...(profile.familyNameKana ? { familyNameKana: profile.familyNameKana } : {}),
+            ...(profile.givenNameKana ? { givenNameKana: profile.givenNameKana } : {}),
+            ...(profile.birthDate ? { birthDate: profile.birthDate } : {}),
+            ...(profile.phoneNumber ? { phoneNumber: profile.phoneNumber } : {}),
+          };
+          patientDisplayName = [profile.familyName, profile.givenName]
+            .filter((v): v is string => typeof v === "string" && v.length > 0)
+            .join(" ") || null;
+        }
+      }
+
       // 5. Delivery ドキュメントの作成
       const deliveryId = randomId("dlv");
       const keyHash = idempotencyKeyHash(
@@ -139,7 +170,8 @@ export async function createDelivery(
         questionnaireRevisionId: String(body.questionnaireRevision),
         consentId: body.consentDocumentVersion,
         shareScope: body.shareScope,
-        patientIdentitySnapshot: {},
+        patientIdentitySnapshot: identity,
+        patientDisplayName,
         questionnaireSnapshot: snapshot,
         snapshotSha256,
         // 施設側コピーは同期的に作成されるため作成=配送済み（created→delivered はtx内で完結）

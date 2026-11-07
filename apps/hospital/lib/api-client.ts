@@ -1,3 +1,4 @@
+import { parseReviewFacilities, parseVerificationSummaries, type ReviewChecks } from "./facility-review";
 export type JobType = "ocr" | "deletion";
 export type JobFailure = { type: JobType; jobId: string; failureCode: string | null; attempts: number; failedAt: string | null };
 export type JobFailurePage = { items: JobFailure[]; nextCursor: string | null };
@@ -7,6 +8,7 @@ const errorMessages: Record<number, string> = {
   401: "認証またはクライアントの検証に失敗しました。再ログインしてください。",
   403: "運営管理者の権限がありません。",
   404: "対象が見つかりません。施設IDを確認してください。",
+  409: "審査状態が変わっている可能性があります。一覧を再取得して確認してください。",
   429: "操作が多すぎます。時間をおいて再試行してください。",
 };
 
@@ -67,6 +69,36 @@ export function createApiClient(config: {
     return { Authorization: `Bearer ${token}`, ...(appCheck ? { "X-Firebase-AppCheck": appCheck } : {}) };
   }
   return {
+    async reviewFacilities(cursor?: string, signal?: AbortSignal) {
+      const headers = await authHeaders();
+      const query = new URLSearchParams({ limit: "20", ...(cursor ? { cursor } : {}) });
+      const response = await fetch(`${config.apiBaseUrl}/operator/facilities?${query}`, { method: "GET", cache: "no-store", credentials: "omit", redirect: "error", signal, headers });
+      if (!response.ok) throw new ApiError(response.status);
+      return parseReviewFacilities(await response.json());
+    },
+    async verificationRecords(facilityId: string, cursor?: string, signal?: AbortSignal) {
+      if (!/^[A-Za-z0-9_-]{1,200}$/.test(facilityId)) throw new Error("施設IDを確認してください。");
+      const headers = await authHeaders();
+      const query = new URLSearchParams({ limit: "20", ...(cursor ? { cursor } : {}) });
+      const response = await fetch(`${config.apiBaseUrl}/operator/facilities/${encodeURIComponent(facilityId)}/verification-records?${query}`, { method: "GET", cache: "no-store", credentials: "omit", redirect: "error", signal, headers });
+      if (!response.ok) throw new ApiError(response.status);
+      return parseVerificationSummaries(await response.json());
+    },
+    async reviewFacility(facilityId: string, decision: "verified" | "rejected", input: { checks: ReviewChecks; verificationRecordId: string; reason?: string }, signal?: AbortSignal): Promise<void> {
+      if (!/^[A-Za-z0-9_-]{1,200}$/.test(facilityId) || !input.verificationRecordId.trim() || input.verificationRecordId.length > 200 || Object.values(input.checks).some((value) => typeof value !== "boolean") || (decision === "verified" && !Object.values(input.checks).every(Boolean)) || (decision === "rejected" && (!input.reason?.trim() || input.reason.length > 500))) throw new Error("検証項目・文書参照・却下理由を確認してください。");
+      const headers = await authHeaders();
+      const response = await fetch(`${config.apiBaseUrl}/operator/facilities/${encodeURIComponent(facilityId)}/${decision === "verified" ? "verify" : "reject"}`, {
+        method: "POST", cache: "no-store", credentials: "omit", redirect: "error", signal,
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ checks: input.checks, verificationRecordId: input.verificationRecordId.trim(), ...(decision === "rejected" ? { reason: input.reason!.trim() } : {}) }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new ApiError(response.status, response.status === 403 && body?.error?.code === "REAUTH_REQUIRED");
+      }
+      const body: unknown = await response.json();
+      if (!body || typeof body !== "object" || !("facilityId" in body) || body.facilityId !== facilityId || !("verificationStatus" in body) || body.verificationStatus !== decision) throw new Error("審査結果を確認できませんでした。");
+    },
     async auditEvents(cursor?: string, signal?: AbortSignal): Promise<AuditSummaryPage> {
       const headers = await authHeaders();
       const query = new URLSearchParams({ limit: "20" });

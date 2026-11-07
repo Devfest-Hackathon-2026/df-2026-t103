@@ -13,6 +13,7 @@ import {
   listOperatorAuditEvents,
   verifyFacility,
 } from "../services/operator.js";
+import { registerOperatorReviewRoutes } from "./operatorReviews.js";
 import { errors } from "./apiDocs.js";
 
 const facilityParams = z.object({
@@ -60,6 +61,7 @@ export function registerOperatorRoutes(
   app: FastifyInstance,
   deps: Deps,
 ): void {
+  registerOperatorReviewRoutes(app, deps);
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
   typed.get(
@@ -106,6 +108,7 @@ export function registerOperatorRoutes(
     "/v1/operator/facilities/:facilityId/verify",
     {
       config: { access: { tier: "authenticated" } },
+      onRequest: async (_req, reply) => { void reply.header("Cache-Control", "private, no-store"); },
       schema: {
         params: facilityParams,
         body: verifyBody,

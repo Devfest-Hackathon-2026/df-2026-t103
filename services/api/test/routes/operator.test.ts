@@ -159,8 +159,10 @@ describe("POST /v1/operator/facilities/:facilityId/verify", () => {
     expect(events[0]!.actorType).toBe("platform");
     expect(events[0]!.details).toEqual({
       from: "pending",
-      recordId: "medical-license-123",
+      recordRefHash: expect.any(String),
     });
+    expect(JSON.stringify(events)).not.toContain("medical-license-123");
+    expect(JSON.stringify(events)).not.toContain("登記簿謄本で確認");
     // 監査に生の施設ID/運営UIDを含めない
     expect(events[0]!.actorUidHash).not.toBe(OP);
     expect(events[0]!.resourceIdHash).not.toBe(FAC);

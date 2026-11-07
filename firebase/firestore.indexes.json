@@ -1,5 +1,6 @@
 {
   "indexes": [
+    {"collectionGroup":"facilityVerificationRecords","queryScope":"COLLECTION","fields":[{"fieldPath":"facilityId","order":"ASCENDING"},{"fieldPath":"createdAt","order":"DESCENDING"}]},
     {"collectionGroup":"uploads","queryScope":"COLLECTION","fields":[{"fieldPath":"patientUid","order":"ASCENDING"},{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"expiresAt","order":"ASCENDING"}]},
     {"collectionGroup":"uploads","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"expiresAt","order":"ASCENDING"}]},
     {"collectionGroup":"ocrJobs","queryScope":"COLLECTION","fields":[{"fieldPath":"uploadId","order":"ASCENDING"},{"fieldPath":"createdAt","order":"DESCENDING"}]},

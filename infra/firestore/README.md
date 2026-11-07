@@ -60,16 +60,27 @@ firebase deploy --only firestore:rules,firestore:indexes \
 
 ## バックアップ / 輸出方針（docs/04 §5.11 注記・§11）
 
-`infra/firestore/backup-export.sh` が冪等に設定する。
+通常の設定管理は `infra/terraform/firestore.tf` のPITR・日次7日保持が正本です。
+マネージドバックアップを利用し、GCS export用バケットは自動作成しません。
+旧スクリプトが作成したバケットは、この変更では削除・保持変更しません。
 
-1. **PITR（Point-in-Time Recovery）**: 直近 7 日の任意時点へ復元可能にする。
-2. **マネージドバックアップスケジュール**: 日次・保持 7 日（+ 週次・保持 14 週を任意）。
-3. **GCS エクスポート（任意）**: 長期保管・可搬性が必要な場合に
-   `gcloud firestore export gs://PROJECT_ID-firestore-backups` を Cloud Scheduler で定期実行。
+```sh
+PROJECT_ID=project-7efcc4c4-6c86-490c-ba5 bash infra/firestore/backup-export.sh --check
+```
 
-> **PHI 注意（§5.11）**: バックアップ内 PHI は退会削除直後に物理消滅しない。
-> バックアップ TTL（保持期間）・復元時の tombstone 再適用・独立保管を明示し、
-> 退会削除の完了条件と整合させる。
+省略時も `--check`。DBメタデータとスケジュールのみを読み、PITR・日次7日保持が
+揃っていればexit 0、不足は1、想定外構成は2、gcloud失敗はその終了コードです。
+週次だけでは日次ありと判定しません。取得失敗・不正JSON・異なる保持期間は更新せず停止します。
+対象は指定単一projectの東京 `(default)` に限定します。Python 3とgcloudが必要です。
+
+障害対応でTerraform以外から設定を補う場合だけ、費用とTerraform stateの所有関係を
+確認して `--apply` を明示します。PITR有効化と不足する日次7日スケジュールの作成に限定し、
+最後に独立した再読取で検証します。既存の保持期間・週次設定・バケットは変更しません。
+部分的な成功後に失敗した場合は状態を再確認して再実行します。PITRの自動無効化や
+バックアップ削除で巻き戻しません。手動作成したscheduleは正本stateへimport・照合し、
+Terraformで重複作成しないでください。
+
+復旧手順、Storage/RTDB方針、削除競合と演習の受入は [DR手順](DR_RUNBOOK.md) を参照。
 
 ## 課金への影響（docs/04 §11 / [S08]）
 

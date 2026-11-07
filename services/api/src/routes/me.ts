@@ -24,6 +24,7 @@ import {
   unregisterDevice,
 } from "../services/devices.js";
 import { latestGrantedByType, listConsents } from "../repos/accounts.js";
+import { getActiveMemberships, getFacilityById } from "../repos/facilities.js";
 import { z } from "zod";
 import {
   consentsResponseSchema,
@@ -63,6 +64,68 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
       },
     },
     async (req) => getMe(deps, req),
+  );
+
+  /**
+   * 職員の所属施設一覧（H-002 施設選択・ポータルセッション検証用）。
+   * facilityMemberships 正本から active 所属のみ返す。施設ロール以外の所属
+   * （platform_security_admin 等）は対象外。
+   */
+  typed.get(
+    "/v1/me/facility-memberships",
+    {
+      config: { access: { tier: "authenticated" } },
+      schema: {
+        response: {
+          200: z.object({
+            items: z.array(
+              z.object({
+                membershipId: z.string(),
+                facilityId: z.string(),
+                role: z.enum(["facility_staff", "facility_clinician", "facility_admin"]),
+                facility: z
+                  .object({
+                    displayName: z.string(),
+                    addressFormatted: z.string().nullable(),
+                    verificationStatus: z.enum(["pending", "verified", "rejected", "suspended"]),
+                    receivingEnabled: z.boolean(),
+                  })
+                  .nullable(),
+              }),
+            ),
+          }),
+          ...errors(401),
+        },
+        tags: ["me"],
+        summary: "自分の施設所属一覧（職員向け）",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (req) => {
+      const facilityRoles = new Set(["facility_staff", "facility_clinician", "facility_admin"]);
+      const memberships = (await getActiveMemberships(deps.db, uidOf(req))).filter((m) =>
+        facilityRoles.has(m.role),
+      );
+      const items = await Promise.all(
+        memberships.map(async (m) => {
+          const facility = await getFacilityById(deps.db, m.facilityId);
+          return {
+            membershipId: m.id,
+            facilityId: m.facilityId,
+            role: m.role as "facility_staff" | "facility_clinician" | "facility_admin",
+            facility: facility
+              ? {
+                  displayName: facility.displayName,
+                  addressFormatted: facility.address?.formatted ?? null,
+                  verificationStatus: facility.verificationStatus,
+                  receivingEnabled: facility.receivingEnabled,
+                }
+              : null,
+          };
+        }),
+      );
+      return { items };
+    },
   );
 
   // API-003

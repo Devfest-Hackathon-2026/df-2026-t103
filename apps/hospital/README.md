@@ -1,6 +1,8 @@
 # 医療機関ポータル
 
-`/operator` はFirebase Authでログインし、実装済みBEの `GET /v1/operator/job-failures` を呼び出す運営管理者向け画面です。画像処理/削除処理の失敗一覧とカーソルページングを利用できます。`GET /v1/operator/audit-events` から権限変更等の監査サマリーも新しい順に取得します。イベント種別・操作者区分・UTC日時・認可判断・結果だけを表示し、患者/職員/施設の識別子・ハッシュ・自由記述は表示しません。実API `POST /v1/operator/facilities/{facilityId}/disable` で施設受信の緊急停止も行えます。対象IDと理由の確認後に明示的に実行し、サーバで直近の認証と運営権限を検証します。再認証を求められたらログアウトして再ログインしてください。通信失敗時は処理済みの可能性を表示し、自動再試行しません。固定データ・モックAPIへの自動切替はありません。職員の問診受信・閲覧等は別途実装中です。
+`/operator` はFirebase Authでログインし、実装済みBEの `GET /v1/operator/job-failures` を呼び出す運営管理者向け画面です。画像処理/削除処理の失敗一覧とカーソルページングを利用できます。`GET /v1/operator/audit-events` から権限変更等の監査サマリーも新しい順に取得します。イベント種別・操作者区分・UTC日時・認可判断・結果だけを表示し、患者/職員/施設の識別子・ハッシュ・自由記述は表示しません。実API `POST /v1/operator/facilities/{facilityId}/disable` で施設受信の緊急停止も行えます。対象IDと理由の確認後に明示的に実行し、サーバで直近の認証と運営権限を検証します。再認証を求められたらログアウトして再ログインしてください。通信失敗時は処理済みの可能性を表示し、自動再試行しません。固定データ・モックAPIへの自動切替はありません。
+
+職員向けは `/login`（H-001）でメール/パスワード＋TOTP多要素認証を行い、成功時に HttpOnly Cookie のセッションを確立します。`/facilities` では自院の所属・役割・施設の検証状態を確認できます。問診受信（H-003）・問診詳細（H-004）・職員管理（H-005）・施設設定（H-006）は実装中です。
 
 Node.js 22 以降で `npm ci`、`npm run dev` を実行し、http://localhost:3000 を開きます。`npm run lint`、`npm test`、`npm run build` で検証できます。Docker Compose では既存の hospital サービスを使用します。
 
@@ -13,6 +15,13 @@ Node.js 22 以降で `npm ci`、`npm run dev` を実行し、http://localhost:30
 - 未認証ページの共通ヘッダーは `components/layout/portal-header.tsx`、認証後のシェルは `HxAppShell` を使い、画面ごとにヘッダーを自前実装しません。
 - 開発時のみ `http://localhost:3000/dev/catalog` で各コンポーネントの状態を確認できます（本番ビルドでは404）。
 - 状態バッジのラベルは `components/design-system/hx-status-badge.ts(x)` の `DELIVERY_STATUS` を唯一の対応表とし、色だけで状態を伝えません。
+
+## 職員認証・セッション（H-001）
+
+- `/login` で Firebase Auth（メール/パスワード）にサインインし、MFA 未登録なら TOTP 登録、登録済みなら TOTP 検証を経て、`POST /api/session` が実 API で credential を検証し（本番ではMFAクレームも確認）、HttpOnly Cookie（本番 `__Host-mmr-session`、SameSite=Strict、最長55分）を発行します。失敗してもアカウントの存在有無を示さない応答にします。
+- 業務画面は `app/(workspace)/layout.tsx` がセッション Cookie と `GET /v1/me/facility-memberships` で検証します。401/403 なら `GET /api/session/logout` で Cookie を消して `/login` へ、5xx・接続失敗ではセッションを維持したまま再試行可能なエラー画面を出します。`proxy.ts` は Cookie の有無だけの楽観的リダイレクトで、認可の正本は API 側です。
+- クライアントの API 呼び出しは `lib/hx-api.ts` 経由で `/api/hx/*` のみを使い、サーバ側が Bearer + App Check を付けて転送します。`/api/session` と `/api/hx/*` は必須カスタムヘッダー `x-hx-client: portal`・`Sec-Fetch-Site`/`Origin` の同一オリジン確認で CSRF を防ぎます。
+- セッション維持は `workspace-shell.tsx` の `SessionKeeper` が Firebase の ID トークン変更・定期更新・タブ復帰を監視して行います。サインアウト・失効・再読み込み後の未認証では `GET /api/session/logout` 経由で Cookie を削除して `/login` に戻ります（Firebase はインメモリ永続化のため再読み込みは再ログイン）。
 
 `lib/firebase-demo.ts` は将来のデモ向けの明示的な初期化関数です。`NEXT_PUBLIC_FIREBASE_PROJECT_ID=demo-mmr-dev`、`NEXT_PUBLIC_USE_FIREBASE_EMULATOR=true` と Compose が指定する localhost の Auth / Firestore / Storage エミュレータのアドレスがすべて必要で、異なる設定は拒否します。この旧ヘルパーは既存のSDK結合試験用です。業務画面は `lib/firebase-client.ts` のAuth＋APIクライアントを利用し、Firestoreから業務データを直接取得しません。
 
@@ -88,10 +97,14 @@ APIの `API_CORS_ORIGINS` にはブラウザで開くポータルの正確なori
 Next.js ProxyのCSPは同じ接続設定から許可先を生成します。配信先で固定のself限定CSPを重ねないでください。
 
 画面はメール/パスワードと登録済みTOTPの追加認証に対応します。TOTP以外のMFAは未対応です。
-トークンはメモリ内のみで、CookieやlocalStorageへ保存しません。リロードすると再ログインが必要です。
-本番でMFA済みtokenがなければAPI呼び出しを止めますが、これはUX上の追加チェックであり、
-サーバ側のMFA強制・運営権限の認可を代替しません。権限はBEがfacilityMemberships正本で判定します。
-MFA登録・職員向けCookie認証・他の運営機能は完成扱いにしません。
+職員画面は HttpOnly Cookie セッション＋`/api/hx/*` BFF 経由で API を呼び、ID トークンを
+ブラウザ JS・localStorage に置きません（ADR-0020）。運営画面の既存経路はトークンをメモリ内に
+保持する方式のままです。Firebase Auth はインメモリ永続化のため、ブラウザの再読み込みでは
+Firebase 側の認証状態が消え、Cookie も消去して再ログインになります。
+本番では `/api/session` 側でもMFA済みトークンのクレームを確認し、未MFAの Cookie 発行を
+拒否します（サーバ側のMFA強制・運営権限の認可は引き続きBEが担います）。
+権限はBEがfacilityMemberships正本で判定します。
+MFA登録は初回ログイン時の画面で行います。他の運営機能は完成扱いにしません。
 APIエラー本文やtokenはログへ出さず、レスポンスはAPI-038の公開フィールドだけを画面へ渡します。
 
 ### モックを使わないAPI結合試験

@@ -27,7 +27,15 @@ function initialize() {
     },
     appCheckToken: async () => appCheck ? (await getToken(appCheck)).token : null,
   });
-  return { auth, api };
+  return {
+    auth,
+    api,
+    /** セッション確立・更新用の生トークン取得。API 呼び出しには api を使う。 */
+    sessionTokens: async () => ({
+      idToken: auth.currentUser ? await auth.currentUser.getIdToken() : null,
+      appCheckToken: appCheck ? (await getToken(appCheck)).token : null,
+    }),
+  };
 }
 
 export function firebaseClient() {

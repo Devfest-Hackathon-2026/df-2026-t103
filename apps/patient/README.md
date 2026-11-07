@@ -77,3 +77,11 @@ OCR 候補の人手確認（P-023）の見た目を単独で確認できます�
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5054 -t lib/demo_ocr_candidate_preview.dart
 ```
+
+## 病院詳細プレビュー
+
+病院詳細（P-031）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5057 を開きます。確認後は Ctrl+C で停止します。名称・所在地・参加状況・送信可否を表示し、送信できるのは参加施設のみ（非参加施設は「場所の案内のみ（送信不可）」）です。地図サービス由来の情報には帰属表示を添えます。このプレビューは送信 API に接続せず、送信（P-032）も未接続です。実在する施設の情報は入力しないでください。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5057 -t lib/demo_hospital_detail_preview.dart
+```

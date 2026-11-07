@@ -53,6 +53,10 @@ resource "google_cloud_run_v2_service" "api" {
         value = local.storage_bucket
       }
       env {
+        name  = "UPLOAD_DOC_TTL_DAYS"
+        value = "30"
+      }
+      env {
         name  = "APP_CHECK_MODE"
         value = "enforce"
       }
@@ -154,6 +158,10 @@ resource "google_cloud_run_v2_service" "worker" {
       env {
         name  = "FIREBASE_STORAGE_BUCKET"
         value = local.storage_bucket
+      }
+      env {
+        name  = "UPLOAD_DOC_TTL_DAYS"
+        value = "30"
       }
       env {
         name  = "OCR_TASKS_LOCATION"

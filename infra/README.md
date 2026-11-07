@@ -126,6 +126,11 @@ gcloud artifacts repositories create api \
 [役割別グループ、アプリ内roleとの対応、単一projectの監査分離、権限レビュー手順](iam/README.md)。
 適用前の設計案であり、実グループ・メンバー・監査保持期間は別途確定する。
 
+## Storage / RTDB（#36）
+
+[単一プロジェクトの設定案生成・適用・検証手順](storage/README.md)。
+保管日数と公開originの確定前はクラウドへ適用しない。
+
 ## 非同期ジョブ基盤（Issue #31）
 
 OCR・医療機関への送信・退会削除・期限/整合性スキャンを支える

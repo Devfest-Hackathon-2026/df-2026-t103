@@ -12,6 +12,8 @@ export class HxApiError extends Error {
 
 function messageFor(status: number): string {
   switch (status) {
+    case 400:
+      return "入力内容を確認してください。";
     case 401:
       return "認証の有効期限が切れました。再度ログインしてください。";
     case 403:

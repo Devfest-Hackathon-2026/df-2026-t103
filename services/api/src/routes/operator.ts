@@ -9,6 +9,7 @@ import {
 } from "../auth/gates.js";
 import {
   disableFacilityReceiving,
+  enableFacilityReceiving,
   listJobFailures,
   listOperatorAuditEvents,
   verifyFacility,
@@ -38,7 +39,7 @@ const verifyBody = z.object({
 });
 
 const disableBody = z.object({
-  reason: z.string().min(1).max(500),
+  reason: z.string().trim().min(1).max(500),
 });
 
 const jobFailuresQuery = z.object({
@@ -166,6 +167,37 @@ export function registerOperatorRoutes(
         facilityId: req.params.facilityId,
         operatorUid: req.requestContext.auth!.uid,
         reason: req.body.reason,
+        requestId: req.id,
+      });
+    },
+  );
+
+  // API-050 施設受付の再開（platform_security_admin + 再認証）
+  // 施設側では解除できない運営停止（H-006）を戻す唯一の導線
+  typed.post(
+    "/v1/operator/facilities/:facilityId/enable",
+    {
+      config: { access: { tier: "authenticated" } },
+      schema: {
+        params: facilityParams,
+        response: {
+          200: z.object({
+            facilityId: z.string(),
+            receivingEnabled: z.literal(true),
+          }),
+          ...errors(400, 401, 403, 404, 429),
+        },
+        tags: ["operator"],
+        summary: "施設受付の再開（運営）",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (req) => {
+      await requirePlatformSecurityAdmin(deps, req);
+      requireFreshAuth(deps, req);
+      return enableFacilityReceiving(deps, {
+        facilityId: req.params.facilityId,
+        operatorUid: req.requestContext.auth!.uid,
         requestId: req.id,
       });
     },

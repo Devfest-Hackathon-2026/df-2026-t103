@@ -100,6 +100,59 @@ export async function hospitalTenantSmoke({ firebase, apiBaseUrl, facilityId, ot
       assert.equal((await request(manager, `${facilityId}/memberships/${manager.membership.id}`, "PATCH", body)).status, 403);
     }
     assert.deepEqual((await manager.membership.get()).data(), managerBefore);
+    // H-006 facility settings go through the real routes too.
+    const facilityDoc = firebase.firestore.doc(`facilities/${facilityId}`);
+    const facilityBefore = (await facilityDoc.get()).data();
+    const facilityHash = hmacSha256Hex(hmacSecret, `audit-res:${facilityId}`);
+    const auditsAt = () => firebase.firestore.collection("auditEvents").where("resourceIdHash", "==", facilityHash).get();
+    const auditBaseline = (await auditsAt()).size;
+    assert.equal(facilityBefore?.receivingEnabled, false, "The parent scenario leaves this facility operator-stopped");
+    assert.equal(facilityBefore?.receivingDisabledBy, "platform");
+    assert.equal((await request(own, `${facilityId}/settings`)).status, 403);
+    assert.equal((await request(other, `${facilityId}/settings`)).status, 403);
+    assert.equal((await request(own, `${facilityId}/settings`, "PATCH", { receivingEnabled: true })).status, 403);
+    const settingsRes = await request(manager, `${facilityId}/settings`);
+    assert.equal(settingsRes.status, 200);
+    const settings = await settingsRes.json() as {
+      facilityId: string; legalName: string; displayName: string; formattedAddress: string;
+      verificationStatus: string; receivingEnabled: boolean;
+      receivingDisabledBy: string | null; receivingDisabledAt: string | null; receivingDisabledReason: string | null;
+    };
+    assert.equal(settings.facilityId, facilityId);
+    assert.equal(settings.legalName, facilityBefore.legalName);
+    assert.equal(settings.displayName, facilityBefore.displayName);
+    assert.equal(settings.receivingEnabled, false);
+    assert.equal(settings.receivingDisabledBy, "platform");
+    // The operator's disable reason is a private ops record and must not reach the facility.
+    assert.equal(settings.receivingDisabledReason, null);
+    // A platform stop cannot be resumed or overwritten by the facility side.
+    assert.equal((await request(manager, `${facilityId}/settings`, "PATCH", { receivingEnabled: true })).status, 409);
+    assert.equal((await request(manager, `${facilityId}/settings`, "PATCH", { receivingEnabled: false, reason: "x" })).status, 200, "No-transition PATCH is an idempotent success");
+    assert.equal((await auditsAt()).size, auditBaseline, "No-transition PATCH must not audit or overwrite the ops record");
+    assert.deepEqual((await facilityDoc.get()).data(), facilityBefore);
+    // Exercise the staff stop/resume on an enabled fixture state, then restore the parent fixture.
+    await facilityDoc.update({ receivingEnabled: true, receivingDisabledAt: null, receivingDisabledReason: null, receivingDisabledBy: null });
+    assert.equal((await request(manager, `${facilityId}/settings`, "PATCH", { receivingEnabled: false })).status, 400, "Reason is required to stop receiving");
+    assert.equal((await request(manager, `${facilityId}/settings`, "PATCH", { receivingEnabled: false, reason: "   " })).status, 400);
+    const stop = await request(manager, `${facilityId}/settings`, "PATCH", { receivingEnabled: false, reason: "年末年始休診" });
+    assert.equal(stop.status, 200);
+    const stopped = (await facilityDoc.get()).data();
+    assert.equal(stopped?.receivingEnabled, false);
+    assert.equal(stopped?.receivingDisabledBy, "staff");
+    assert.equal(stopped?.receivingDisabledReason, "年末年始休診");
+    const stoppedSettings = await request(manager, `${facilityId}/settings`);
+    assert.equal((await stoppedSettings.json() as typeof settings).receivingDisabledReason, "年末年始休診");
+    const resume = await request(manager, `${facilityId}/settings`, "PATCH", { receivingEnabled: true });
+    assert.equal(resume.status, 200);
+    const resumed = (await facilityDoc.get()).data();
+    assert.equal(resumed?.receivingEnabled, true);
+    assert.equal(resumed?.receivingDisabledBy, null);
+    assert.equal(resumed?.receivingDisabledAt, null);
+    // Restore the parent-owned disabled fixture byte-identically for later idempotency assertions.
+    await facilityDoc.set(facilityBefore!);
+    const staffReceiving = (await auditsAt()).docs.map((doc) => doc.data()).filter((event) => event.actorType === "staff");
+    assert.equal(staffReceiving.filter((event) => event.action === "FACILITY_RECEIVING_DISABLED").length, 1);
+    assert.equal(staffReceiving.filter((event) => event.action === "FACILITY_RECEIVING_ENABLED").length, 1);
     const invite = await request(manager, `${facilityId}/staff-invitations`, "POST", inviteBody);
     assert.equal(invite.status, 201);
     const invited = await invite.json() as { invitationId: string; status: string };
@@ -141,7 +194,7 @@ export async function hospitalTenantSmoke({ firebase, apiBaseUrl, facilityId, ot
     assert.equal(events.filter((event) => event.action === "DELIVERY_VIEWED" && event.decision === "allow").length, 1);
   } finally {
     const invitations = await firebase.firestore.collection("facilityInvitations").where("facilityId", "==", facilityId).get();
-    const hashes = [resourceHash, hmacSha256Hex(hmacSecret, `audit-res:${facilityId}-missing`),
+    const hashes = [resourceHash, hmacSha256Hex(hmacSecret, `audit-res:${facilityId}`), hmacSha256Hex(hmacSecret, `audit-res:${facilityId}-missing`),
       ...staff.map((user) => hmacSha256Hex(hmacSecret, `audit-res:${user.membership.id}`)),
       ...invitations.docs.map((doc) => hmacSha256Hex(hmacSecret, `audit-res:${doc.id}`))];
     for (const hash of hashes) {

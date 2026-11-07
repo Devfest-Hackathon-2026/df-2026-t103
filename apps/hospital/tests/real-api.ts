@@ -153,7 +153,11 @@ test("hospital client uses real Auth + Firestore + Fastify routes (no API stub)"
     await api.disableFacility(uid, "Synthetic repeat");
     assert.deepEqual((await facility.get()).data(), stopped, "Repeated stop must be idempotent");
     await assert.rejects(api.disableFacility(`${uid}-missing`, "Synthetic emergency drill"), { status: 404 });
-    await facility.update({ receivingEnabled: true });
+    // Resume through the real API-050 route (platform-side recovery path for H-006).
+    await api.enableFacility(uid);
+    const reenabled = (await facility.get()).data();
+    assert.equal(reenabled?.receivingEnabled, true);
+    assert.equal(reenabled?.receivingDisabledBy, null);
     await membership.update({ status: "revoked" });
     await assert.rejects(api.jobFailures("ocr"), { status: 403 });
     await assert.rejects(api.disableFacility(uid, "Synthetic emergency drill"), { status: 403 });

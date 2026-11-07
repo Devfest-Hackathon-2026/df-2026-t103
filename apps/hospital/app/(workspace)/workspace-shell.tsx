@@ -93,6 +93,12 @@ export function WorkspaceShell({
             icon: "users" as const,
             active: pathname === "/staff",
           },
+          {
+            href: "/settings",
+            label: "施設設定",
+            icon: "settings" as const,
+            active: pathname === "/settings",
+          },
         ]
       : []),
   ];

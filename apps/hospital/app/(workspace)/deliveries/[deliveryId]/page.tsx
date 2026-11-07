@@ -1,10 +1,8 @@
-import Link from "next/link";
-import { HxEmptyState } from "../../../../components/design-system/hx-feedback";
-import { HxPageHeader } from "../../../../components/design-system/hx-page-header";
+import { DeliveryDetailClient } from "./delivery-detail-client";
 
 /**
- * H-004 問診詳細の受け皿。一覧からの遷移先が404にならないよう
- * プレースホルダのみ用意し、確定票・薬剤・受領確認の実装は #85 で行う。
+ * H-004 問診詳細（確定票・患者情報・薬剤・既往歴・受領確認）。
+ * 閲覧ごとに API 側で DELIVERY_VIEWED 監査が記録される。
  */
 export default async function DeliveryDetailPage({
   params,
@@ -12,20 +10,6 @@ export default async function DeliveryDetailPage({
   params: Promise<{ deliveryId: string }>;
 }) {
   const { deliveryId } = await params;
-  return (
-    <div className="space-y-4">
-      <HxPageHeader title="問診詳細" />
-      <HxEmptyState
-        icon="file-text"
-        title="問診詳細は現在実装中です"
-        description={`対象の問診（${deliveryId}）の確定票・薬剤情報・受領確認は後続リリースで提供されます。`}
-      />
-      <Link
-        href="/deliveries"
-        className="inline-flex h-9 items-center rounded-sm border border-hx-border bg-hx-surface px-4 text-hx-body font-semibold text-hx-text hover:bg-hx-surface-subtle"
-      >
-        一覧へ戻る
-      </Link>
-    </div>
-  );
+  // 別票へのクライアント側遷移で前患者のPHIが残らないよう key で確実に再マウントする
+  return <DeliveryDetailClient key={deliveryId} deliveryId={deliveryId} />;
 }

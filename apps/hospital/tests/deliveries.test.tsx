@@ -22,10 +22,10 @@ test("H-003: deliveries ページはクライアントコンポーネントを�
   assert.match(html, /施設が選択されていません/);
 });
 
-test("H-003: 詳細ページは #85 実装前のプレースホルダと一覧復帰導線を持つ", async () => {
+test("H-004: 詳細ページは施設未選択でガイドを表示する", async () => {
   const html = render(
     await DeliveryDetailPage({ params: Promise.resolve({ deliveryId: "dlv_test" }) }),
   );
-  assert.match(html, /問診詳細は現在実装中です/);
-  assert.match(html, /href="\/deliveries"/);
+  assert.match(html, /施設が選択されていません/);
+  assert.match(html, /href="\/facilities"/);
 });

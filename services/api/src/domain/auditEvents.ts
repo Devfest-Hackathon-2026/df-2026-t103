@@ -53,6 +53,8 @@ export const AUDIT_ACTIONS = {
   FACILITY_RECEIVING_DISABLED: "FACILITY_RECEIVING_DISABLED",
   /** 運営による失敗ジョブ一覧の閲覧（PII非表示、FR-O04）。 */
   JOB_FAILURES_LISTED: "JOB_FAILURES_LISTED",
+  /** 運営による非識別の監査サマリー閲覧。 */
+  AUDIT_EVENTS_LISTED: "AUDIT_EVENTS_LISTED",
   // ---- 削除 ----
   ACCOUNT_DELETION_REQUESTED: "ACCOUNT_DELETION_REQUESTED",
   ACCOUNT_DELETION_CANCELLED: "ACCOUNT_DELETION_CANCELLED",
@@ -72,3 +74,15 @@ export const AUDIT_ACTIONS = {
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
+
+export const SUMMARY_ACTORS = ["patient", "staff", "platform", "service", "unknown"] as const;
+export const SUMMARY_OUTCOMES = ["success", "failure", "other"] as const;
+
+export interface AuditSummary {
+  eventId: string;
+  action: AuditAction | "UNKNOWN";
+  actorType: (typeof SUMMARY_ACTORS)[number];
+  occurredAt: string | null;
+  decision: "allow" | "deny" | null;
+  outcome: (typeof SUMMARY_OUTCOMES)[number] | null;
+}

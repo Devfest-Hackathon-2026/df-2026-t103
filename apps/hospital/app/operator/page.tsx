@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } fro
 import Link from "next/link";
 import { getMultiFactorResolver, signInWithEmailAndPassword, signOut, TotpMultiFactorGenerator, type MultiFactorError, type MultiFactorResolver } from "firebase/auth";
 import { ApiError, type JobFailurePage, type JobType } from "../../lib/api-client";
+import AuditMonitor from "./audit-monitor";
 import EmergencyStop from "./emergency-stop";
 import { firebaseClient } from "../../lib/firebase-client";
 
@@ -78,7 +79,7 @@ export default function OperatorPage() {
 
   return <main className="mx-auto max-w-5xl space-y-6 px-6 py-10">
     <Link href="/" className="underline">医療機関ポータルへ</Link>
-    <h1 className="text-2xl font-bold">失敗ジョブの確認</h1>
+    <h1 className="text-2xl font-bold">セキュリティ・配送監視</h1>
     <p>運営管理者専用です。患者の問診内容は表示しません。</p>
     {message && <p role="alert" className="rounded border border-red-700 p-4">{message}</p>}
     {!signedIn && !resolver && <form method="post" onSubmit={login} className="max-w-md space-y-4">
@@ -103,6 +104,7 @@ export default function OperatorPage() {
         {page && page.items.length > 0 && <div className="overflow-x-auto"><table className="w-full text-left"><caption className="py-3 text-left">{type === "ocr" ? "画像処理" : "削除処理"}の失敗ジョブ</caption><thead><tr><th scope="col">ジョブID</th><th scope="col">失敗分類</th><th scope="col">試行回数</th><th scope="col">失敗日時</th></tr></thead><tbody>{page.items.map((item) => <tr key={`${item.type}:${item.jobId}`} className="border-t"><td className="py-3">{item.jobId}</td><td>{item.failureCode ?? "不明"}</td><td>{item.attempts}</td><td>{item.failedAt ?? "不明"}</td></tr>)}</tbody></table></div>}
         {page?.nextCursor && <button disabled={busy} onClick={() => load(page.nextCursor!)} className="mt-4 underline">次のページ</button>}
       </section>
+      <AuditMonitor />
       <EmergencyStop />
     </>}
   </main>;

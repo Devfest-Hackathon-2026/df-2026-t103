@@ -1,6 +1,6 @@
 # 医療機関ポータル
 
-`/operator` はFirebase Authでログインし、実装済みBEの `GET /v1/operator/job-failures` を呼び出す運営管理者向け画面です。画像処理/削除処理の失敗一覧とカーソルページングを利用できます。実API `POST /v1/operator/facilities/{facilityId}/disable` で施設受信の緊急停止も行えます。対象IDと理由の確認後に明示的に実行し、サーバで直近の認証と運営権限を検証します。再認証を求められたらログアウトして再ログインしてください。通信失敗時は処理済みの可能性を表示し、自動再試行しません。固定データ・モックAPIへの自動切替はありません。職員の問診受信・閲覧等は別途実装中です。
+`/operator` はFirebase Authでログインし、実装済みBEの `GET /v1/operator/job-failures` を呼び出す運営管理者向け画面です。画像処理/削除処理の失敗一覧とカーソルページングを利用できます。`GET /v1/operator/audit-events` から権限変更等の監査サマリーも新しい順に取得します。イベント種別・操作者区分・UTC日時・認可判断・結果だけを表示し、患者/職員/施設の識別子・ハッシュ・自由記述は表示しません。実API `POST /v1/operator/facilities/{facilityId}/disable` で施設受信の緊急停止も行えます。対象IDと理由の確認後に明示的に実行し、サーバで直近の認証と運営権限を検証します。再認証を求められたらログアウトして再ログインしてください。通信失敗時は処理済みの可能性を表示し、自動再試行しません。固定データ・モックAPIへの自動切替はありません。職員の問診受信・閲覧等は別途実装中です。
 
 Node.js 22 以降で `npm ci`、`npm run dev` を実行し、http://localhost:3000 を開きます。`npm run lint`、`npm test`、`npm run build` で検証できます。Docker Compose では既存の hospital サービスを使用します。
 
@@ -75,12 +75,12 @@ npx --yes firebase-tools@15.35.0 emulators:exec --project demo-mmr-dev \
 
 試験はFastifyの実entrypointを一時loopbackポートで起動し、Auth Emulatorでサインインした
 ID tokenを本番と同じfrontend APIクライアントへ渡します。所属なし403、運営所属あり200、
-所属失効403、無認証401、施設受信停止・冪等性・失効後の変更拒否、実Firestore由来の失敗ジョブ取得と個人識別子の非露出を検証します。
+所属失効403、無認証401、施設受信停止・冪等性・失効後の変更拒否、実Firestore由来の失敗ジョブ/監査一覧取得・監査の同時刻ページング・個人識別子と自由記述の非露出を検証します。
 この読取経路はStorage/RTDBへアクセスしませんが、BEの接続整合性検証のためそのloopback設定も明示します。
 実クラウドのApp Check/MFA/CORS受入や、他の画面のAPI接続をこの試験だけで完了扱いにしません。
 
 macOSでChromeをインストールしている場合は、同じコマンドに `HOSPITAL_BROWSER_SMOKE=true` を
-追加すると、実画面でのログイン・実BEからの一覧表示・確認前の未変更・施設受信停止・ログアウトも確認します。
+追加すると、実画面でのログイン・実BEからの一覧表示・監査一覧表示・確認前の未変更・施設受信停止・ログアウトも確認します。
 Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータルはloopback:33090で起動し、
 試験後にChromeの一時プロファイル・起動プロセスを終了します。このブラウザ試験は任意実行です。
 

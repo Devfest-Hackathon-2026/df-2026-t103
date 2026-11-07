@@ -50,6 +50,8 @@ make down     # 全停止
 
 ## ドキュメント
 
+- メール登録は登録操作台帳が残っている間、同じ `Idempotency-Key` と同じ本文で再開できます。Firestore commit済み状態は期限経過だけでは巻き戻さず、異なる本文は409です。台帳がTTL等で物理削除された後の再開は保証されず、既存Authとの競合はfail-closedになります。別キーの登録では disabled Auth ユーザーを孤児と推定して削除しません。孤児の自動回収・安全な復旧手順は未実装です。後日、担当者確認と所有権・期限の確認を伴う復旧が必要です（認証情報は開示・記録しません）。詳細は [システム設計書 §5.1](docs/02_システム設計書.md) と [DB設計書 §5.14](docs/04_DB設計書.md) を参照。
+
 - [docs/01_要件定義書](docs/01_要件定義書.md) / [02_システム設計書](docs/02_システム設計書.md) / [03_機能仕様書](docs/03_機能仕様書.md) / [04_DB設計書](docs/04_DB設計書.md) / [05_コスト試算表](docs/05_コスト試算表.md) / [06_医療安全_セキュリティ_運用設計書](docs/06_医療安全_セキュリティ_運用設計書.md)
 - [docs/07_環境構築手順書](docs/07_環境構築手順書.md) / [docs/08_Docker_Makefile運用](docs/08_Docker_Makefile運用.md) / [docs/09_USEFUL_COMMANDS](docs/09_USEFUL_COMMANDS.md)
 - 意思決定記録: [docs/adr/](docs/adr/README.md)

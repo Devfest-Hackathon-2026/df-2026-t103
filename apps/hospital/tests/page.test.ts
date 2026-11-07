@@ -3,11 +3,19 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Home from "../app/page";
+import OperatorPage from "../app/operator/page";
 
-test("identifies demo data and unimplemented operations", () => {
+test("links to the real API screen without displaying fictional deliveries", () => {
   const html = renderToStaticMarkup(createElement(Home));
-  assert.match(html, /デモ専用・実運用不可/);
-  assert.match(html, /認証、アクセス制御、問診の受信・閲覧は未実装/);
-  assert.match(html, /合成データ/);
+  assert.match(html, /href="\/operator"/);
+  assert.match(html, /職員の受信・閲覧画面は準備中/);
+  assert.doesNotMatch(html, /サンプル患者|合成データ|表示例/);
   assert.doesNotMatch(html, /<form|<button/);
+});
+
+test("login form cannot submit credentials via GET before hydration", () => {
+  const html = renderToStaticMarkup(createElement(OperatorPage));
+  assert.match(html, /<form[^>]*method="post"/);
+  assert.match(html, /<button[^>]*disabled=""/);
+  assert.doesNotMatch(html, /<tbody|SYNTHETIC_PRIVATE_VALUE|サンプル患者/);
 });

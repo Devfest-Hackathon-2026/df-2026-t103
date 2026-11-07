@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:patient/demo_delivery_status_preview.dart';
 import 'package:patient/delivery_status_screen.dart';
@@ -48,6 +49,32 @@ void main() {
     expect(find.text('サンプルの状態：失敗'), findsOneWidget);
     expect(find.text('サンプルの状態：受付済み'), findsNothing);
   });
+
+  for (final (keyName, key) in [
+    ('Space', LogicalKeyboardKey.space),
+    ('Enter', LogicalKeyboardKey.enter),
+  ]) {
+    testWidgets('Tabで実際にフォーカスした状態ボタンを$keyNameで選択できる', (tester) async {
+      await tester.pumpWidget(const DeliveryStatusPreview());
+
+      final target = find.text('サンプル：失敗');
+      final targetFocus = Focus.of(tester.element(target));
+      var focused = false;
+      for (var i = 0; i < 12 && !focused; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        focused = targetFocus.hasPrimaryFocus;
+      }
+      expect(targetFocus.hasPrimaryFocus, isTrue);
+      expect(find.text('サンプルの状態：受付済み'), findsOneWidget);
+
+      await tester.sendKeyEvent(key);
+      await tester.pumpAndSettle();
+
+      expect(find.text('サンプルの状態：失敗'), findsOneWidget);
+      expect(find.text('サンプルの状態：受付済み'), findsNothing);
+    });
+  }
 
   testWidgets('狭い画面と200%文字拡大でもスクロールして全状態を表示できる', (tester) async {
     await tester.binding.setSurfaceSize(const Size(320, 568));

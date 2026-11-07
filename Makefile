@@ -46,7 +46,7 @@ endif
         stop-firebase stop-api stop-hospital stop-patient stop-watch \
         restart-firebase restart-api restart-hospital restart-patient restart-watch \
         logs logs-firebase logs-api logs-hospital logs-patient logs-watch \
-        test-firebase-rules install-templates
+        test-firebase-rules test-api-emulator install-templates
 
 ##@ 基本
 
@@ -232,6 +232,11 @@ logs-watch: ## ファイル監視のログを表示
 test-firebase-rules: ## Security Rules 単体テスト（compose のエミュレータ起動中に実行）
 	@[ -d firebase/tests/node_modules ] || npm --prefix firebase/tests ci
 	npm --prefix firebase/tests run test:compose
+
+test-api-emulator: ## API エミュレータ結合テスト（compose のエミュレータ起動中に実行）
+	@curl -sf -o /dev/null http://localhost:8081/ && curl -sf -o /dev/null http://localhost:9099/ || { echo "error: Firebaseエミュレータが起動していません（make start-firebase）"; exit 1; }
+	@[ -d services/api/node_modules ] || npm --prefix services/api ci
+	npm --prefix services/api run test:emulator:compose
 
 install-templates: ## .github/template/ をGitHubの正式パスへコピー（PR/Issueテンプレ有効化）
 	@mkdir -p .github/ISSUE_TEMPLATE

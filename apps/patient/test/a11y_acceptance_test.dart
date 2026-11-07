@@ -33,6 +33,7 @@ void main() {
     'account': () => const AccountPreview(),
     'profile_form': () => const ProfileFormPreview(),
     'notifications': () => const NotificationsPreview(),
+    'offline_draft': () => const OfflineDraftPreview(),
   };
 
   group('タップ領域・ラベルのガイドラインを満たす', () {

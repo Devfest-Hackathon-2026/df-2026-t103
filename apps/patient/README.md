@@ -149,3 +149,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5063 -t lib/demo_a
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5064 -t lib/demo_profile_form_preview.dart
 ```
+
+## 通知プレビュー
+
+通知受信表示（FCM・PHI非含有）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5065 を開きます。確認後は Ctrl+C で停止します。通知の受け取り許可の説明と拒否時の動作を示し、受信通知は症状やお薬などの個人情報を含まない一般文言のみで表示します。このプレビューは FCM・/me/devices API に接続せず、通知タップ遷移も未接続です。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5065 -t lib/demo_notifications_preview.dart
+```

@@ -207,9 +207,15 @@ jobs:
         # rules の更新は医療監修レビュー前提（§13.1-7）。
         run: |
           npx -y firebase-tools@15.35.0 deploy \
-            --only firestore:rules,firestore:indexes,storage,database \
+            --config firebase.deploy.json \
+            --only firestore:rules,firestore:indexes,storage \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --non-interactive
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy and verify existing status database rules
+        run: python3 infra/storage/deploy_database_rules.py --project "${{ vars.GCP_PROJECT_ID }}"
 
   rollback:
     name: rollback / 前リビジョンへ切戻し

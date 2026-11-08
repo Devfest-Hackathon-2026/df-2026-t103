@@ -1,0 +1,13 @@
+# Terraform local state, backend metadata, plans and environment-specific values.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+backend.local.tf
+override.tf
+override.tf.json
+crash.log

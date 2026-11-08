@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'intake_question_flow.dart';
 import 'patient_intake_api.dart';
 
 class PatientIntakeScreen extends StatefulWidget {
@@ -30,6 +31,7 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
   int _generation = 0;
   String? _message;
   IntakeSubmission? _submission;
+  int? _startRevision;
 
   @override
   void initState() {
@@ -41,6 +43,7 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
         _ready = false;
         _saved = false;
         _submission = null;
+        _startRevision = null;
         _symptoms.clear();
         _message = null;
       });
@@ -102,10 +105,11 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
       _message = null;
     });
     try {
-      await widget.api.submit(_submission!);
+      final revision = await widget.api.submit(_submission!);
       if (!mounted || generation != _generation) return;
       setState(() {
         _saved = true;
+        _startRevision = revision;
         _symptoms.clear();
       });
     } catch (error) {
@@ -184,9 +188,16 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
                     onPressed: _busy ? null : _login,
                     child: const Text('ログイン'),
                   ),
-                ] else if (_saved) ...[
-                  const Text('問診の症状を保存しました。', semanticsLabel: '問診の症状を保存しました。'),
-                  const Text('医療機関への送信や問診票の確定はまだ行っていません。'),
+                ] else if (_saved &&
+                    _submission != null &&
+                    _startRevision != null) ...[
+                  const Text('症状を保存しました。続けて質問にお答えください。'),
+                  const SizedBox(height: 16),
+                  IntakeQuestionFlow(
+                    api: widget.api,
+                    submission: _submission!,
+                    startRevision: _startRevision!,
+                  ),
                 ] else ...[
                   TextField(
                     controller: _symptoms,

@@ -38,11 +38,16 @@ jobs:
       - name: Install gitleaks
         env:
           GITLEAKS_VERSION: 8.21.2
+          GITLEAKS_ASSET_ID: '202338480' # Official v8.21.2 linux_x64 release asset
+          GITLEAKS_SHA256: 5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
         run: |
+          # The release download frontend can return 504; use the official asset API.
           curl --fail --silent --show-error --location \
             --retry 5 --retry-all-errors --connect-timeout 15 --max-time 120 \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --header 'Accept: application/octet-stream' \
+            "https://api.github.com/repos/gitleaks/gitleaks/releases/assets/${GITLEAKS_ASSET_ID}" \
             --output /tmp/gitleaks.tar.gz
+          printf '%s  /tmp/gitleaks.tar.gz\n' "$GITLEAKS_SHA256" | sha256sum --check --strict
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version

@@ -5,6 +5,7 @@ import type { ConsentState } from "./context.js";
 import { ApiError, ErrorCodes } from "../lib/errors.js";
 import { RateRules, type RateLimitRule } from "../lib/rateLimit.js";
 import { getAccount, latestConsentsByType } from "../repos/accounts.js";
+import { CONSENT_HISTORY_SOURCES } from "../domain/types.js";
 import { audit } from "../lib/audit.js";
 import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { getLegalDocuments } from "../repos/legalConfig.js";
@@ -257,6 +258,10 @@ export async function evaluateConsents(
       deps.db,
       uid,
       legalDocs.requiredConsents,
+      // 送信証跡（delivery_send）は「現在の同意」ではなく不可侵の過去証跡。
+      // requiredConsents に hospital_disclosure が加わった将来変更でも
+      // 証跡が standing consent を偽装しないよう絞り込む。
+      { sources: CONSENT_HISTORY_SOURCES },
     );
   } catch (err) {
     throw new ApiError(

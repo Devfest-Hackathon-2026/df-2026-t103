@@ -139,3 +139,110 @@ describe("GET /v1/me/profile の同意ゲート契約（#135）", () => {
     await app.close();
   });
 });
+
+describe("GET /v1/consents の同意証跡による押し出し対策（#219）", () => {
+  it("送信証跡が100件を超えても必須同意が currentByType と履歴に残る", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    await seedAccount(deps, UID);
+    await seedCurrentConsents(deps, UID);
+
+    // 配送は1送信あたり証跡 doc を1件書く（旧実装では100件超の送信で
+    // 登録系同意が履歴の先頭100件から押し出され currentByType が壊れた）
+    const disclosure = DEV_LEGAL_DOCUMENTS.documents.hospital_disclosure!;
+    for (let i = 0; i < 110; i++) {
+      await deps.db.collection("legalConsents").doc().set({
+        subjectUid: UID,
+        consentType: "hospital_disclosure",
+        documentVersion: disclosure.version,
+        documentHash: disclosure.documentHash,
+        decision: "granted",
+        method: "explicit_checkbox",
+        registrationSource: "delivery_send",
+        scope: { facilityId: "fac-1", deliveryId: `dlv_${i}` },
+        occurredAt: Timestamp.fromDate(
+          new Date(deps.clock.now().getTime() + i),
+        ),
+        revokedAt: null,
+        schemaVersion: "1",
+      });
+    }
+
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/consents",
+      headers: authHeader(UID),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      consents: Array<{ registrationSource: string; consentType: string }>;
+      currentByType: Record<string, string>;
+    };
+
+    // 必須3種が現行同意として解決される（種別ごとのクエリで求める）
+    for (const type of DEV_LEGAL_DOCUMENTS.requiredConsents) {
+      expect(body.currentByType[type]).toBe(
+        DEV_LEGAL_DOCUMENTS.documents[type]!.version,
+      );
+    }
+    // 送信証跡は不可侵の過去証跡であり「現在の同意」に数えない。
+    // fc_ state doc が無いため hospital_disclosure は未同意のまま。
+    expect(body.currentByType["hospital_disclosure"]).toBeUndefined();
+    // 履歴は表示対象 source のみ（送信証跡は含めない）
+    expect(body.consents.length).toBeGreaterThan(0);
+    expect(
+      body.consents.every((c) => c.registrationSource !== "delivery_send"),
+    ).toBe(true);
+    await app.close();
+  });
+
+  it("施設同意を撤回済みでも残存する送信証跡が現行同意を偽装しない", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    await seedAccount(deps, UID);
+    await seedCurrentConsents(deps, UID);
+    const disclosure = DEV_LEGAL_DOCUMENTS.documents.hospital_disclosure!;
+
+    // 撤回済みの施設別同意 state doc
+    await deps.db.doc(`legalConsents/fc_${UID}_fac-1`).set({
+      subjectUid: UID,
+      consentType: "hospital_disclosure",
+      documentVersion: disclosure.version,
+      documentHash: disclosure.documentHash,
+      decision: "granted",
+      method: "explicit_checkbox",
+      registrationSource: "facility_consent",
+      scope: { facilityId: "fac-1" },
+      occurredAt: Timestamp.fromDate(deps.clock.now()),
+      revokedAt: Timestamp.fromDate(deps.clock.now()),
+      schemaVersion: "1",
+    });
+    // 過去の送信証跡（granted・撤回されない）は残る
+    await deps.db.collection("legalConsents").doc().set({
+      subjectUid: UID,
+      consentType: "hospital_disclosure",
+      documentVersion: disclosure.version,
+      documentHash: disclosure.documentHash,
+      decision: "granted",
+      method: "explicit_checkbox",
+      registrationSource: "delivery_send",
+      scope: { facilityId: "fac-1", deliveryId: "dlv_past" },
+      occurredAt: Timestamp.fromDate(deps.clock.now()),
+      revokedAt: null,
+      schemaVersion: "1",
+    });
+
+    const app = buildTestApp(deps);
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/consents",
+      headers: authHeader(UID),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { currentByType: Record<string, string> };
+    // 撤回済み state doc は現行同意に含めず、送信証跡も現行同意を偽装しない
+    expect(body.currentByType["hospital_disclosure"]).toBeUndefined();
+    await app.close();
+  });
+});

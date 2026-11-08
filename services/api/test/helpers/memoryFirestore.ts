@@ -75,6 +75,29 @@ function setField(target: Data, path: string, value: unknown): void {
   }
 }
 
+function isPlainObject(v: unknown): v is Data {
+  return (
+    v !== null &&
+    typeof v === "object" &&
+    !Array.isArray(v) &&
+    !(v instanceof Timestamp)
+  );
+}
+
+/** Firestore の {merge:true} 相当: ネストした map は再帰的に統合する。 */
+function deepMerge(target: Data, source: Data): void {
+  for (const [k, v] of Object.entries(source)) {
+    const cur = target[k];
+    if (isPlainObject(v) && isPlainObject(cur)) {
+      deepMerge(cur, v);
+    } else if (v === DELETE_SENTINEL) {
+      delete target[k];
+    } else {
+      target[k] = v;
+    }
+  }
+}
+
 function getField(data: Data, path: string): unknown {
   let cur: unknown = data;
   for (const p of path.split(".")) {
@@ -320,11 +343,8 @@ class MemDocRef {
   async set(data: Data, opts?: { merge?: boolean }): Promise<void> {
     const normalized = normalizeValue(this.store, data) as Data;
     if (opts?.merge && this.store.docs.has(this.path)) {
-      const existing = this.store.docs.get(this.path)!;
-      const merged = { ...existing };
-      for (const [k, v] of Object.entries(normalized)) {
-        setField(merged, k, v);
-      }
+      const merged = cloneData(this.store.docs.get(this.path)!);
+      deepMerge(merged, normalized);
       this.store.docs.set(this.path, merged);
     } else {
       this.store.docs.set(this.path, normalized);

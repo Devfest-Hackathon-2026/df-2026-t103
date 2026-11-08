@@ -30,7 +30,22 @@ export type RegistrationSource =
   | "email_registration"
   | "google_onboarding"
   | "passkey_onboarding"
-  | "reconsent";
+  | "reconsent"
+  | "delivery_send"
+  | "facility_consent";
+
+/**
+ * GET /v1/consents の履歴表示対象（#219）。
+ * 送信ごとの証跡（delivery_send）は高頻度のため履歴から除き、
+ * 施設別同意の現状態（facility_consent）と登録系同意のみ返す。
+ */
+export const CONSENT_HISTORY_SOURCES: readonly RegistrationSource[] = [
+  "email_registration",
+  "google_onboarding",
+  "passkey_onboarding",
+  "reconsent",
+  "facility_consent",
+];
 
 export type MembershipRole =
   | "patient"

@@ -387,7 +387,13 @@ export interface DeliveryDoc {
   facilityId: string;
   questionnaireId: string;
   questionnaireRevisionId: string;
+  /** 本送信の施設別同意記録（legalConsents 送信証跡）への参照。 */
   consentId: string;
+  /** 同意時点でサーバが照合した第三者提供文書の版/hash（クライアント申告値ではない）。 */
+  consentDocumentVersion?: string;
+  consentDocumentHash?: string;
+  /** 施設別同意の状態ドキュメント（legalConsents/fc_{uid}_{facilityId}）への参照。 */
+  facilityConsentId?: string;
   shareScope: {
     includeProfile: boolean;
     includeConfirmedMedications: boolean;

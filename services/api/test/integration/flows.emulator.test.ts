@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { FieldValue } from "firebase-admin/firestore";
+import {
+  FieldValue,
+  Timestamp,
+  type Firestore,
+  type ReadWriteTransactionOptions,
+  type Transaction,
+} from "firebase-admin/firestore";
 import type { TestDeps } from "../helpers/deps.js";
+import { DEV_LEGAL_DOCUMENTS } from "../../src/domain/legalDocuments.js";
 import {
   authHeader,
   buildTestApp,
@@ -33,6 +40,88 @@ const FAC_B = "emu-fac-b";
 
 function idem(key: string): Record<string, string> {
   return { "idempotency-key": key };
+}
+
+const DISCLOSURE = DEV_LEGAL_DOCUMENTS.documents.hospital_disclosure!;
+
+/** P-032 で取得した施設別送信同意を含む API-029 ペイロード（#219）。 */
+function deliveryPayload(questionnaireId: string, facilityId: string) {
+  const shareScope = {
+    includeProfile: true,
+    includeConfirmedMedications: true,
+    includePrescriptionImages: false,
+  };
+  return {
+    questionnaireId,
+    questionnaireRevision: 1,
+    facilityId,
+    shareScope,
+    consent: {
+      accepted: true,
+      documentVersion: DISCLOSURE.version,
+      documentHash: DISCLOSURE.documentHash,
+      shareScope,
+    },
+  };
+}
+
+/** 施設別同意の state doc（legalConsents/fc_{uid}_{facilityId}）をシードする。 */
+async function seedFacilityConsentState(
+  deps: TestDeps,
+  uid: string,
+  facilityId: string,
+  opts: { revoked?: boolean } = {},
+): Promise<string> {
+  const path = `legalConsents/fc_${uid}_${facilityId}`;
+  await deps.db.doc(path).set({
+    subjectUid: uid,
+    consentType: "hospital_disclosure",
+    documentVersion: DISCLOSURE.version,
+    documentHash: DISCLOSURE.documentHash,
+    decision: "granted",
+    method: "explicit_checkbox",
+    registrationSource: "facility_consent",
+    scope: { facilityId, purpose: "medical_intake_preparation" },
+    occurredAt: Timestamp.fromDate(deps.clock.now()),
+    revokedAt: opts.revoked ? Timestamp.fromDate(deps.clock.now()) : null,
+    schemaVersion: "1",
+  });
+  return path;
+}
+
+/**
+ * updateFunction が全ての読み書きをステージし終えた直後に例外を投げ、
+ * コミット前の部分失敗を再現する Firestore ラッパ（原子性検証用）。
+ */
+class CommitBombFirestore {
+  bombAfterWrites = false;
+
+  constructor(private readonly inner: Firestore) {}
+
+  doc(path: string) {
+    return this.inner.doc(path);
+  }
+  collection(path: string) {
+    return this.inner.collection(path);
+  }
+  collectionGroup(id: string) {
+    return this.inner.collectionGroup(id);
+  }
+  batch() {
+    return this.inner.batch();
+  }
+  runTransaction<T>(
+    updateFunction: (transaction: Transaction) => Promise<T>,
+    transactionOptions?: ReadWriteTransactionOptions,
+  ): Promise<T> {
+    return this.inner.runTransaction(async (tx) => {
+      const result = await updateFunction(tx);
+      if (this.bombAfterWrites) {
+        throw new Error("injected pre-commit failure");
+      }
+      return result;
+    }, transactionOptions);
+  }
 }
 
 async function seedMembership(
@@ -176,17 +265,7 @@ describe("E2E server-side perspectives / Firestore エミュレータ結合", ()
       method: "POST",
       url: "/v1/deliveries",
       headers: { ...authHeader(PATIENT), ...idem("dlv-e2e1") },
-      payload: {
-        questionnaireId,
-        questionnaireRevision: 1,
-        facilityId: FAC_A,
-        consentDocumentVersion: "sharing-v1",
-        shareScope: {
-          includeProfile: true,
-          includeConfirmedMedications: true,
-          includePrescriptionImages: false,
-        },
-      },
+      payload: deliveryPayload(questionnaireId, FAC_A),
     });
     expect(res.statusCode).toBe(202);
     const { deliveryId } = res.json() as { deliveryId: string };
@@ -198,6 +277,21 @@ describe("E2E server-side perspectives / Firestore エミュレータ結合", ()
     expect(stored.facilityId).toBe(FAC_A);
     expect(stored.questionnaireId).toBe(questionnaireId);
     expect(stored.snapshotSha256).toMatch(/^[0-9a-f]{64}$/);
+
+    // consentId は本送信の同意証跡 doc を指し、版/hash も保存される（#219）
+    const sendConsent = (
+      await deps.firestore.doc(`legalConsents/${stored.consentId}`).get()
+    ).data();
+    expect(sendConsent).toBeTruthy();
+    expect(sendConsent!.subjectUid).toBe(PATIENT);
+    expect(sendConsent!.scope?.deliveryId).toBe(deliveryId);
+    expect(stored.consentDocumentVersion).toBe(DISCLOSURE.version);
+    expect(stored.consentDocumentHash).toBe(DISCLOSURE.documentHash);
+    // (uid, facilityId) state doc も実FS上に作成される
+    expect(
+      (await deps.firestore.doc(`legalConsents/fc_${PATIENT}_${FAC_A}`).get())
+        .exists,
+    ).toBe(true);
 
     // 病院側閲覧: サーバが返すハッシュは永続化された配送版ハッシュと一致
     const view = await app.inject({
@@ -456,17 +550,7 @@ describe("E2E server-side perspectives / Firestore エミュレータ結合", ()
       method: "POST",
       url: "/v1/deliveries",
       headers: { ...authHeader(PATIENT), ...idem("dlv-e2e6") },
-      payload: {
-        questionnaireId,
-        questionnaireRevision: 1,
-        facilityId: FAC_A,
-        consentDocumentVersion: "sharing-v1",
-        shareScope: {
-          includeProfile: true,
-          includeConfirmedMedications: false,
-          includePrescriptionImages: false,
-        },
-      },
+      payload: deliveryPayload(questionnaireId, FAC_A),
     });
     expect(res.statusCode).toBe(412);
 
@@ -541,17 +625,7 @@ describe("E2E server-side perspectives / Firestore エミュレータ結合", ()
     await seedFacility(deps, FAC_A);
     const questionnaireId = await makeFinalizedQuestionnaire(app, PATIENT);
 
-    const payload = {
-      questionnaireId,
-      questionnaireRevision: 1,
-      facilityId: FAC_A,
-      consentDocumentVersion: "sharing-v1",
-      shareScope: {
-        includeProfile: true,
-        includeConfirmedMedications: false,
-        includePrescriptionImages: false,
-      },
-    };
+    const payload = deliveryPayload(questionnaireId, FAC_A);
     const r1 = await app.inject({
       method: "POST",
       url: "/v1/deliveries",
@@ -573,6 +647,13 @@ describe("E2E server-side perspectives / Firestore エミュレータ結合", ()
     const deliveries = await deps.firestore.collection("deliveries").get();
     expect(deliveries.size).toBe(1);
 
+    // 冪等リプレイで同意証跡は重複しない（state doc + 送信証跡の 2 件）
+    const disclosureConsents = await deps.firestore
+      .collection("legalConsents")
+      .where("consentType", "==", "hospital_disclosure")
+      .get();
+    expect(disclosureConsents.size).toBe(2);
+
     // 同キー+異本文は409
     const conflict = await app.inject({
       method: "POST",
@@ -581,5 +662,106 @@ describe("E2E server-side perspectives / Firestore エミュレータ結合", ()
       payload: { ...payload, questionnaireRevision: 2 },
     });
     expect(conflict.statusCode).toBe(409);
+  });
+
+  it("同意撤回レース: 撤回と配送作成が競合しても最終状態が一貫する (#219)", async () => {
+    await seedAccount(deps, PATIENT);
+    await seedCurrentConsents(deps, PATIENT);
+    await seedFacility(deps, FAC_A);
+    const consentPath = await seedFacilityConsentState(deps, PATIENT, FAC_A);
+    const questionnaireId = await makeFinalizedQuestionnaire(app, PATIENT);
+
+    // 撤回 tx と配送 POST を同時発行する。
+    // エミュレータは doc ロックで直列化するため、本物の backend の
+    // read→write 競合（ABORTED→再評価）は再現できないが、
+    // 「どちらが先にコミットされても最終状態が一貫する」不変条件は検証できる。
+    const revokeTx = deps.firestore.runTransaction(async (t) => {
+      t.update(deps.firestore.doc(consentPath), {
+        revokedAt: FieldValue.serverTimestamp(),
+      });
+      return true;
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(PATIENT), ...idem("dlv-race") },
+      payload: deliveryPayload(questionnaireId, FAC_A),
+    });
+    await revokeTx;
+
+    // 直列化された線形化結果: 撤回が先なら拒否、配送が先なら送信時点の同意は有効
+    expect([202, 412]).toContain(res.statusCode);
+    const consentDoc = (
+      await deps.firestore.doc(consentPath).get()
+    ).data()!;
+    if (res.statusCode === 202) {
+      // 配送が先: 同意証跡は作成済み、撤回はその後に適用される
+      expect(consentDoc.revokedAt).not.toBeNull();
+      expect(
+        (await deps.firestore.collection("deliveries").get()).size,
+      ).toBe(1);
+    } else {
+      // 撤回が先: 配送・送信証跡は作られない
+      expect(
+        (await deps.firestore.collection("deliveries").get()).size,
+      ).toBe(0);
+      const rejects = await deps.firestore
+        .collection("auditEvents")
+        .where("action", "==", AUDIT_ACTIONS.DELIVERY_REJECTED)
+        .get();
+      expect(rejects.size).toBe(1);
+    }
+
+    // どちらが勝っても撤回済みの同意での新規送信は拒否される
+    const res2 = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(PATIENT), ...idem("dlv-race-2") },
+      payload: deliveryPayload(questionnaireId, FAC_A),
+    });
+    expect(res2.statusCode).toBe(412);
+  });
+
+  it("部分失敗の原子性: コミット前に失敗すると配送・証跡・冪等キーのいずれも残らない (#219)", async () => {
+    await seedAccount(deps, PATIENT);
+    await seedCurrentConsents(deps, PATIENT);
+    await seedFacility(deps, FAC_A);
+    const questionnaireId = await makeFinalizedQuestionnaire(app, PATIENT);
+
+    // 既存冪等キー数（intake/finalize 分）を記録し、増えないことを確認する
+    const keyCountBefore = (
+      await deps.firestore.collection("idempotencyKeys").get()
+    ).size;
+
+    // updateFunction が全読み書きをステージ後に失敗 → コミットされない
+    const bomb = new CommitBombFirestore(deps.firestore);
+    bomb.bombAfterWrites = true;
+    deps.db = bomb;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(PATIENT), ...idem("dlv-atomic") },
+      payload: deliveryPayload(questionnaireId, FAC_A),
+    });
+    expect(res.statusCode).toBe(500);
+
+    // 部分コミットなし: delivery・同意証跡・冪等キー・tx内監査のいずれも残らない
+    expect(
+      (await deps.firestore.collection("deliveries").get()).size,
+    ).toBe(0);
+    const disclosureConsents = await deps.firestore
+      .collection("legalConsents")
+      .where("consentType", "==", "hospital_disclosure")
+      .get();
+    expect(disclosureConsents.size).toBe(0);
+    expect(
+      (await deps.firestore.collection("idempotencyKeys").get()).size,
+    ).toBe(keyCountBefore);
+    const createdAudits = await deps.firestore
+      .collection("auditEvents")
+      .where("action", "==", AUDIT_ACTIONS.DELIVERY_CREATED)
+      .get();
+    expect(createdAudits.size).toBe(0);
   });
 });

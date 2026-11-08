@@ -95,10 +95,44 @@ async function seedCurrentConsents(uid) {
   }
 }
 
+// A second patient whose required consents are not current: signing in must be
+// gated before intake (E2E-001B メール同意ゲート). Account exists and is active,
+// but onboarding is still legal_pending with no granted consents and no profile.
+const GATE_EMAIL =
+  process.env.E2E_GATE_EMAIL ?? "synthetic-consent-gate@example.test";
+const GATE_PASSWORD =
+  process.env.E2E_GATE_PASSWORD ?? "local-only-gate-123!";
+
+async function ensureNamedUser(email, password) {
+  try {
+    return (await auth.getUserByEmail(email)).uid;
+  } catch {
+    return (await auth.createUser({ email, password, emailVerified: true })).uid;
+  }
+}
+
+async function seedLegalPendingAccount(uid) {
+  const ts = FieldValue.serverTimestamp();
+  await db.doc(`accounts/${uid}`).set({
+    uid,
+    accountStatus: "active",
+    onboardingState: "legal_pending",
+    emailVerified: true,
+    providers: ["password"],
+    schemaVersion: "1",
+    createdAt: ts,
+    updatedAt: ts,
+  });
+}
+
 const uid = await ensureUser();
 await seedLegalDocuments();
 await seedAccount(uid);
 await seedCompleteProfile(uid);
 await seedCurrentConsents(uid);
-console.log(`seeded patient uid=${uid} email=${EMAIL}`);
+console.log(`seeded ready patient uid=${uid} email=${EMAIL}`);
+
+const gateUid = await ensureNamedUser(GATE_EMAIL, GATE_PASSWORD);
+await seedLegalPendingAccount(gateUid);
+console.log(`seeded consent-gated patient uid=${gateUid} email=${GATE_EMAIL}`);
 process.exit(0);

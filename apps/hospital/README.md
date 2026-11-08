@@ -54,7 +54,7 @@ nonceはクライアントのヘッダを上書きし、リクエストごとに
 
 root layoutの `connection()` によりリクエスト時に描画します。PHIをサーバ側で取得せず、
 HTML/RSC・JS/CSS・静的ファイル・ログへ入れない設計制約は引き続き適用します。
-通常の`test:api`（CIを含む）では、患者APIで配送した合成問診を職員BFFから取得できることと、同じ患者情報が認証後の一覧・詳細のSSR HTML/RSCに含まれないことを確認します。これは実患者データやすべての将来の取得経路を保証するものではありません。
+`test:api`とCIの`test:browser`では、患者APIで配送した合成問診を職員BFFから取得できることと、同じ患者情報が認証後の一覧・詳細のSSR HTML/RSCに含まれないことを確認します。これは実患者データやすべての将来の取得経路を保証するものではありません。
 
 このnonce方式は `next start` 等のNext.jsサーバーを必要とし、静的exportはできません。
 `firebase.json` のhospital `public: apps/hospital/out` は静的配信案のままです。
@@ -64,7 +64,7 @@ HTML/RSC・JS/CSS・静的ファイル・ログへ入れない設計制約は引
 
 `npm run build && npm run test:security` は本番ビルドをloopback上で起動し、
 HTTPヘッダ、nonceの更新・全bootstrap scriptへの一致、静的JS取得、404、RSC、prefetchを検証します。
-実ブラウザでのCSP施行は、後述の任意ブラウザ試験で実Auth/BEへの接続とともに検証します。実クラウドApp Check/MFAと将来の患者データ取得経路のPHI検証は別途必要です。
+実ブラウザでのCSP施行は、後述の`test:browser`で実Auth/BEへの接続とともに検証します。実クラウドApp Check/MFAと将来の患者データ取得経路のPHI検証は別途必要です。
 運営画面はメモリ内Bearer token方式（API fetchはcredentials: omit）、職員画面は上記のCookie/BFF方式です。通常の`test:api`は、実Auth Emulatorのトークンを既存のセッションAPIで検証してCookieを発行し、HttpOnly・SameSite=Strict・Path・55分期限、未認証/不正トークン拒否、CSRF拒否、施設コンテキストの認可、BFFの別院拒否・所属失効、ログアウト時のCookie消去、認証後応答のno-storeを確認します。試験が実Nextサーバーを動的なloopbackポートで起動・終了するため、Chromeや事前のポータル起動は不要です。テスト用の認可回避やレスポンス差し替えはありません。このHTTP接続試験は職員ログインUIのMFA手順を通しません。EmulatorのHTTP設定で行うため、本番のSecure Cookie・MFA・App Check・HTTPS配信の受入は別途必要です。
 
 方式の根拠: [Next.js CSPガイド](https://nextjs.org/docs/app/guides/content-security-policy)
@@ -157,12 +157,17 @@ E2E-006は独立した患者のAuth Emulator tokenと合成の確定問診票・
 この読取経路はStorage/RTDBへアクセスしませんが、BEの接続整合性検証のためそのloopback設定も明示します。
 実クラウドのApp Check/MFA/CORS受入や、他の画面のAPI接続をこの試験だけで完了扱いにしません。
 
-macOSでChromeをインストールしている場合は、同じコマンドに `HOSPITAL_BROWSER_SMOKE=true` を
-追加すると、実画面でのログイン・実BEからの一覧/監査表示・施設審査の承認/却下・確認前の未変更・施設受信停止・ログアウトと、CSP違反が発生しないことも確認します。
-Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータルはloopback:33090で起動し、
-試験後にChromeの一時プロファイル・起動プロセスを終了します。このブラウザ試験は任意実行です。
+ブラウザを含むE2Eは上記のEmulatorコマンド末尾を`npm run test:browser`へ変更して実行します。
+`test:api`はChromeなしのHTTP結合試験、`test:browser`は同じ試験に実UI操作を加えます。
+macOSでは標準のChromeアプリ、Linuxでは`/usr/bin/google-chrome`を使い、別のパスは
+`HOSPITAL_CHROME_PATH`で指定できます。Chromeがなければ明示的に失敗し、試験をスキップしません。
+実画面での運営ログイン・一覧/監査表示・施設審査の承認/却下・確認前の未変更・施設受信停止・ログアウトと、CSP違反が発生しないことも確認します。
+ポータルはloopback:33090で起動し、試験後にChromeの一時プロファイル・起動プロセスを終了します。
+`hospital-ci`はUbuntu 24.04のChrome存在確認後に`test:browser`を実行します。
+
 同じ合成ユーザーに運営権限と施設所属を与え、実SDKでのサインインと既存セッションAPIのトークン検証後に、職員の施設選択→実受信一覧→別施設への切替→元の施設への復帰も検証します。施設切替時の絞り込みリセットと管理者ナビの分離を確認し、職員ログインUIのTOTP登録・検証を受入済みとは扱いません。
 患者APIから別の合成配送を作り、一覧→詳細→受領確認のキャンセル→確定→一覧の受領済み表示まで操作します。閲覧・キャンセル・別施設コンテキストからの閲覧/受領拒否では配送不変、確定後は受領日時・問診スナップショット維持・成功監査1件を実DBで検証します。受信停止・テナント境界の既存試験には別の配送を使い、受領操作で前提を変えません。
+職員管理は実画面から招待・重複拒否・役割変更・停止・再有効化を操作します。招待・役割変更・停止のキャンセルでは実DBや監査が変わらないことを確認し、停止直後には同じ職員トークンで受信APIが403、再有効化後は200になることを検証します。自己管理者の変更・停止操作が出ないことも確認します。合成Authユーザー・所属・招待・関連監査は終了時に削除し、実メールは送信しません。
 
 参照: [App Check custom backend](https://firebase.google.com/docs/app-check/web/custom-resource)、
 [TOTP MFA](https://firebase.google.com/docs/auth/web/totp-mfa)。
@@ -180,4 +185,4 @@ Chromeのパスは `HOSPITAL_CHROME_PATH` で指定可能です。ポータル�
 `firebase/firestore.indexes.json`から通常のRules/indexesデプロイ手順で作成し、利用可能状態を確認してください。
 API/画面とindexのデプロイ、正規MFA/App Check付きのクラウド受入は、このローカル検証だけで完了扱いにしません。
 
-職員の認証フォームはPOSTを明示し、画面初期化前の送信を無効にします。初期化前の標準GET送信によって認証情報がURLへ入ることを防ぎます。任意の実ブラウザ結合試験は`/login`のSSRでPOST・送信無効を確認し、初期化後に送信可能になることも確認します。CSP/no-storeは既存の本番HTTP試験で継続確認します。
+職員の認証フォームはPOSTを明示し、画面初期化前の送信を無効にします。初期化前の標準GET送信によって認証情報がURLへ入ることを防ぎます。実ブラウザ結合試験は`/login`のSSRでPOST・送信無効を確認し、初期化後に送信可能になることも確認します。CSP/no-storeは既存の本番HTTP試験で継続確認します。

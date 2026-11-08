@@ -46,41 +46,44 @@ export function registerHealthRoutes(app: FastifyInstance, deps: Deps): void {
     | undefined;
   let inflight: Promise<"ok" | "error"> | undefined;
 
-  app.withTypeProvider<ZodTypeProvider>().get(
-    "/healthz",
-    {
-      config: { access: { tier: "none" } },
-      schema: {
-        // degraded も標準エラーではなくヘルス応答として返す
-        response: { 200: healthResponseSchema, 503: healthResponseSchema },
-        tags: ["ops"],
-        summary: "ヘルスチェック（依存状態付き）",
+  // Cloud Run reserves some paths ending in z; retain the local legacy URL.
+  for (const path of ["/health", "/healthz"]) {
+    app.withTypeProvider<ZodTypeProvider>().get(
+      path,
+      {
+        config: { access: { tier: "none" } },
+        schema: {
+          // degraded も標準エラーではなくヘルス応答として返す
+          response: { 200: healthResponseSchema, 503: healthResponseSchema },
+          tags: ["ops"],
+          summary: "ヘルスチェック（依存状態付き）",
+        },
       },
-    },
-    async (req, reply) => {
-      void reply.header("cache-control", "no-store");
-      const nowMs = deps.clock.now().getTime();
-      if (!cached || cached.expiresAtMs <= nowMs) {
-        // 同時到着は進行中プローブを共有し、単一インスタンス内で読取を1回に束ねる
-        inflight ??= probeFirestore(deps, req.log).finally(() => {
-          inflight = undefined;
+      async (req, reply) => {
+        void reply.header("cache-control", "no-store");
+        const nowMs = deps.clock.now().getTime();
+        if (!cached || cached.expiresAtMs <= nowMs) {
+          // 同時到着は進行中プローブを共有し、単一インスタンス内で読取を1回に束ねる
+          inflight ??= probeFirestore(deps, req.log).finally(() => {
+            inflight = undefined;
+          });
+          const result = await inflight;
+          const doneAt = deps.clock.now();
+          cached = {
+            result,
+            checkedAt: doneAt.toISOString(),
+            expiresAtMs: doneAt.getTime() + deps.config.healthzProbeCacheMs,
+          };
+        }
+        const healthy = cached.result === "ok";
+        return reply.status(healthy ? 200 : 503).send({
+          status: healthy ? "ok" : "degraded",
+          service: "mmr-api",
+          emulator: deps.config.emulator,
+          checks: { firestore: cached.result },
+          checkedAt: cached.checkedAt,
         });
-        const result = await inflight;
-        const doneAt = deps.clock.now();
-        cached = {
-          result,
-          checkedAt: doneAt.toISOString(),
-          expiresAtMs: doneAt.getTime() + deps.config.healthzProbeCacheMs,
-        };
-      }
-      const healthy = cached.result === "ok";
-      return reply.status(healthy ? 200 : 503).send({
-        status: healthy ? "ok" : "degraded",
-        service: "mmr-api",
-        emulator: deps.config.emulator,
-        checks: { firestore: cached.result },
-        checkedAt: cached.checkedAt,
-      });
-    },
-  );
+      },
+    );
+  }
 }

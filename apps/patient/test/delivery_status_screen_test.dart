@@ -76,6 +76,43 @@ void main() {
     });
   }
 
+  for (final semanticsEnabled in [false, true]) {
+    for (final (keyName, key) in [
+      ('Space', LogicalKeyboardKey.space),
+      ('Enter', LogicalKeyboardKey.enter),
+    ]) {
+      testWidgets('semantics=$semanticsEnabled で失敗からTabと$keyNameで受付済みに戻る', (
+        tester,
+      ) async {
+        await tester.pumpWidget(const DeliveryStatusPreview());
+        expect(tester.binding.semanticsEnabled, semanticsEnabled);
+
+        Future<void> focusByTab(String label) async {
+          final target = find.text('サンプル：$label');
+          for (var i = 0; i < 16; i++) {
+            await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+            await tester.pumpAndSettle();
+            if (Focus.of(tester.element(target)).hasPrimaryFocus) return;
+          }
+          expect(Focus.of(tester.element(target)).hasPrimaryFocus, isTrue);
+        }
+
+        await focusByTab('失敗');
+        await tester.sendKeyEvent(key);
+        await tester.pumpAndSettle();
+        expect(find.text('サンプルの状態：失敗'), findsOneWidget);
+
+        // 状態更新後の実フォーカスを、Tab だけで受付済みに移動する。
+        await focusByTab('受付済み');
+        expect(find.text('サンプルの状態：失敗'), findsOneWidget);
+        await tester.sendKeyEvent(key);
+        await tester.pumpAndSettle();
+        expect(find.text('サンプルの状態：受付済み'), findsOneWidget);
+        expect(find.text('サンプルの状態：失敗'), findsNothing);
+      }, semanticsEnabled: semanticsEnabled);
+    }
+  }
+
   testWidgets('狭い画面と200%文字拡大でもスクロールして全状態を表示できる', (tester) async {
     await tester.binding.setSurfaceSize(const Size(320, 568));
     addTearDown(() => tester.binding.setSurfaceSize(null));

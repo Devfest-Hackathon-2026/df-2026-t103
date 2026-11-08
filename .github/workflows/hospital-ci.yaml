@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   hospital:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: apps/hospital
@@ -38,11 +38,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Real BE and staff Cookie/BFF (Auth + Firestore + Next HTTP)
+      - name: Check Chrome availability
+        run: /usr/bin/google-chrome --version
+      - name: Real browser and BE (Auth + Firestore + Next + Chrome)
         env:
           FIREBASE_PROJECT_ID: demo-mmr-dev
           FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:19099
           FIRESTORE_EMULATOR_HOST: 127.0.0.1:18081
           FIREBASE_STORAGE_EMULATOR_HOST: 127.0.0.1:19199
           FIREBASE_DATABASE_EMULATOR_HOST: 127.0.0.1:19000
-        run: npx --yes firebase-tools@15.35.0 emulators:exec --project demo-mmr-dev --config ../../firebase.hospital-test.json --only auth,firestore 'npm run test:api'
+          HOSPITAL_CHROME_PATH: /usr/bin/google-chrome
+        run: npx --yes firebase-tools@15.35.0 emulators:exec --project demo-mmr-dev --config ../../firebase.hospital-test.json --only auth,firestore 'npm run test:browser'

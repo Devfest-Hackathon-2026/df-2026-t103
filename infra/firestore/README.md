@@ -81,6 +81,10 @@ PROJECT_ID=project-7efcc4c4-6c86-490c-ba5 bash infra/firestore/backup-export.sh 
 Terraformで重複作成しないでください。
 
 復旧手順、Storage/RTDB方針、削除競合と演習の受入は [DR手順](DR_RUNBOOK.md) を参照。
+設定とは別に成功バックアップの鮮度を確認する場合は、同手順の
+`python3 infra/firestore/backup_freshness.py --project project-7efcc4c4-6c86-490c-ba5`
+を実行します。現在のDBと同じUIDの未失効READYバックアップを対象に、24時間以内かを
+読み取りのみで判定します。復元演習や障害時のRPO/RTO受入は別途必要です。
 
 ## 課金への影響（docs/04 §11 / [S08]）
 

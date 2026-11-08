@@ -1,0 +1,12 @@
+{
+  "firestore": {
+    "rules": "firebase/firestore.rules",
+    "indexes": "firebase/firestore.indexes.json"
+  },
+  "storage": [
+    {
+      "bucket": "project-7efcc4c4-6c86-490c-ba5-patient-uploads",
+      "rules": "firebase/storage.rules"
+    }
+  ]
+}

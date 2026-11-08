@@ -23,6 +23,16 @@ WIFは長寿命SAキーを使わない。authステップでaccess token取得�
 この自動CDの配信範囲はAPI・Firestore/Storage/RTDB Rules・Firestore indexes。
 Webを配信したという意味ではない。通知の各結果と配信範囲を確認する。
 
+Firestore/Storage Rulesは `firebase.deploy.json` を使用し、東京の
+`-patient-uploads` bucketを明示する。RTDBはCLIの既定instance必須検査が
+非defaultの既存instance指定より前に走るため、`infra/storage/deploy_database_rules.py`
+から実在するSingaporeの `-status` の `/.settings/rules.json` へ配信し、取得して照合する。
+このスクリプトは指定単一projectだけを許可し、`--dry-run` では構文検証のみ行う。
+default instance/bucketを推測しない。
+Storage bucketはFirebase Storageへの登録も必要で、GCS bucketの存在だけでは不足する。
+ローカルEmulator用 `firebase.json` と旧Hosting targetの `.firebaserc` は配信先に使わない。
+[RTDB Rules管理API](https://firebase.google.com/docs/database/rest/app-management)
+
 ## 病院ポータル
 
 Cookieセッション・BFF・リクエストごとのnonce CSPを維持するため、静的exportではなく

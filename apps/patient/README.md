@@ -173,3 +173,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5066 -t lib/demo_o
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5067 -t lib/demo_body_diagram_preview.dart
 ```
+
+## 安全に関する確認プレビュー
+
+安全に関する確認（P-012）の見た目を単独で確認できます。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5068 を開きます。確認後は Ctrl+C で停止します。AI は関与しない固定質問に「はい／いいえ／わからない」の原則 3 択で答えます。「わからない」は安全側に倒して危険兆候として扱います。回答にかかわらず「緊急ではない」とは判断せず（固定ルール以外で緊急除外しない）、受診・緊急相談の固定案内を常に表示し、固定ルール（赤旗の質問に「はい」または「わからない」）に該当したときのみ固定警告を追加表示します（NFR-04）。質問・警告の確定文言は医療監修後に差し替える前提の暫定表記で、危険兆候の網羅性は保証しません。回答はメモリ上のみで、保存・送信（symptoms API）は未接続です。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5068 -t lib/demo_safety_confirm_preview.dart
+```

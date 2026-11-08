@@ -162,6 +162,7 @@ async function seedFacility(
 async function makeFinalizedQuestionnaire(
   app: FastifyInstance,
   uid: string,
+  options: { bodyLocations?: string[]; freeText?: string | null } = {},
 ): Promise<string> {
   const uniq = Math.random().toString(36).slice(2);
   const c = await app.inject({
@@ -179,7 +180,7 @@ async function makeFinalizedQuestionnaire(
     headers: authHeader(uid),
     payload: {
       initialSymptomText: "1週間頭が痛い",
-      bodyLocations: ["head"],
+      bodyLocations: options.bodyLocations ?? ["head"],
       expectedIntakeRevision: 1,
     },
   });
@@ -203,7 +204,7 @@ async function makeFinalizedQuestionnaire(
       questionId,
       questionRevision: 1,
       selectedCodes: ["GT_WEEK"],
-      freeText: null,
+      freeText: options.freeText ?? null,
       answerState: "answered",
       expectedIntakeRevision: 3,
     },
@@ -228,6 +229,39 @@ async function makeFinalizedQuestionnaire(
   });
   expect(f.statusCode).toBe(200);
   return (f.json() as { questionnaireId: string }).questionnaireId;
+}
+
+function assertQuestionnaireContent(
+  snapshot: unknown,
+  bodyLocations: string[],
+  expectedSectionValue: string,
+): void {
+  expect(snapshot).toBeTruthy();
+  if (typeof snapshot !== "object" || snapshot === null) {
+    throw new Error("questionnaire snapshot must be an object");
+  }
+  const body = snapshot as Record<string, unknown>;
+  if (!Array.isArray(body.bodyLocations)) {
+    throw new Error("questionnaire bodyLocations must be an array");
+  }
+  expect(body.bodyLocations).toEqual(bodyLocations);
+
+  const sections = body.sections;
+  if (
+    typeof sections !== "object" ||
+    sections === null ||
+    Array.isArray(sections)
+  ) {
+    throw new Error("questionnaire sections must be an object");
+  }
+  const onsetTiming = (sections as Record<string, unknown>).onset_timing;
+  expect(onsetTiming).toBeTruthy();
+  if (typeof onsetTiming !== "object" || onsetTiming === null) {
+    throw new Error("onset_timing section must be an object");
+  }
+  expect((onsetTiming as Record<string, unknown>).value).toBe(
+    expectedSectionValue,
+  );
 }
 
 async function auditActions(deps: EmulatorDeps): Promise<string[]> {
@@ -313,6 +347,73 @@ describe("E2E server-side perspectives / Firestore エミュレータ結合", ()
     const actions = await auditActions(deps);
     expect(actions).toContain(AUDIT_ACTIONS.DELIVERY_CREATED);
     expect(actions).toContain(AUDIT_ACTIONS.DELIVERY_VIEWED);
+  });
+
+  it("確定問診票の選択部位と自由記述が配送スナップショット・病院詳細まで保持される", async () => {
+    await seedAccount(deps, PATIENT);
+    await seedCurrentConsents(deps, PATIENT);
+    await seedAccount(deps, STAFF_A);
+    await seedCurrentConsents(deps, STAFF_A);
+    await seedMembership(deps, STAFF_A, FAC_A);
+    await seedFacility(deps, FAC_A);
+
+    const selectedBodyLocations = ["chest", "left_shoulder"];
+    const answerFreeText = "階段を上ると痛みが強くなります";
+    const questionnaireId = await makeFinalizedQuestionnaire(app, PATIENT, {
+      bodyLocations: selectedBodyLocations,
+      freeText: answerFreeText,
+    });
+
+    // 確定した患者向け問診票の読み取りAPIで、合成入力を検証する。
+    const questionnaireResponse = await app.inject({
+      method: "GET",
+      url: `/v1/questionnaires/${questionnaireId}`,
+      headers: authHeader(PATIENT),
+    });
+    expect(questionnaireResponse.statusCode).toBe(200);
+    const questionnaire = questionnaireResponse.json() as {
+      revision?: unknown;
+    };
+    assertQuestionnaireContent(
+      questionnaire.revision,
+      selectedBodyLocations,
+      "1週間より前　" + answerFreeText,
+    );
+
+    const deliveryResponse = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: {
+        ...authHeader(PATIENT),
+        ...idem("dlv-body-locations-free-text"),
+      },
+      payload: deliveryPayload(questionnaireId, FAC_A),
+    });
+    expect(deliveryResponse.statusCode).toBe(202);
+    const { deliveryId } = deliveryResponse.json() as { deliveryId: string };
+    const stored = (
+      await deps.firestore.doc(`deliveries/${deliveryId}`).get()
+    ).data() as DeliveryDoc;
+    assertQuestionnaireContent(
+      stored.questionnaireSnapshot,
+      selectedBodyLocations,
+      "1週間より前　" + answerFreeText,
+    );
+
+    const hospitalResponse = await app.inject({
+      method: "GET",
+      url: `/v1/hospitals/${FAC_A}/deliveries/${deliveryId}`,
+      headers: authHeader(STAFF_A),
+    });
+    expect(hospitalResponse.statusCode).toBe(200);
+    const hospitalDetail = hospitalResponse.json() as {
+      questionnaireSnapshot?: unknown;
+    };
+    assertQuestionnaireContent(
+      hospitalDetail.questionnaireSnapshot,
+      selectedBodyLocations,
+      "1週間より前　" + answerFreeText,
+    );
   });
 
   it("E2E-002: 通信断リトライで回答が二重記録されない（同一再送は409→最新で1件）", async () => {

@@ -33,6 +33,12 @@ resource "google_cloud_run_v2_service" "hospital" {
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
 
+  # Cloud Run returns these service-level defaults; retain them to avoid perpetual drift.
+  scaling {
+    min_instance_count    = 0
+    manual_instance_count = 0
+  }
+
   template {
     service_account                  = google_service_account.hospital_run.email
     max_instance_request_concurrency = 40

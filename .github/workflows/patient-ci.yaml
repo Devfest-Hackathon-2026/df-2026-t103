@@ -37,3 +37,40 @@ jobs:
       - name: flutter test
         working-directory: apps/patient
         run: flutter test
+
+  patient-e2e:
+    name: patient / intake E2E (emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - name: Set up Java (Firebase emulators requirement)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: Install api dependencies
+        working-directory: services/api
+        run: npm ci
+
+      # Stands up the emulators + real API and runs the gated Flutter intake E2E
+      # (E2E-001 / 001B / 002). firebase-tools is pinned to match the api job.
+      - name: Run patient intake E2E
+        env:
+          FIREBASE_BIN: npx -y firebase-tools@15.35.0
+          FLUTTER_BIN: flutter
+        run: bash apps/patient/tool/run_intake_e2e.sh

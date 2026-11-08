@@ -74,8 +74,8 @@ PORT=8080 node services/api/dist/index.js >/tmp/intake-e2e-api.log 2>&1 &
 API_PID=$!
 wait_port "127.0.0.1:8080"
 
-echo "==> running Flutter intake E2E"
+echo "==> running Flutter intake E2E (E2E-001 happy path + 001B consent gate)"
 cd apps/patient
-"$FLUTTER_BIN" test test/integration/patient_intake_ui_test.dart \
+"$FLUTTER_BIN" test test/integration/ \
   --dart-define=RUN_INTAKE_UI_INTEGRATION=true
 echo "==> E2E passed"

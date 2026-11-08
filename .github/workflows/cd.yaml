@@ -4,9 +4,11 @@ name: cd
 # CD パイプライン（Issue #38 / docs/02 §13.1・docs/06 §10）
 #
 # 設計方針:
-#  - 手動起動のみ（workflow_dispatch）。push では発火しない（誤デプロイ防止）。
+#  - main への push で stg へ自動デプロイ（CD）。prod は workflow_dispatch の
+#    手動起動のみ（誤本番デプロイ防止）。
 #  - 環境昇格は GitHub Environments（stg / prod）の required reviewers による
 #    手動承認ゲートで表現（§13.1-6 "stg→手動承認→prod gradual rollout"）。
+#    push 起動時は environment=stg / action=deploy に既定化される。
 #  - 認証は Workload Identity Federation（WIF）。長寿命 SA キーはリポジトリに
 #    置かない（§13.1-5）。
 #  - deploy と rollback を action 入力で切替。
@@ -27,6 +29,8 @@ name: cd
 # =============================================================================
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
@@ -55,7 +59,7 @@ permissions:
 
 concurrency:
   # 同一環境への同時デプロイを防ぐ（進行中のデプロイはキャンセルしない）
-  group: cd-${{ inputs.environment }}
+  group: cd-${{ inputs.environment || 'stg' }}
   cancel-in-progress: false
 
 env:
@@ -65,7 +69,7 @@ jobs:
   plan:
     name: plan / 構成の解決
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }} # ← ここで手動承認ゲートが働く
+    environment: ${{ inputs.environment || 'stg' }} # ← ここで手動承認ゲートが働く
     outputs:
       image: ${{ steps.vars.outputs.image }}
     steps:
@@ -76,7 +80,7 @@ jobs:
           echo "image=${image}" >> "$GITHUB_OUTPUT"
           {
             echo "## CD plan"
-            echo "- environment: \`${{ inputs.environment }}\`"
+            echo "- environment: \`${{ inputs.environment || 'stg' }}\`"
             echo "- action: \`${{ inputs.action }}\`"
             echo "- region: \`${GCP_REGION}\`"
             echo "- commit: \`${GITHUB_SHA}\`"
@@ -85,10 +89,10 @@ jobs:
 
   build-api:
     name: build-api / イメージビルド＋push
-    if: inputs.action == 'deploy'
+    if: (inputs.action || 'deploy') == 'deploy'
     needs: plan
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: ${{ inputs.environment || 'stg' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -113,10 +117,10 @@ jobs:
 
   deploy-cloud-run:
     name: deploy-cloud-run / API サービス更新
-    if: inputs.action == 'deploy'
+    if: (inputs.action || 'deploy') == 'deploy'
     needs: [plan, build-api]
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: ${{ inputs.environment || 'stg' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -153,10 +157,10 @@ jobs:
 
   deploy-rules:
     name: deploy-rules / Firestore・Storage・RTDB
-    if: inputs.action == 'deploy'
+    if: (inputs.action || 'deploy') == 'deploy'
     needs: plan
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: ${{ inputs.environment || 'stg' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -178,10 +182,10 @@ jobs:
 
   deploy-hosting:
     name: deploy-hosting / Web 配信
-    if: inputs.action == 'deploy'
+    if: (inputs.action || 'deploy') == 'deploy'
     needs: plan
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: ${{ inputs.environment || 'stg' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -223,10 +227,10 @@ jobs:
 
   rollback:
     name: rollback / 前リビジョンへ切戻し
-    if: inputs.action == 'rollback'
+    if: (inputs.action || 'deploy') == 'rollback'
     needs: plan
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: ${{ inputs.environment || 'stg' }}
     steps:
       - name: Validate input
         run: |
@@ -262,7 +266,7 @@ jobs:
       - name: Compose deploy summary
         run: |
           {
-            echo "## CD result: ${{ inputs.action }} → ${{ inputs.environment }}"
+            echo "## CD result: ${{ inputs.action }} → ${{ inputs.environment || 'stg' }}"
             echo "- commit: \`${GITHUB_SHA}\`"
             echo "- actor: \`${{ github.actor }}\`"
             echo "- build-api: ${{ needs.build-api.result }}"
@@ -279,5 +283,5 @@ jobs:
         run: |
           curl -fsS -X POST "$WEBHOOK" \
             -H 'Content-Type: application/json' \
-            -d "{\"text\":\"CD ${{ inputs.action }} -> ${{ inputs.environment }} / ${GITHUB_SHA} / run=${{ needs.deploy-cloud-run.result }} hosting=${{ needs.deploy-hosting.result }}\"}" \
+            -d "{\"text\":\"CD ${{ inputs.action }} -> ${{ inputs.environment || 'stg' }} / ${GITHUB_SHA} / run=${{ needs.deploy-cloud-run.result }} hosting=${{ needs.deploy-hosting.result }}\"}" \
             || echo "::warning::通知 Webhook の送信に失敗しました"

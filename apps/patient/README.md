@@ -173,3 +173,11 @@ flutter run -d web-server --web-hostname=localhost --web-port=5066 -t lib/demo_o
 ```sh
 flutter run -d web-server --web-hostname=localhost --web-port=5067 -t lib/demo_body_diagram_preview.dart
 ```
+
+## 共通コンポーネントのカタログ
+
+デザインシステムの共通状態（読み込み中／空／エラー／オフライン）と共通部品（主要ボタン・「医療行為でない」共通文言）をまとめて確認できるカタログ（storybook 相当）です。Flutter SDK を用意し、`apps/patient` で次を実行して http://localhost:5068 を開きます。確認後は Ctrl+C で停止します。状態は色だけでなくアイコン＋テキストで表し、本文20sp・タップ領域48pt で OS 文字拡大に耐えます。
+
+```sh
+flutter run -d web-server --web-hostname=localhost --web-port=5068 -t lib/demo_common_catalog_preview.dart
+```

@@ -147,4 +147,15 @@ await seedAccount(delUid);
 await seedCompleteProfile(delUid);
 await seedCurrentConsents(delUid);
 console.log(`seeded deletion patient uid=${delUid} email=${DEL_EMAIL}`);
+
+// A federated first-use patient: authenticated, but no account document exists
+// yet (the OAuth Auth UID is created before any app account). /me reports
+// legal_pending and intake must be gated (E2E-001C, docs/03 §3.1). No Firestore
+// docs are written for this user on purpose.
+const FED_EMAIL =
+  process.env.E2E_FEDERATED_EMAIL ?? "synthetic-federated-new@example.test";
+const FED_PASSWORD =
+  process.env.E2E_FEDERATED_PASSWORD ?? "local-only-federated-123!";
+const fedUid = await ensureNamedUser(FED_EMAIL, FED_PASSWORD);
+console.log(`seeded federated first-use patient uid=${fedUid} email=${FED_EMAIL} (no account doc)`);
 process.exit(0);

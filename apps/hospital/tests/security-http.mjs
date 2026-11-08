@@ -71,7 +71,18 @@ test("production HTTP responses retain CSP, fresh script nonces and no-store", {
       assert.equal(response.status, 307);
       assert.equal(response.headers.get("location"), `https://public.example.test${expected}`);
       assert.match(response.headers.get("cache-control"), /no-store/);
-      if (path.startsWith("/api/session/logout")) assert.match(response.headers.get("set-cookie"), /Expires=Thu, 01 Jan 1970/);
+      if (path.startsWith("/api/session/logout")) {
+        const cookies = response.headers.getSetCookie();
+        for (const name of ["__Host-mmr-session", "__Host-mmr-appcheck", "__Host-mmr-facility", "mmr-session", "mmr-appcheck", "mmr-facility"]) {
+          const expired = cookies.find((value) => value.startsWith(`${name}=`));
+          assert.ok(expired, `Logout expires ${name}`);
+          assert.match(expired, /Expires=Thu, 01 Jan 1970/i);
+          assert.match(expired, /Max-Age=0/i);
+          assert.match(expired, /Path=\//i);
+          assert.doesNotMatch(expired, /Domain=/i);
+          if (name.startsWith("__Host-")) assert.match(expired, /; Secure(?:;|$)/i, "Browsers require Secure to delete __Host- cookies");
+        }
+      }
     }
     // Router prefetches and RSC are also covered; no request-header opt-out.
     for (const headers of [{ "next-router-prefetch": "1", purpose: "prefetch" }, { RSC: "1" }]) {

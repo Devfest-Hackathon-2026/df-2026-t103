@@ -52,6 +52,7 @@ resource "google_cloud_run_v2_service" "hospital" {
       }
       dynamic "env" {
         for_each = var.hospital_client_config == null ? {} : {
+          HOSPITAL_PUBLIC_ORIGIN            = "https://hospital-842827776169.asia-northeast1.run.app"
           NODE_ENV                          = "production"
           NEXT_PUBLIC_USE_FIREBASE_EMULATOR = "false"
           NEXT_PUBLIC_FIREBASE_PROJECT_ID   = var.project_id

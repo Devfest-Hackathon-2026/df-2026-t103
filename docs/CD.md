@@ -75,6 +75,7 @@ Cloud RunのallUsers invokerはログイン画面へのHTTPアクセス用であ
    `infra/hospital/main.tf` の `hospital_image` にその初期イメージを、
    `hospital_client_config` に同じ公開値を指定し、[病院専用root](../infra/hospital/README.md) の専用stateでplanを確認して適用する。
    他資源の未importや破壊的差分があるplanは適用しない（ADR-0021）。
+   `HOSPITAL_PUBLIC_ORIGIN` はTerraformが決定的HTTPS originを設定する。リダイレクトで内部bindアドレスや受信Hostを使わない。
    runtime SAは専用 `hospital-run-sa` とし、FirestoreやSecretへの権限は付けない。
    min=0 / max=2、1CPU / 512MiBで、初期はリクエストに応じた課金となる。
    このrootは未作成と確認した病院4資源だけを管理し、既存API等をimportしない。

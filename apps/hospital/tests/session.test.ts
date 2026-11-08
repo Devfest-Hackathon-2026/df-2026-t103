@@ -6,6 +6,7 @@ import {
   PORTAL_CLIENT_HEADER,
   portalJson,
 } from "../lib/session-shared";
+import { portalRedirect } from "../lib/portal-redirect";
 import { proxy } from "../proxy";
 import { FACILITY_ID_PATTERN, facilityCookieName } from "../lib/facility-shared";
 
@@ -68,7 +69,7 @@ test("portalJson は no-store を付けて PHI の共有キャッシュを防ぐ
 test("proxy: 未ログインで業務画面へ行くと /login?next= へ戻される", () => {
   const res = proxy(request("http://localhost:3000/facilities"));
   assert.equal(res.status, 307);
-  const location = new URL(res.headers.get("location")!);
+  const location = new URL(res.headers.get("location")!, "https://public.example.test");
   assert.equal(location.pathname, "/login");
   assert.equal(location.searchParams.get("next"), "/facilities");
   assert.match(res.headers.get("cache-control") ?? "", /no-store/);
@@ -78,7 +79,7 @@ test("proxy: セッションCookieがあれば業務画面を通し、/login で
   const authed = proxy(request("http://localhost:3000/facilities", {}, { "mmr-session": "token" }));
   assert.equal(authed.headers.get("location"), null);
   const login = proxy(request("http://localhost:3000/login", {}, { "mmr-session": "token" }));
-  assert.equal(new URL(login.headers.get("location")!).pathname, "/facilities");
+  assert.equal(new URL(login.headers.get("location")!, "https://public.example.test").pathname, "/facilities");
 });
 
 test("施設コンテキスト: Cookie名とID検証", () => {
@@ -94,5 +95,41 @@ test("proxy: 公開画面は Cookie 有無に関わらずそのまま通す", ()
     const res = proxy(request("http://localhost:3000/", {}, cookies));
     assert.equal(res.headers.get("location"), null);
     assert.match(res.headers.get("cache-control") ?? "", /no-store/);
+  }
+});
+
+
+test("redirects retain configured public origin with internal URLs and hostile forwarded hosts", () => {
+  const previous = process.env.HOSPITAL_PUBLIC_ORIGIN;
+  process.env.HOSPITAL_PUBLIC_ORIGIN = "https://public.example.test";
+  try {
+    const headers = { host: "0.0.0.0:8080", "x-forwarded-host": "evil.example", "x-forwarded-proto": "http" };
+    const denied = proxy(request("http://0.0.0.0:8080/deliveries?status=delivered", headers));
+    assert.equal(denied.headers.get("location"), "https://public.example.test/login?next=%2Fdeliveries%3Fstatus%3Ddelivered");
+    const signedIn = proxy(request("http://0.0.0.0:8080/login", headers, { "mmr-session": "synthetic-token" }));
+    assert.equal(signedIn.headers.get("location"), "https://public.example.test/facilities");
+  } finally {
+    if (previous === undefined) delete process.env.HOSPITAL_PUBLIC_ORIGIN;
+    else process.env.HOSPITAL_PUBLIC_ORIGIN = previous;
+  }
+});
+
+
+test("production redirects fail closed for missing or malformed configured origin", () => {
+  const previousOrigin = process.env.HOSPITAL_PUBLIC_ORIGIN;
+  const previousNodeEnv = process.env.NODE_ENV;
+  Object.assign(process.env, { NODE_ENV: "production" });
+  try {
+    delete process.env.HOSPITAL_PUBLIC_ORIGIN;
+    assert.throws(() => portalRedirect("http://0.0.0.0:8080/", "/login"), /required/);
+    for (const origin of ["http://public.example.test", "https://user:pass@public.example.test", "https://public.example.test/path", "https://public.example.test?query=1", "https://public.example.test#fragment"]) {
+      process.env.HOSPITAL_PUBLIC_ORIGIN = origin;
+      assert.throws(() => portalRedirect("http://0.0.0.0:8080/", "/login"), /HTTPS origin/);
+    }
+  } finally {
+    if (previousOrigin === undefined) delete process.env.HOSPITAL_PUBLIC_ORIGIN;
+    else process.env.HOSPITAL_PUBLIC_ORIGIN = previousOrigin;
+    if (previousNodeEnv === undefined) Reflect.deleteProperty(process.env, "NODE_ENV");
+    else Object.assign(process.env, { NODE_ENV: previousNodeEnv });
   }
 });

@@ -1,3 +1,4 @@
+import { portalRedirect } from "./lib/portal-redirect";
 import { randomBytes } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { validateClientConfig, type ClientConfigInput } from "./lib/client-config";
@@ -102,11 +103,9 @@ export function proxy(request: NextRequest) {
 
   let response: NextResponse;
   if (isProtected && !hasSession) {
-    const url = new URL("/login", request.url);
-    url.searchParams.set("next", `${pathname}${search}`);
-    response = NextResponse.redirect(url);
+    response = portalRedirect(request.url, "/login", new URLSearchParams({ next: `${pathname}${search}` }));
   } else if (pathname === "/login" && hasSession) {
-    response = NextResponse.redirect(new URL("/facilities", request.url));
+    response = portalRedirect(request.url, "/facilities");
   } else {
     response = pass();
   }

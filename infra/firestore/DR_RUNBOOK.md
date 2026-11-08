@@ -22,7 +22,27 @@ Firestoreのマネージドバックアップを第一経路にし、追加GCS e
 PROJECT_ID=project-7efcc4c4-6c86-490c-ba5 bash infra/firestore/backup-export.sh --check
 gcloud firestore backups list \
   --project project-7efcc4c4-6c86-490c-ba5 --location asia-northeast1
+python3 infra/firestore/backup_freshness.py \
+  --project project-7efcc4c4-6c86-490c-ba5
 ```
+
+`backup_freshness.py` は現在のDBとバックアップのメタデータだけを読み取ります。
+東京のdefault DBと同じ `databaseUid`（再作成前の同名DBを除外）のバックアップから、
+READY・未失効・snapshotTimeが未来でないものを選び、最新snapshotの経過時間を判定します。
+本文、復元、設定変更は扱いません。出力は判定・時刻・経過秒のみで、UIDやresource IDは出しません。
+exit 0は確認時点で24時間以内（境界を含む）、1は古い/利用可能なバックアップなし、
+2は不正な引数/メタデータ、3は取得失敗（権限不足・timeout等）です。取得失敗を
+バックアップなしや成功へ読み替えず、原因を確認してから再実行します。
+この結果は確認時点の鮮度であり、障害発生時点のRPO・継続的保証・復元可能性・RTO達成の証明ではありません。
+
+ローカルの全Firestore運用スクリプト試験（クラウドへ接続しません）:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s infra/firestore -p 'test_*.py' -v
+```
+
+メタデータ定義: [Backup REST resource](https://docs.cloud.google.com/firestore/docs/reference/rest/v1/projects.locations.backups)、
+全ページ取得: [gcloud backups list](https://docs.cloud.google.com/sdk/gcloud/reference/firestore/backups/list)（limit省略）。
 
 日次scheduleには実行時刻の固定指定がありません。単に「日次だからRPOを保証」と判定しません。
 PITRは日次バックアップとは別経路です。本手順の `databases restore` はバックアップからの復元です。

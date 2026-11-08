@@ -118,21 +118,20 @@ void main() {
       // 対話ループへ入る（P-013/P-014）。導入文言＋実 API 由来の最初の質問
       // （常に「答えたくない」を伴う）が描画されることで、保存成功と対話接続を確認。
       await waitFor(find.text('症状を保存しました。続けて質問にお答えください。'));
+      final persistedIntakeMatches = client.details.any(
+        (detail) =>
+            detail['status'] == 'questioning' &&
+            detail['initialSymptomText'] == '合成テストの症状入力です' &&
+            detail['bodyLocations'] is List &&
+            (detail['bodyLocations'] as List).toSet().containsAll(
+              ['head', 'left_knee'],
+            ) &&
+            (detail['bodyLocations'] as List).length == 2,
+      );
       expect(
-        client.details,
-        contains(
-          predicate<Map<String, dynamic>>(
-            (detail) =>
-                detail['status'] == 'questioning' &&
-                detail['initialSymptomText'] == '合成テストの症状入力です' &&
-                detail['bodyLocations'] is List &&
-                (detail['bodyLocations'] as List).toSet().containsAll(
-                  ['head', 'left_knee'],
-                ) &&
-                (detail['bodyLocations'] as List).length == 2,
-          ),
-        ),
-        reason: 'GET /intakes/{id} must confirm the saved text and both locations',
+        persistedIntakeMatches,
+        isTrue,
+        reason: 'Saved intake details were not confirmed by the API response',
       );
       await waitFor(find.text('答えたくない'));
       await tester.tap(find.text('ログアウト'));

@@ -21,10 +21,10 @@ async function setup(): Promise<{ deps: TestDeps; app: FastifyInstance }> {
 
 // /healthz は LB 用の疎通確認であり、認証・接続先の真正性・Auth emulator の状態は
 // 検証しない。emulator フラグは設定値の表示であって、UI や本番接続の安全性を保証しない。
-describe("GET /healthz", () => {
+describe.each(["/health", "/healthz"])("GET %s", (healthPath) => {
   it("200 + 依存状態 ok を返す（認証不要）", async () => {
     const { app } = await setup();
-    const res = await app.inject({ method: "GET", url: "/healthz" });
+    const res = await app.inject({ method: "GET", url: healthPath });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.status).toBe("ok");
@@ -43,7 +43,7 @@ describe("GET /healthz", () => {
       }),
     } as unknown as TestDeps["db"];
     const app = buildTestApp(deps);
-    const res = await app.inject({ method: "GET", url: "/healthz" });
+    const res = await app.inject({ method: "GET", url: healthPath });
     expect(res.statusCode).toBe(503);
     const body = res.json();
     expect(body.status).toBe("degraded");
@@ -59,7 +59,7 @@ describe("GET /healthz", () => {
     ] as const) {
       const deps = makeTestDeps(config);
       const app = buildTestApp(deps);
-      const res = await app.inject({ method: "GET", url: "/healthz" });
+      const res = await app.inject({ method: "GET", url: healthPath });
       expect(res.statusCode).toBe(200);
       expect(res.json().emulator).toBe(expected);
       expect(res.headers["cache-control"]).toBe("no-store");
@@ -73,7 +73,7 @@ describe("GET /healthz", () => {
       doc: () => ({ get: () => new Promise(() => {}) }),
     } as unknown as TestDeps["db"];
     const app = buildTestApp(deps);
-    const res = await app.inject({ method: "GET", url: "/healthz" });
+    const res = await app.inject({ method: "GET", url: healthPath });
     expect(res.statusCode).toBe(503);
     expect(res.json().checks.firestore).toBe("error");
     await app.close();
@@ -82,7 +82,7 @@ describe("GET /healthz", () => {
   it("App Check enforce 下でも認証なしで到達できる（LB想定）", async () => {
     const deps = makeTestDeps({ appCheckMode: "enforce" });
     const app = buildTestApp(deps);
-    const res = await app.inject({ method: "GET", url: "/healthz" });
+    const res = await app.inject({ method: "GET", url: healthPath });
     expect(res.statusCode).toBe(200);
     await app.close();
   });
@@ -91,7 +91,7 @@ describe("GET /healthz", () => {
     const deps = makeTestDeps();
     // seedLegalDocuments なし: appConfigs/publicLegalVersion は存在しない
     const app = buildTestApp(deps);
-    const res = await app.inject({ method: "GET", url: "/healthz" });
+    const res = await app.inject({ method: "GET", url: healthPath });
     expect(res.statusCode).toBe(200);
     expect(res.json().checks.firestore).toBe("ok");
     await app.close();
@@ -107,17 +107,17 @@ describe("GET /healthz", () => {
     }) as typeof deps.db.doc;
     const app = buildTestApp(deps);
 
-    const r1 = await app.inject({ method: "GET", url: "/healthz" });
+    const r1 = await app.inject({ method: "GET", url: healthPath });
     expect(r1.statusCode).toBe(200);
     expect(r1.headers["cache-control"]).toBe("no-store");
     expect(r1.json().service).toBe("mmr-api");
-    const r2 = await app.inject({ method: "GET", url: "/healthz" });
+    const r2 = await app.inject({ method: "GET", url: healthPath });
     expect(r2.statusCode).toBe(200);
     expect(probeCount).toBe(1);
 
     // キャッシュ期限経過で再プローブ
     deps.clock.advanceMs(5_001);
-    const r3 = await app.inject({ method: "GET", url: "/healthz" });
+    const r3 = await app.inject({ method: "GET", url: healthPath });
     expect(r3.statusCode).toBe(200);
     expect(probeCount).toBe(2);
     await app.close();
@@ -133,14 +133,14 @@ describe("GET /healthz", () => {
       }),
     } as unknown as TestDeps["db"];
     const app = buildTestApp(deps);
-    const r1 = await app.inject({ method: "GET", url: "/healthz" });
+    const r1 = await app.inject({ method: "GET", url: healthPath });
     expect(r1.statusCode).toBe(503);
     fail = false;
     // キャッシュ内はまだ degraded
-    const r2 = await app.inject({ method: "GET", url: "/healthz" });
+    const r2 = await app.inject({ method: "GET", url: healthPath });
     expect(r2.statusCode).toBe(503);
     deps.clock.advanceMs(1_001);
-    const r3 = await app.inject({ method: "GET", url: "/healthz" });
+    const r3 = await app.inject({ method: "GET", url: healthPath });
     expect(r3.statusCode).toBe(200);
     await app.close();
   });
@@ -165,7 +165,7 @@ describe("GET /healthz", () => {
     // プローブが解決しない間に並行リクエストを発行する
     const pending = Promise.all(
       Array.from({ length: 5 }, () =>
-        app.inject({ method: "GET", url: "/healthz" }),
+        app.inject({ method: "GET", url: healthPath }),
       ),
     );
     // 全ハンドラが inflight に張り付くまで1マイクロタスク回す
@@ -1210,6 +1210,7 @@ describe("GET /docs (OpenAPI)", () => {
     const spec = res.json();
     expect(spec.openapi).toMatch(/^3\./);
     for (const p of [
+      "/health",
       "/healthz",
       "/v1/public/legal-documents",
       "/v1/auth/register",

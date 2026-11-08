@@ -59,7 +59,10 @@ def main():
              f"--dart-define-from-file={config_path}", f"--build-number={args.build_number}"]
     if args.team:
         build.append("--config-only")
-    subprocess.run(build, cwd=patient, check=True)
+    # The official plugin's Swift package selects FirebaseAnalyticsCore when
+    # this variable is present, excluding advertising identifier support.
+    build_env = {**os.environ, "FIREBASE_ANALYTICS_WITHOUT_ADID": "true"}
+    subprocess.run(build, cwd=patient, check=True, env=build_env)
     if args.unsigned:
         print("Unsigned archive compiled. It cannot be installed or uploaded to TestFlight.")
         return
@@ -69,13 +72,13 @@ def main():
         "-configuration", "Release", "-destination", "generic/platform=iOS",
         "-archivePath", str(archive), "-allowProvisioningUpdates",
         f"DEVELOPMENT_TEAM={args.team}", "CODE_SIGN_STYLE=Automatic", "archive",
-    ], cwd=patient, check=True)
+    ], cwd=patient, check=True, env=build_env)
     if export_options:
         subprocess.run([
             "xcodebuild", "-exportArchive", "-archivePath", str(archive),
             "-exportOptionsPlist", str(export_options),
             "-exportPath", str(patient / "build/ios/ipa"), "-allowProvisioningUpdates",
-        ], cwd=patient, check=True)
+        ], cwd=patient, check=True, env=build_env)
     else:
         print(f"Signed archive: {archive}. Open in Xcode Organizer to distribute.")
 

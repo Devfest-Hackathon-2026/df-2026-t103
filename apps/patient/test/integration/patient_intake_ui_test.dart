@@ -34,7 +34,13 @@ class _IntakeDetailRecordingClient extends http.BaseClient {
     // Retain the real API detail in memory while preserving the response for
     // the application. Never print or persist this potentially sensitive data.
     final bytes = await response.stream.toBytes();
-    final decoded = jsonDecode(utf8.decode(bytes));
+    late final Object? decoded;
+    try {
+      decoded = jsonDecode(utf8.decode(bytes));
+    } on FormatException {
+      // FormatException includes the source body; keep it out of test logs.
+      throw StateError('Intake detail response was not valid JSON');
+    }
     if (decoded is Map<String, dynamic>) details.add(decoded);
     return http.StreamedResponse(
       Stream<List<int>>.value(bytes),

@@ -1,35 +1,13 @@
 name: cd
 
-# =============================================================================
-# CD パイプライン（Issue #38 / docs/02 §13.1・docs/06 §10）
-#
-# 設計方針:
-#  - main への push で stg へ自動デプロイ（CD）。prod は workflow_dispatch の
-#    手動起動のみ（誤本番デプロイ防止）。
-#  - 環境昇格は GitHub Environments（stg / prod）の required reviewers による
-#    手動承認ゲートで表現（§13.1-6 "stg→手動承認→prod gradual rollout"）。
-#    push 起動時は environment=stg / action=deploy に既定化される。
-#  - 認証は Workload Identity Federation（WIF）。長寿命 SA キーはリポジトリに
-#    置かない（§13.1-5）。
-#  - deploy と rollback を action 入力で切替。
-#
-# 実行に必要なリポジトリ側の事前構成（本ワークフローの対象外・要 owner 作業）:
-#  - GitHub Environments: `stg`, `prod`（prod には required reviewers を設定）
-#  - 環境ごとの Variables:
-#      GCP_PROJECT_ID            例) project-7efcc4c4-6c86-490c-ba5
-#      GCP_WIF_PROVIDER          projects/<n>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
-#      GCP_DEPLOY_SA             github-deployer@<project>.iam.gserviceaccount.com
-#      GCP_AR_REPO               Artifact Registry リポジトリ名（例: api）
-#      RUN_SERVICE_API           Cloud Run サービス名（例: api）
-#  - （任意）Secrets: DEPLOY_NOTIFY_WEBHOOK  デプロイ結果通知用の Webhook URL
-#
-# Android/iOS のストア配信は署名材料（keystore / App Store 証明書）が未整備の
-# ため本 CD の対象外。Firebase App Distribution / Fastlane を用いた配信は別途
-# 構築する（本ファイルでは Flutter Web のみ Hosting へ配信）。
-# =============================================================================
+# API / Rules の配信。全5系統のmain CI成功後に、検証したSHAだけを配信する。
+# Web: 病院はcd-hospital.yamlのNextサーバー配信。患者はEmulator専用のため対象外。
+# stg/prodは既存GitHub Environmentの承認ラベルで、GCPは単一プロジェクト。
 
 on:
-  push:
+  workflow_run:
+    workflows: [ci, hospital-ci, patient-ci, security, storage-config]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -55,35 +33,68 @@ on:
 
 permissions:
   contents: read
+  actions: read
   id-token: write # WIF のトークン発行に必須
 
 concurrency:
-  # 同一環境への同時デプロイを防ぐ（進行中のデプロイはキャンセルしない）
-  group: cd-${{ inputs.environment || 'stg' }}
+  # Both approval labels target the same project/service; serialize them together.
+  group: cd-project-7efcc4c4-6c86-490c-ba5
   cancel-in-progress: false
 
 env:
   GCP_REGION: asia-northeast1
 
 jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/github-script@v7
+        id: check
+        with:
+          script: |
+            const gate = require('./scripts/cd-gate.cjs');
+            await gate({github, context, core});
+
   plan:
+    needs: gate
+    if: needs.gate.outputs.ready == 'true'
     name: plan / 構成の解決
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: ${{ inputs.environment || 'stg' }} # ← ここで手動承認ゲートが働く
     outputs:
+      sha: ${{ needs.gate.outputs.sha }}
       image: ${{ steps.vars.outputs.image }}
     steps:
       - name: Resolve deploy plan
         id: vars
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_AR_REPO: ${{ vars.GCP_AR_REPO }}
+          RUN_SERVICE_API: ${{ vars.RUN_SERVICE_API }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+          DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
         run: |
-          image="${GCP_REGION}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/${{ vars.RUN_SERVICE_API }}:${GITHUB_SHA}"
+          for key in GCP_PROJECT_ID GCP_AR_REPO RUN_SERVICE_API GCP_WIF_PROVIDER GCP_DEPLOY_SA; do
+            test -n "${!key}" || { echo "::error::Missing variable: $key"; exit 1; }
+          done
+          test "$GCP_PROJECT_ID" = project-7efcc4c4-6c86-490c-ba5 || exit 1
+          image="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_AR_REPO}/${RUN_SERVICE_API}:${DEPLOY_SHA}"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
           {
             echo "## CD plan"
             echo "- environment: \`${{ inputs.environment || 'stg' }}\`"
             echo "- action: \`${{ inputs.action }}\`"
             echo "- region: \`${GCP_REGION}\`"
-            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- commit: \`${DEPLOY_SHA}\`"
             echo "- image: \`${image}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -91,10 +102,15 @@ jobs:
     name: build-api / イメージビルド＋push
     if: (inputs.action || 'deploy') == 'deploy'
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: ${{ inputs.environment || 'stg' }}
+    env:
+      DEPLOY_SHA: ${{ needs.plan.outputs.sha }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
 
       - id: auth
         name: Authenticate to Google Cloud (WIF)
@@ -103,6 +119,7 @@ jobs:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
+          token_format: access_token
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -119,10 +136,15 @@ jobs:
     name: deploy-cloud-run / API サービス更新
     if: (inputs.action || 'deploy') == 'deploy'
     needs: [plan, build-api]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: ${{ inputs.environment || 'stg' }}
+    env:
+      DEPLOY_SHA: ${{ needs.plan.outputs.sha }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
 
       - id: auth
         uses: google-github-actions/auth@v2
@@ -130,6 +152,7 @@ jobs:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
+          token_format: access_token
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -141,28 +164,31 @@ jobs:
             --region "${GCP_REGION}" \
             --image "${{ needs.plan.outputs.image }}" \
             --no-traffic \
-            --tag "sha-${GITHUB_SHA::7}" \
+            --revision-suffix "sha-${DEPLOY_SHA::12}" \
             --quiet
 
       - name: Shift traffic to new revision
-        # stg は即時 100%、prod は段階（10%→確認→100%）を想定。
-        # ここでは最新リビジョンへ 100% 切替。canary を細分化する場合は
-        # --to-revisions で比率指定し、監視後に再実行する。
+        # この実行が作った正確なリビジョンへ切替える。to-latest は使わない。
         run: |
           gcloud run services update-traffic "${{ vars.RUN_SERVICE_API }}" \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --region "${GCP_REGION}" \
-            --to-latest \
+            --to-revisions "${{ vars.RUN_SERVICE_API }}-sha-${DEPLOY_SHA::12}=100" \
             --quiet
 
   deploy-rules:
     name: deploy-rules / Firestore・Storage・RTDB
     if: (inputs.action || 'deploy') == 'deploy'
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: ${{ inputs.environment || 'stg' }}
+    env:
+      DEPLOY_SHA: ${{ needs.plan.outputs.sha }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
 
       - id: auth
         uses: google-github-actions/auth@v2
@@ -170,58 +196,18 @@ jobs:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
-
-      - name: Deploy security rules & indexes
-        # firebase-tools は WIF で得た GOOGLE_APPLICATION_CREDENTIALS を利用。
-        # rules の更新は医療監修レビュー前提（§13.1-7）。
-        run: |
-          npx -y firebase-tools deploy \
-            --only firestore:rules,firestore:indexes,storage,database \
-            --project "${{ vars.GCP_PROJECT_ID }}" \
-            --non-interactive
-
-  deploy-hosting:
-    name: deploy-hosting / Web 配信
-    if: (inputs.action || 'deploy') == 'deploy'
-    needs: plan
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment || 'stg' }}
-    steps:
-      - uses: actions/checkout@v5
+          token_format: access_token
 
       - uses: actions/setup-node@v5
         with:
           node-version: 22
 
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: 3.47.4
-          channel: stable
-          cache: true
-
-      - name: Build patient Flutter Web (app)
-        working-directory: apps/patient
+      - name: Deploy security rules & indexes
+        # firebase-tools は WIF で得た GOOGLE_APPLICATION_CREDENTIALS を利用。
+        # rules の更新は医療監修レビュー前提（§13.1-7）。
         run: |
-          flutter pub get
-          flutter build web --release
-
-      - name: Build hospital Next.js static export
-        working-directory: apps/hospital
-        run: |
-          npm ci
-          npm run build
-
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOY_SA }}
-
-      - name: Deploy Hosting (app + hospital)
-        run: |
-          npx -y firebase-tools deploy \
-            --only hosting \
+          npx -y firebase-tools@15.35.0 deploy \
+            --only firestore:rules,firestore:indexes,storage,database \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --non-interactive
 
@@ -229,12 +215,15 @@ jobs:
     name: rollback / 前リビジョンへ切戻し
     if: (inputs.action || 'deploy') == 'rollback'
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: ${{ inputs.environment || 'stg' }}
+    env:
+      DEPLOY_SHA: ${{ needs.plan.outputs.sha }}
+      ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
     steps:
       - name: Validate input
         run: |
-          if [ -z "${{ inputs.rollback_revision }}" ]; then
+          if [ -z "${ROLLBACK_REVISION}" ]; then
             echo "::error::rollback には rollback_revision（戻し先リビジョン名）が必須です"
             exit 1
           fi
@@ -245,6 +234,7 @@ jobs:
           project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
+          token_format: access_token
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -253,26 +243,27 @@ jobs:
           gcloud run services update-traffic "${{ vars.RUN_SERVICE_API }}" \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --region "${GCP_REGION}" \
-            --to-revisions "${{ inputs.rollback_revision }}=100" \
+            --to-revisions "${ROLLBACK_REVISION}=100" \
             --quiet
-          echo "::notice::Cloud Run を ${{ inputs.rollback_revision }} へ 100% 切戻しました。Firestore/Storage rules は git revert → deploy-rules 再実行で戻してください。"
+          echo "::notice::Cloud Run を ${ROLLBACK_REVISION} へ 100% 切戻しました。Firestore/Storage rules は git revert → deploy-rules 再実行で戻してください。"
 
   notify:
     name: notify / 監査・通知
-    if: always()
-    needs: [plan, build-api, deploy-cloud-run, deploy-rules, deploy-hosting, rollback]
-    runs-on: ubuntu-latest
+    if: always() && needs.gate.outputs.ready == 'true'
+    needs: [gate, plan, build-api, deploy-cloud-run, deploy-rules, rollback]
+    runs-on: ubuntu-24.04
+    env:
+      DEPLOY_SHA: ${{ needs.plan.outputs.sha }}
     steps:
       - name: Compose deploy summary
         run: |
           {
             echo "## CD result: ${{ inputs.action }} → ${{ inputs.environment || 'stg' }}"
-            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- commit: \`${DEPLOY_SHA}\`"
             echo "- actor: \`${{ github.actor }}\`"
             echo "- build-api: ${{ needs.build-api.result }}"
             echo "- deploy-cloud-run: ${{ needs.deploy-cloud-run.result }}"
             echo "- deploy-rules: ${{ needs.deploy-rules.result }}"
-            echo "- deploy-hosting: ${{ needs.deploy-hosting.result }}"
             echo "- rollback: ${{ needs.rollback.result }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -283,5 +274,5 @@ jobs:
         run: |
           curl -fsS -X POST "$WEBHOOK" \
             -H 'Content-Type: application/json' \
-            -d "{\"text\":\"CD ${{ inputs.action }} -> ${{ inputs.environment || 'stg' }} / ${GITHUB_SHA} / run=${{ needs.deploy-cloud-run.result }} hosting=${{ needs.deploy-hosting.result }}\"}" \
+            -d "{\"text\":\"CD ${{ inputs.action }} -> ${{ inputs.environment || 'stg' }} / ${DEPLOY_SHA} / run=${{ needs.deploy-cloud-run.result }}\"}" \
             || echo "::warning::通知 Webhook の送信に失敗しました"

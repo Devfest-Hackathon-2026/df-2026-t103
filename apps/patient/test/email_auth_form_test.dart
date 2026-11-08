@@ -136,6 +136,37 @@ void main() {
     expect(find.textContaining('sensitive details'), findsNothing);
   });
 
+  testWidgets('レート制限時は待つよう案内し再試行できる（FR-A02）', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      app(
+        login: (e, p) async {
+          calls++;
+          return EmailAuthResult.rateLimited;
+        },
+      ),
+    );
+    await enterCredentials(tester);
+    await tapVisible(tester, find.text('ログインする'));
+    expect(
+      find.text('試行が多いため、安全のため一時的に制限されています。しばらく時間をおいてからお試しください。'),
+      findsOneWidget,
+    );
+    // 一般的な失敗文言とは区別され、即時の再試行を促さない。
+    expect(find.text('処理に失敗しました。もう一度お試しください。'), findsNothing);
+    // 送信ボタンは無効化されず、待ってから再試行できる。
+    expect(
+      tester
+          .widget<ElevatedButton>(
+            find.widgetWithText(ElevatedButton, 'ログインする'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    await tapVisible(tester, find.text('ログインする'));
+    expect(calls, 2);
+  });
+
   testWidgets('文書が差し替わると同意を取り直す', (tester) async {
     Future<EmailAuthResult> register(
       String e,

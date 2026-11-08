@@ -37,8 +37,8 @@ permissions:
   id-token: write # WIF のトークン発行に必須
 
 concurrency:
-  # 同一環境への同時デプロイを防ぐ（進行中のデプロイはキャンセルしない）
-  group: cd-${{ inputs.environment || 'stg' }}
+  # Both approval labels target the same project/service; serialize them together.
+  group: cd-project-7efcc4c4-6c86-490c-ba5
   cancel-in-progress: false
 
 env:

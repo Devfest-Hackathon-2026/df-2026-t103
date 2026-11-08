@@ -176,6 +176,11 @@ jobs:
             --to-revisions "${{ vars.RUN_SERVICE_API }}-sha-${DEPLOY_SHA::12}=100" \
             --quiet
 
+      - name: Verify public API health
+        run: |
+          origin="$(gcloud run services describe "${{ vars.RUN_SERVICE_API }}" --project "${{ vars.GCP_PROJECT_ID }}" --region "$GCP_REGION" --format='value(status.url)')"
+          curl --fail --silent --show-error --max-time 20 "$origin/health" -o /dev/null
+
   deploy-rules:
     name: deploy-rules / Firestore・Storage・RTDB
     if: (inputs.action || 'deploy') == 'deploy'

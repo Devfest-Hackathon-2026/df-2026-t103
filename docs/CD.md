@@ -10,6 +10,9 @@ GCPは `project-7efcc4c4-6c86-490c-ba5` 一つを使う。GitHub Environment名�
 古いSHA、PR/forkの実行、未完了・失敗・skippedは配信を許可しない。
 各checkoutとイメージタグはゲートが検証したSHAを使い、Cloud Runのトラフィックも
 その実行で作成したリビジョン名へ切り替える。
+切替後は公開 `/health` の200応答も確認する。`/healthz` はローカル互換用として残すが、
+Cloud Runの予約パスに抵触するため公開監視には使わない。
+[Cloud Runの予約URL制約](https://docs.cloud.google.com/run/docs/known-issues#reserved-url-paths)
 手動deployもmainと同じCI条件が必要。明示的なrollbackは既存リビジョンへ戻す操作なので
 CI障害時にも使える。Environmentの承認ゲートはどちらも維持する。
 

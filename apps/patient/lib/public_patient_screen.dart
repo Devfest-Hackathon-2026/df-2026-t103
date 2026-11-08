@@ -15,6 +15,8 @@ class PublicPatientScreen extends StatefulWidget {
     required this.resetPassword,
     required this.changes,
     this.initialFacilityId = '',
+    this.refreshEmailVerification,
+    this.sendEmailVerification,
   });
   final PublicPatientApi api;
   final Future<void> Function(String, String) signIn;
@@ -22,6 +24,8 @@ class PublicPatientScreen extends StatefulWidget {
   final Future<void> Function(String) resetPassword;
   final Stream<void> changes;
   final String initialFacilityId;
+  final Future<bool> Function()? refreshEmailVerification;
+  final Future<void> Function()? sendEmailVerification;
   @override
   State<PublicPatientScreen> createState() => _PublicPatientScreenState();
 }
@@ -31,6 +35,24 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   final _symptom = TextEditingController(),
       _facilityId = TextEditingController();
   late final StreamSubscription<void> _subscription;
+  final _profileFields = <String, TextEditingController>{
+    for (final key in [
+      'familyName',
+      'givenName',
+      'familyNameKana',
+      'givenNameKana',
+      'birthDate',
+      'phoneNumber',
+      'postalCode',
+      'prefecture',
+      'city',
+      'line1',
+    ])
+      key: TextEditingController(),
+  };
+  Map<String, dynamic> _legal = {};
+  final _accepted = <String>{};
+  String? _consentKey;
   String _step = 'login';
   bool _busy = false,
       _reviewed = false,
@@ -85,6 +107,12 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _disclosureHash = null;
     _history = [];
     _symptom.clear();
+    _legal = {};
+    _accepted.clear();
+    _consentKey = null;
+    for (final field in _profileFields.values) {
+      field.clear();
+    }
     _password.clear();
     _bodyLocation = 'whole_body';
     _questionnaireRevision = 1;
@@ -95,7 +123,13 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   @override
   void dispose() {
     _subscription.cancel();
-    for (final c in [_email, _password, _symptom, _facilityId]) {
+    for (final c in [
+      _email,
+      _password,
+      _symptom,
+      _facilityId,
+      ..._profileFields.values,
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -141,23 +175,14 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       });
       _password.clear();
       final generation = _generation;
-      final me = await api.request('GET', '/me');
+      await _resumeRegistration();
       if (!mounted || generation != _generation) return;
-      final consent = me['requiredConsents'];
-      if (me['accountStatus'] != 'active' ||
-          me['emailVerified'] != true ||
-          me['profileComplete'] != true ||
-          consent is! Map ||
-          consent['current'] != true) {
-        throw const PatientRequestFailure('412');
-      }
-      setState(() {
-        _step = 'home';
-      });
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'ログインまたは利用状態を確認できません。メール認証・同意・プロフィール登録済みの確認用アカウントを使用してください。';
+          _error = e is PatientRequestFailure
+              ? e.message
+              : 'メールアドレス・パスワードと接続を確認してください。';
         });
       }
     } finally {
@@ -169,6 +194,143 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       }
     }
   }
+
+  Future<void> _resumeRegistration() async {
+    final generation = _generation;
+    final refresh = widget.refreshEmailVerification;
+    if (refresh != null && !await refresh()) {
+      if (mounted && generation == _generation) {
+        setState(() {
+          _step = 'verify';
+        });
+      }
+      return;
+    }
+    final me = await api.request('GET', '/me');
+    if (!mounted || generation != _generation) return;
+    final status = me['accountStatus'];
+    if (status != null &&
+        status != 'active' &&
+        status != 'onboarding_pending') {
+      throw const PatientRequestFailure('403');
+    }
+    if (me['emailVerified'] != true) {
+      setState(() {
+        _step = 'verify';
+      });
+      return;
+    }
+    final consent = me['requiredConsents'];
+    if (consent is! Map || consent['current'] != true) {
+      await _loadRegistrationDocuments();
+      return;
+    }
+    setState(() {
+      _step = status == 'active' && me['profileComplete'] == true
+          ? 'home'
+          : 'profile';
+    });
+  }
+
+  Future<void> _loadRegistrationDocuments() async {
+    final generation = _generation;
+    final response = await api.request('GET', '/public/legal-documents');
+    final required = response['requiredConsents'];
+    final documents = response['documents'];
+    const baseline = {
+      'terms_of_service',
+      'privacy_policy_ack',
+      'health_data_collection',
+    };
+    if (required is! List ||
+        documents is! Map ||
+        required.isEmpty ||
+        !required.toSet().containsAll(baseline)) {
+      throw const PatientRequestFailure('LEGAL_UNAVAILABLE');
+    }
+    final selected = <String, dynamic>{};
+    for (final type in required) {
+      final doc = documents[type];
+      if (type is! String ||
+          !_legalLabels.containsKey(type) ||
+          doc is! Map ||
+          doc['text'] is! String ||
+          (doc['text'] as String).trim().isEmpty ||
+          (doc['text'] as String).length > 50000 ||
+          doc['version'] is! String ||
+          (doc['version'] as String).isEmpty ||
+          doc['documentHash'] is! String ||
+          (doc['documentHash'] as String).isEmpty) {
+        throw const PatientRequestFailure('LEGAL_UNAVAILABLE');
+      }
+      selected[type] = Map<String, dynamic>.from(doc);
+    }
+    if (!mounted || generation != _generation) return;
+    setState(() {
+      _legal = selected;
+      _accepted.clear();
+      _consentKey = null;
+      _step = 'consent';
+    });
+  }
+
+  Future<void> _submitRegistrationConsents() async {
+    if (_legal.isEmpty || !_accepted.containsAll(_legal.keys)) {
+      throw const PatientRequestFailure('412');
+    }
+    _consentKey ??= patientOperationKey();
+    try {
+      await api.request(
+        'POST',
+        '/onboarding/consents',
+        key: _consentKey,
+        body: {
+          'locale': 'ja-JP',
+          'consents': {
+            for (final entry in _legal.entries)
+              entry.key: {
+                'accepted': true,
+                'documentVersion': entry.value['version'],
+              },
+          },
+        },
+      );
+    } on PatientRequestFailure catch (e) {
+      if (e.code == '412') await _loadRegistrationDocuments();
+      rethrow;
+    }
+    await _resumeRegistration();
+  }
+
+  Future<void> _saveRegistrationProfile() async {
+    final fields = {
+      for (final e in _profileFields.entries) e.key: e.value.text.trim(),
+    };
+    if (fields.values.any((v) => v.isEmpty)) {
+      throw const PatientRequestFailure('400');
+    }
+    await api.request(
+      'PATCH',
+      '/me/profile',
+      body: {
+        for (final entry in fields.entries)
+          if (!{'prefecture', 'city', 'line1'}.contains(entry.key))
+            entry.key: entry.value,
+        'address': {
+          for (final key in ['prefecture', 'city', 'line1']) key: fields[key],
+        },
+      },
+    );
+    await _resumeRegistration();
+  }
+
+  static const _legalLabels = {
+    'terms_of_service': '利用規約',
+    'privacy_policy_ack': 'プライバシーについて',
+    'health_data_collection': '健康情報の取得について',
+    'hospital_disclosure': '医療機関への情報提供について',
+    'optional_analytics': '利用状況の解析について',
+  };
 
   Future<void> _loadIntake() async {
     _intake = await api.request('GET', '/intakes/${_id(_intakeId)}');
@@ -457,6 +619,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   }) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 10),
     child: TextField(
+      key: ValueKey(label),
       controller: controller,
       enabled: !_busy,
       readOnly: readOnly,
@@ -517,7 +680,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
       ),
       const SizedBox(height: 12),
-      const Text('確認用アカウントでログインしてください。'),
+      const Text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
       _field('メールアドレス', _email),
       _field('パスワード', _password, secret: true),
       FilledButton(onPressed: _busy ? null : _login, child: const Text('ログイン')),
@@ -541,6 +704,78 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
               }),
         child: const Text('パスワードを再設定'),
       ),
+    ],
+    'verify' => [
+      const Text(
+        'メールアドレスの確認',
+        style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+      ),
+      const Text('確認メール内のリンクを開いたあと、「確認状況を更新」を押してください。'),
+      _button('確認メールを送信', () async {
+        final send = widget.sendEmailVerification;
+        if (send == null) throw const PatientRequestFailure('UNAVAILABLE');
+        await send();
+        if (mounted) {
+          setState(() {
+            _notice = '確認メールを送信しました。';
+          });
+        }
+      }, enabled: widget.sendEmailVerification != null),
+      _button('確認状況を更新', _resumeRegistration),
+    ],
+    'consent' => [
+      const Text(
+        'ご利用前の確認',
+        style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+      ),
+      const Text('各文書を読み、同意する項目を選んでください。医療機関への送信は、問診後に別途確認します。'),
+      for (final entry in _legal.entries) ...[
+        const SizedBox(height: 20),
+        Text(
+          '${_legalLabels[entry.key]}（${entry.value['version']}）',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        SelectableText(entry.value['text'] as String),
+        CheckboxListTile(
+          title: Text('${_legalLabels[entry.key]}に同意する'),
+          value: _accepted.contains(entry.key),
+          onChanged: _busy || _consentKey != null
+              ? null
+              : (value) => setState(() {
+                  if (value == true) {
+                    _accepted.add(entry.key);
+                  } else {
+                    _accepted.remove(entry.key);
+                  }
+                }),
+        ),
+      ],
+      _button(
+        '同意して登録を続ける',
+        _submitRegistrationConsents,
+        enabled: _legal.isNotEmpty && _accepted.containsAll(_legal.keys),
+      ),
+    ],
+    'profile' => [
+      const Text(
+        'プロフィール登録',
+        style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+      ),
+      const Text('問診を始める前に必須項目を入力してください。'),
+      for (final entry in const {
+        'familyName': '姓',
+        'givenName': '名',
+        'familyNameKana': '姓（カタカナ）',
+        'givenNameKana': '名（カタカナ）',
+        'birthDate': '生年月日（例：1990-01-01）',
+        'phoneNumber': '電話番号',
+        'postalCode': '郵便番号（7桁）',
+        'prefecture': '都道府県（例：東京都）',
+        'city': '市区町村',
+        'line1': '町名・番地',
+      }.entries)
+        _field(entry.value, _profileFields[entry.key]!),
+      _button('プロフィールを保存して問診へ', _saveRegistrationProfile),
     ],
     'home' => [
       const Text(
@@ -783,7 +1018,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
                 if (_notice != null)
                   Semantics(liveRegion: true, child: Text(_notice!)),
                 ..._content(),
-                if (!['login', 'home'].contains(_step))
+                if (!['login', 'home', 'verify', 'consent', 'profile'].contains(_step))
                   TextButton(
                     onPressed: _busy
                         ? null

@@ -20,6 +20,8 @@ Future<void> main() async {
           signOut: connection.signOut,
           resetPassword: connection.resetPassword,
           changes: connection.changes,
+          refreshEmailVerification: connection.refreshEmailVerification,
+          sendEmailVerification: connection.sendEmailVerification,
           initialFacilityId: config.facilityId,
         ),
       ),

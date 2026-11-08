@@ -13,6 +13,8 @@ class PatientRequestFailure implements Exception {
   const PatientRequestFailure(this.code);
   final String code;
   String get message => switch (code) {
+    'LEGAL_UNAVAILABLE' => '利用文書を確認できません。運営者による文書の準備が必要です。',
+    '500' || '503' => 'サービスの準備状況を確認できません。時間をおいて再試行してください。',
     '401' => 'ログインの有効期限が切れました。ログインし直してください。',
     '403' => 'この操作を行う権限がありません。利用状態を確認してください。',
     '409' => '保存状態が更新されています。「保存状態を再確認」で最新状態を取得してください。',

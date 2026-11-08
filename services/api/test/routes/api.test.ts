@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { DEV_LEGAL_DOCUMENTS } from "../../src/domain/legalDocuments.js";
@@ -179,6 +180,26 @@ describe.each(["/health", "/healthz"])("GET %s", (healthPath) => {
 });
 
 describe("GET /v1/public/legal-documents", () => {
+  it.each([true, false])("文書本文はハッシュ一致時だけ公開する: %s", async (matches) => {
+    const { deps, app } = await setup();
+    const text = "合成データの文書本文です。";
+    await deps.db.doc("appConfigs/publicLegalVersion").set({
+      ...DEV_LEGAL_DOCUMENTS,
+      documents: {
+        ...DEV_LEGAL_DOCUMENTS.documents,
+        terms_of_service: {
+          ...DEV_LEGAL_DOCUMENTS.documents.terms_of_service,
+          text,
+          documentHash: matches ? "sha256:" + createHash("sha256").update(text).digest("hex") : "sha256:wrong",
+        },
+      },
+    });
+    const res = await app.inject({ method: "GET", url: "/v1/public/legal-documents" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().documents.terms_of_service.text).toBe(matches ? text : undefined);
+    await app.close();
+  });
+
   it("現行文書セット（版・ハッシュ・必須一覧）を返す", async () => {
     const { deps, app } = await setup();
     const res = await app.inject({

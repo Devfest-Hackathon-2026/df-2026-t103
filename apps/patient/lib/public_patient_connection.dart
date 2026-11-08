@@ -90,6 +90,20 @@ class PublicPatientConnection {
     _syncIdentity(credential.user);
   }
 
+  Future<bool> refreshEmailVerification() async {
+    await FirebaseAuth.instance.currentUser?.reload();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) throw const PatientRequestFailure('401');
+    await user.getIdToken(true);
+    return user.emailVerified;
+  }
+
+  Future<void> sendEmailVerification() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) throw const PatientRequestFailure('401');
+    await user.sendEmailVerification();
+  }
+
   Future<void> signOut() async {
     await FirebaseAuth.instance.signOut();
     _syncIdentity(null);

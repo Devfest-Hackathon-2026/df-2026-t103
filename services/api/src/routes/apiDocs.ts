@@ -44,6 +44,7 @@ export const legalDocumentsResponseSchema = z.object({
       version: z.string(),
       documentHash: z.string(),
       publishedAt: z.string(),
+      text: z.string().min(1).max(50_000).optional(),
     }),
   ),
   requiredConsents: z.array(z.string()),

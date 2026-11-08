@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -7,7 +8,372 @@ import 'package:http/testing.dart';
 import 'package:patient/public_patient_api.dart';
 import 'package:patient/public_patient_screen.dart';
 
+Map<String, dynamic> _question(String id, int index) => {
+  'questionId': id,
+  'questionRevision': 1,
+  'stepIndex': index,
+  'questionText': '合成の質問$id',
+  'options': [
+    {'code': 'YES', 'label': 'はい'},
+  ],
+};
+
+class _IntakeBackend {
+  final answers = <Map<String, dynamic>>[];
+  final postedAnswers = <Map<String, dynamic>>[];
+  int revision = 1;
+  int nextQuestion = 1;
+  bool symptomsSaved = false;
+  bool loseFirstAnswerResponse = false;
+  int lostAnswerResponseStatus = 503;
+  bool failNextIntakeGet = false;
+  Object? intakeAnswersOverride;
+  Completer<void>? intakeGetGate;
+  Completer<void>? nextQuestionGate;
+  int answerPosts = 0;
+
+  http.Response json(Map<String, dynamic> value, [int status = 200]) =>
+      http.Response(
+        jsonEncode(value),
+        status,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+
+  http.Client client() => MockClient((request) async {
+    final path = request.url.path;
+    if (path == '/v1/me') {
+      return json({
+        'accountStatus': 'active',
+        'emailVerified': true,
+        'profileComplete': true,
+        'requiredConsents': {'current': true},
+      });
+    }
+    if (path == '/v1/intakes' && request.method == 'POST') {
+      return json({'intakeId': 'intake-1'});
+    }
+    if (path == '/v1/intakes/intake-1/symptoms') {
+      symptomsSaved = true;
+      revision = 2;
+      return json({'ok': true});
+    }
+    if (path == '/v1/intakes/intake-1' && request.method == 'GET') {
+      if (failNextIntakeGet) {
+        failNextIntakeGet = false;
+        return json({'error': 'synthetic read failure'}, 503);
+      }
+      await intakeGetGate?.future;
+      final questionId = nextQuestion == 1 ? 'q1' : 'q2';
+      final current = _question(questionId, nextQuestion - 1)
+        ..['status'] = answers.any((a) => a['questionId'] == questionId)
+            ? 'answered'
+            : 'active';
+      return json({
+        'intakeId': 'intake-1',
+        'status': symptomsSaved ? 'questioning' : 'draft',
+        'revision': revision,
+        'questions': symptomsSaved ? [current] : <dynamic>[],
+        'answers': intakeAnswersOverride ?? answers,
+      });
+    }
+    if (path == '/v1/intakes/intake-1/next-question') {
+      await nextQuestionGate?.future;
+      nextQuestion++;
+      return json({
+        'intakeId': 'intake-1',
+        'intakeRevision': revision,
+        'question': _question('q$nextQuestion', nextQuestion - 1),
+      });
+    }
+    if (path == '/v1/intakes/intake-1/answers') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      answerPosts++;
+      postedAnswers.add(body);
+      answers.add({
+        'answerId': body['questionId'],
+        ...body,
+        'stepIndex': 0,
+        'answeredAt': 'now',
+        'updatedAt': 'now',
+      });
+      revision++;
+      if (loseFirstAnswerResponse) {
+        loseFirstAnswerResponse = false;
+        return json({'error': 'synthetic response loss'}, lostAnswerResponseStatus);
+      }
+      return json({'answerId': body['questionId'], 'intakeRevision': revision});
+    }
+    fail('Unexpected request: ${request.method} $path');
+  });
+}
+
+Future<void> _openQuestion(
+  WidgetTester tester,
+  _IntakeBackend backend, {
+  Stream<void> changes = const Stream<void>.empty(),
+}) async {
+  final client = backend.client();
+  addTearDown(client.close);
+  await tester.pumpWidget(
+    MaterialApp(
+      home: PublicPatientScreen(
+        api: PublicPatientApi(
+          origin: 'https://api.example.test',
+          client: client,
+          tokens: () async => (auth: 'synthetic', appCheck: 'synthetic'),
+          session: () => backend,
+        ),
+        signIn: (_, _) async {},
+        signOut: () async {},
+        resetPassword: (_) async {},
+        changes: changes,
+      ),
+    ),
+  );
+  Future<void> tap(String label) async {
+    await tester.ensureVisible(find.text(label));
+    await tester.tap(find.text(label));
+    await tester.pumpAndSettle();
+  }
+
+  await tap('ログイン');
+  await tap('新しい問診をはじめる');
+  await tester.enterText(find.byKey(const ValueKey('症状（1〜1000文字）')), '合成症状');
+  await tap('保存して質問へ進む');
+  expect(find.text('合成の質問q1'), findsOneWidget);
+}
+
 void main() {
+  testWidgets(
+    'posts optional freeText separately and clears it on question change',
+    (tester) async {
+      final backend = _IntakeBackend();
+      await _openQuestion(tester, backend);
+      await tester.enterText(
+        find.byKey(const ValueKey('回答（任意）')),
+        '  昨夜から痛みます  ',
+      );
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+
+      expect(backend.postedAnswers.single, {
+        'questionId': 'q1',
+        'questionRevision': 1,
+        'selectedCodes': ['YES'],
+        'answerState': 'answered',
+        'freeText': '  昨夜から痛みます  ',
+        'expectedIntakeRevision': 2,
+      });
+      expect(find.text('合成の質問q2'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('回答（任意）')))
+            .controller!
+            .text,
+        isEmpty,
+      );
+    },
+  );
+
+  for (final status in [409, 412]) {
+    testWidgets('does not infer safe retry from HTTP $status', (tester) async {
+      final backend = _IntakeBackend()
+        ..loseFirstAnswerResponse = true
+        ..lostAnswerResponseStatus = status;
+      await _openQuestion(tester, backend);
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+
+      expect(backend.answerPosts, 1);
+      expect(find.textContaining('保存結果を確認できません'), findsOneWidget);
+      expect(find.text('保存状態を再確認'), findsNothing);
+      await tester.pumpAndSettle();
+      expect(backend.answerPosts, 1);
+    });
+  }
+
+  testWidgets('limits freeText by UTF-16 code units and omits it for skip', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend();
+    await _openQuestion(tester, backend);
+    final answerField = find.byKey(const ValueKey('回答（任意）'));
+    await tester.enterText(answerField, '😀' * 1001);
+    final value = tester.widget<TextField>(answerField).controller!.text;
+    expect(value.length, 2000);
+    expect(value, '😀' * 1000);
+    await tester.tap(find.text('答えたくない'));
+    await tester.pumpAndSettle();
+
+    expect(backend.postedAnswers.single['answerState'], 'skipped');
+    expect(backend.postedAnswers.single.containsKey('freeText'), isFalse);
+  });
+
+  for (final malformed in [
+    {'answers': <String, dynamic>{}},
+    {'answers': [<String, dynamic>{'questionId': 'q1'}]},
+    {
+      'answers': [
+        {
+          'answerId': 'a1',
+          'questionId': 'q1',
+          'questionRevision': '1',
+          'stepIndex': 0,
+          'selectedCodes': <String>[],
+          'freeText': null,
+          'answerState': 'answered',
+          'answeredAt': 'now',
+          'updatedAt': 'now',
+        },
+      ],
+    },
+  ]) {
+    testWidgets('malformed preflight answers fail closed: ${malformed.keys}', (
+      tester,
+    ) async {
+      final backend = _IntakeBackend();
+      await _openQuestion(tester, backend);
+      backend.intakeAnswersOverride = malformed['answers'];
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+
+      expect(backend.answerPosts, 0);
+      expect(find.text('合成の質問q1'), findsOneWidget);
+      expect(find.textContaining('通信結果を確認できません'), findsOneWidget);
+    });
+  }
+
+  testWidgets(
+    'stops after uncertain save without posting twice or claiming success',
+    (tester) async {
+      final backend = _IntakeBackend()..loseFirstAnswerResponse = true;
+      await _openQuestion(tester, backend);
+      await tester.enterText(find.byKey(const ValueKey('回答（任意）')), '合成の補足');
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+
+      expect(backend.answerPosts, 1);
+      expect(find.text('合成の質問q1'), findsOneWidget);
+      expect(find.textContaining('サービスの準備状況を確認できません'), findsOneWidget);
+      expect(find.textContaining('保存結果を確認できません'), findsOneWidget);
+      expect(find.text('保存状態を再確認'), findsNothing);
+      // A subsequent GET can observe a different writer's answer (or a stale
+      // mixed snapshot); it must not be treated as this patient's save.
+      backend.answers
+        ..clear()
+        ..add({
+          'questionId': 'q1',
+          'questionRevision': 1,
+          'selectedCodes': ['NO'],
+          'answerState': 'answered',
+          'answerId': 'q1',
+          'stepIndex': 0,
+          'answeredAt': 'now',
+          'updatedAt': 'now',
+          'freeText': '別端末の回答',
+        });
+      await tester.pumpAndSettle();
+      expect(backend.answerPosts, 1);
+      expect(find.text('合成の質問q2'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'preflight GET failure permits explicit retry but never treats another device answer as ours',
+    (tester) async {
+      final backend = _IntakeBackend();
+      await _openQuestion(tester, backend);
+      backend.failNextIntakeGet = true;
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+      expect(backend.answerPosts, 0);
+      expect(find.text('保存状態を再確認'), findsOneWidget);
+
+      backend.answers.add({
+        'questionId': 'q1',
+        'questionRevision': 1,
+        'selectedCodes': ['NO'],
+        'answerState': 'answered',
+        'answerId': 'q1',
+        'stepIndex': 0,
+        'freeText': null,
+        'answeredAt': 'now',
+        'updatedAt': 'now',
+      });
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+      expect(backend.answerPosts, 0);
+      expect(find.text('合成の質問q1'), findsOneWidget);
+      expect(find.text('合成の質問q2'), findsNothing);
+      expect(find.textContaining('現在の利用状態では操作できません'), findsOneWidget);
+    },
+  );
+
+  testWidgets('discards delayed next-question GET after session change', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend();
+    final changes = StreamController<void>();
+    addTearDown(changes.close);
+    await _openQuestion(tester, backend, changes: changes.stream);
+    backend.intakeGetGate = Completer<void>();
+    await tester.tap(find.text('保存状態を再確認'));
+    await tester.pump();
+    changes.add(null);
+    await tester.pump();
+    backend.intakeGetGate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('合成の質問q1'), findsNothing);
+    expect(
+      find.text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('discards delayed next-question POST after session change', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend();
+    final changes = StreamController<void>();
+    addTearDown(changes.close);
+    await _openQuestion(tester, backend, changes: changes.stream);
+    backend.nextQuestionGate = Completer<void>();
+    await tester.tap(find.text('はい'));
+    await tester.pump();
+    // Let the answer POST complete and the following next-question POST block.
+    await tester.pump();
+    changes.add(null);
+    await tester.pump();
+    backend.nextQuestionGate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('合成の質問q2'), findsNothing);
+    expect(
+      find.text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('clears freeText and abandons the question on session change', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend();
+    final changes = StreamController<void>();
+    addTearDown(changes.close);
+    await _openQuestion(tester, backend, changes: changes.stream);
+    await tester.enterText(find.byKey(const ValueKey('回答（任意）')), '合成の入力');
+
+    changes.add(null);
+    await tester.pumpAndSettle();
+
+    expect(find.text('合成の質問q1'), findsNothing);
+    expect(
+      find.text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
+      findsOneWidget,
+    );
+  });
+
   for (final validDocument in [true, false]) {
     testWidgets(
       validDocument

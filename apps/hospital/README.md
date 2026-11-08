@@ -117,7 +117,7 @@ Next.js ProxyのCSPは同じ接続設定から許可先を生成します。配�
 Firebase Authの言語は日本語（`ja`）に固定し、パスワード再設定メールも画面と同じ言語を要求します。実メールの配信・文面の受入確認は別途必要です。
 職員画面は HttpOnly Cookie セッション＋`/api/hx/*` BFF 経由で API を呼び、ID トークンを
 ブラウザ JS・localStorage に置きません（ADR-0020）。運営画面の既存経路はトークンをメモリ内に
-保持する方式のままです。Firebase Auth はインメモリ永続化のため、ブラウザの再読み込みでは
+保持する方式のままです。ログアウトはセッション・App Check・施設Cookieを期限切れにし、本番の `__Host-` Cookieは削除応答にも `Secure` と `Path=/` を付けます。Firebase Auth はインメモリ永続化のため、ブラウザの再読み込みでは
 Firebase 側の認証状態が消え、Cookie も消去して再ログインになります。
 `/api/session` は実APIが検証したcredentialでCookieを発行し、職員のMFAクレームを追加条件にしません。運営画面のMFA条件は維持します。
 権限はBEがfacilityMemberships正本で判定します。

@@ -4,6 +4,8 @@ import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
+import 'patient_analytics.dart';
+
 String patientOperationKey() => List.generate(
   24,
   (_) => Random.secure().nextInt(256),
@@ -33,11 +35,13 @@ class PublicPatientApi {
     required this.client,
     required this.tokens,
     required this.session,
+    this.analytics = const PatientAnalytics.disabled(),
   });
   final String origin;
   final http.Client client;
   final Future<({String auth, String appCheck})> Function() tokens;
   final Object Function() session;
+  final PatientAnalytics analytics;
 
   Future<Map<String, dynamic>> request(
     String method,
@@ -91,10 +95,21 @@ class PublicPatientApi {
         return value;
       }
 
-      return await send().timeout(const Duration(seconds: 25));
+      final result = await send().timeout(const Duration(seconds: 25));
+      if (method == 'POST' &&
+          RegExp(r'^/intakes/[^/]+/finalize$').hasMatch(path)) {
+        analytics.record(PatientAnalyticsEvent.intakeCompleted);
+      }
+      return result;
     } on PatientRequestFailure {
+      if (method == 'POST' && path == '/deliveries') {
+        analytics.record(PatientAnalyticsEvent.deliveryFailed);
+      }
       rethrow;
     } catch (_) {
+      if (method == 'POST' && path == '/deliveries') {
+        analytics.record(PatientAnalyticsEvent.deliveryFailed);
+      }
       throw const PatientRequestFailure('UNAVAILABLE');
     } finally {
       abort.complete();

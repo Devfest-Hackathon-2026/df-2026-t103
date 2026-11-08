@@ -41,6 +41,7 @@ dependencies:
   firebase_storage: ^14.0.1
   http: ^1.6.0
   firebase_app_check: ^0.5.1
+  firebase_analytics: ^13.0.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

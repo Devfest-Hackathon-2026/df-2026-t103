@@ -2,6 +2,9 @@
 // Preload modules in an external script so FlutterFire need not inject inline
 // loader scripts. Keep script-src free of unsafe-inline and unsafe-eval.
 const version = '12.7.0';
+// Analytics is registered by FlutterFire but is not enabled for public Web.
+// Prevent its automatic inline loader; do not loosen the application's CSP.
+window.flutterfire_ignore_scripts = ['analytics'];
 try {
   const services = [
     ['app', 'core'], ['auth', 'auth'], ['app-check', 'app_check'],

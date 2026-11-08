@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import 'public_patient_config.dart';
 import 'public_patient_api.dart';
+import 'patient_analytics.dart';
 
 class PublicPatientConnection {
   PublicPatientConnection._(this.config);
@@ -38,6 +39,7 @@ class PublicPatientConnection {
         iosBundleId: kIsWeb ? null : 'com.moshimoshimonshin.patient',
       ),
     );
+    final analytics = await PatientAnalytics.initialize();
     if (kIsWeb) {
       await FirebaseAuth.instance.setPersistence(Persistence.NONE);
     } else {
@@ -58,6 +60,7 @@ class PublicPatientConnection {
       origin: config.apiOrigin,
       client: connection._client,
       session: () => connection._epoch,
+      analytics: analytics,
       tokens: () async {
         final user = FirebaseAuth.instance.currentUser;
         connection._syncIdentity(user);

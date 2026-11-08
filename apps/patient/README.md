@@ -12,7 +12,15 @@ Flutter の Android / iOS / Web 向けデモ雛形です。現在は準備画面
 
 Flutter SDK を PATH に設定した上で、リポジトリルートで `make up` を実行し、Firefox 等で http://localhost:5050 を開きます。Nix を利用する場合は、先に `nix develop` に入ることで Flutter を利用できます。Flutter の `web-server` を使うため、Flutter が Chrome を検出できなくてもブラウザから開けます。実データではなく合成データだけを使ってください。
 
-画面だけ確認する場合は、Flutter SDK（CI は 3.47.4 を使用）と Bash を用意し、リポジトリルートから次のいずれかを実行します。Windows の場合は WSL 上の Bash を使用してください。Nix は不要です。準備完了後に表示される URL を開き、確認が終わったら **Ctrl+C** でそのプレビューだけを停止します。`home` や `symptom` は、該当プレビューの実装があるブランチで利用できます。
+画面だけ確認する場合は、Flutter SDK（CI は 3.47.4 を使用）と Bash を用意し、リポジトリルートから `preview.sh` を実行します。Windows の場合は WSL 上の Bash を使用してください。Nix は不要です。準備完了後に表示される URL を開き、確認が終わったら **Ctrl+C** でそのプレビューだけを停止します。
+
+まず利用できる画面と割り当てポートを一覧表示します。一覧は `lib/demo_*_preview.dart` から機械的に導出するため、画面を追加・削除しても自動で追従します。
+
+```sh
+bash apps/patient/preview.sh list
+```
+
+一覧に出た名前を指定して、任意の 1 画面を単独起動できます（`<name>` は `lib/demo_<name>_preview.dart` の `<name>` 部分）。`welcome` だけは通常の起動画面 `main.dart` で、Firebase Emulator の設定を前提とします。各プレビューは Firebase/API/実送信に接続しません。ポートを明示したい場合は第 2 引数で指定します（例: `bash apps/patient/preview.sh home 5080`）。
 
 ```sh
 bash apps/patient/preview.sh welcome
@@ -23,10 +31,11 @@ bash apps/patient/preview.sh symptom
 Nix を使う場合は、ホストに Flutter をインストールせず次のようにも実行できます。
 
 ```sh
-nix develop --command bash apps/patient/preview.sh welcome
+nix develop --command bash apps/patient/preview.sh list
 nix develop --command bash apps/patient/preview.sh home
-nix develop --command bash apps/patient/preview.sh symptom
 ```
+
+以下の画面別セクションにある `flutter run ... --web-port=XXXX` のコマンドでも同じ画面を起動できます（ポートは任意の空きポートに変えて構いません）。各画面の見た目・操作の説明はそちらを参照してください。
 
 現在の画面は準備中の雛形のみで、問診やログインの操作はできません。ブラウザの文字拡大やキーボード操作も確認できますが、Web の見え方は Android や iOS と同一とは限らず、実機やスクリーンリーダーによる確認の代替にはなりません。
 

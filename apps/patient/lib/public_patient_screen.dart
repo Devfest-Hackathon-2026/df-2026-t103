@@ -101,6 +101,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   Map<String, dynamic>? _intake, _question, _summary, _facility, _delivery;
   List<dynamic> _history = [];
   int _questionnaireRevision = 1;
+  int? _questionIntakeRevision;
   PublicPatientApi get api => widget.api;
   String _id(Object? value) {
     if (value is! String ||
@@ -153,6 +154,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _password.clear();
     _bodyLocation = 'whole_body';
     _questionnaireRevision = 1;
+    _questionIntakeRevision = null;
     _reviewed = _share = _profile = _medications = false;
     _error = _notice = null;
   }
@@ -400,7 +402,11 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
             answer['selectedCodes'] is List &&
             (answer['selectedCodes'] as List).every((code) => code is String) &&
             (answer['freeText'] == null || answer['freeText'] is String) &&
-            {'answered', 'unknown', 'skipped'}.contains(answer['answerState']) &&
+            {
+              'answered',
+              'unknown',
+              'skipped',
+            }.contains(answer['answerState']) &&
             answer['answeredAt'] is String &&
             answer['updatedAt'] is String,
       );
@@ -498,6 +504,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     }
     await _loadIntake(generation: generation);
     if (!_isCurrent(generation)) return;
+    _validateActiveQuestion(_question!);
+    _questionIntakeRevision = _revision(_intake!);
     if (mounted) {
       setState(() {
         _step = 'question';
@@ -509,6 +517,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     if (_answerAttempted) return;
     final q = _question!;
     final generation = _generation;
+    final owner = api.session();
     final freeText = _answerFreeText.text;
     if (code != null && state == 'answered' && freeText.length > 2000) {
       throw const PatientRequestFailure('400');
@@ -520,15 +529,23 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       rethrow;
     }
     if (!_isCurrent(generation)) return;
+    if (!identical(owner, api.session())) {
+      throw const PatientRequestFailure('401');
+    }
     final currentAnswers = _intake?['answers'];
     if (!_validAnswers(currentAnswers)) {
       throw const PatientRequestFailure('INVALID_RESPONSE');
     }
+    _validateActiveQuestion(q);
+    if (_questionIntakeRevision == null ||
+        _revision(_intake!) != _questionIntakeRevision) {
+      throw const PatientRequestFailure('412');
+    }
     if ((currentAnswers as List).any(
-          (answer) =>
-              answer['questionId'] == q['questionId'] &&
-              answer['questionRevision'] == q['questionRevision'],
-        )) {
+      (answer) =>
+          answer['questionId'] == q['questionId'] &&
+          answer['questionRevision'] == q['questionRevision'],
+    )) {
       _answerAttempted = false;
       throw const PatientRequestFailure('412');
     }
@@ -555,6 +572,26 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     }
     if (!_isCurrent(generation)) return;
     await _nextQuestion();
+  }
+
+  void _validateActiveQuestion(Map<String, dynamic> question) {
+    final intake = _intake;
+    final questions = intake?['questions'];
+    if (intake == null ||
+        intake['status'] != 'questioning' ||
+        intake['currentQuestionId'] != question['questionId'] ||
+        questions is! List ||
+        questions.any((item) => item is! Map<String, dynamic>)) {
+      throw const PatientRequestFailure('INVALID_RESPONSE');
+    }
+    final active = questions.whereType<Map<String, dynamic>>().where(
+      (item) => item['questionId'] == question['questionId'],
+    );
+    if (active.length != 1 ||
+        active.first['status'] != 'active' ||
+        active.first['questionRevision'] != question['questionRevision']) {
+      throw const PatientRequestFailure('412');
+    }
   }
 
   bool _isCurrent(int generation) => mounted && generation == _generation;

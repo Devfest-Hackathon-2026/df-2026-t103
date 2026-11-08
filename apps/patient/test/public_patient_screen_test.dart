@@ -28,6 +28,10 @@ class _IntakeBackend {
   int lostAnswerResponseStatus = 503;
   bool failNextIntakeGet = false;
   Object? intakeAnswersOverride;
+  Map<String, dynamic> intakeOverride = {};
+  Object sessionEpoch = Object();
+  int sessionReads = 0;
+  int? switchSessionAtRead;
   Completer<void>? intakeGetGate;
   Completer<void>? nextQuestionGate;
   int answerPosts = 0;
@@ -72,8 +76,10 @@ class _IntakeBackend {
         'intakeId': 'intake-1',
         'status': symptomsSaved ? 'questioning' : 'draft',
         'revision': revision,
+        'currentQuestionId': symptomsSaved ? questionId : null,
         'questions': symptomsSaved ? [current] : <dynamic>[],
         'answers': intakeAnswersOverride ?? answers,
+        ...intakeOverride,
       });
     }
     if (path == '/v1/intakes/intake-1/next-question') {
@@ -99,7 +105,9 @@ class _IntakeBackend {
       revision++;
       if (loseFirstAnswerResponse) {
         loseFirstAnswerResponse = false;
-        return json({'error': 'synthetic response loss'}, lostAnswerResponseStatus);
+        return json({
+          'error': 'synthetic response loss',
+        }, lostAnswerResponseStatus);
       }
       return json({'answerId': body['questionId'], 'intakeRevision': revision});
     }
@@ -121,7 +129,13 @@ Future<void> _openQuestion(
           origin: 'https://api.example.test',
           client: client,
           tokens: () async => (auth: 'synthetic', appCheck: 'synthetic'),
-          session: () => backend,
+          session: () {
+            backend.sessionReads++;
+            if (backend.sessionReads == backend.switchSessionAtRead) {
+              backend.sessionEpoch = Object();
+            }
+            return backend.sessionEpoch;
+          },
         ),
         signIn: (_, _) async {},
         signOut: () async {},
@@ -211,7 +225,11 @@ void main() {
 
   for (final malformed in [
     {'answers': <String, dynamic>{}},
-    {'answers': [<String, dynamic>{'questionId': 'q1'}]},
+    {
+      'answers': [
+        <String, dynamic>{'questionId': 'q1'},
+      ],
+    },
     {
       'answers': [
         {
@@ -308,6 +326,48 @@ void main() {
       expect(find.textContaining('現在の利用状態では操作できません'), findsOneWidget);
     },
   );
+
+  for (final override in [
+    {'status': 'review'},
+    {'currentQuestionId': 'q2'},
+    {
+      'questions': [
+        {..._question('q1', 0), 'status': 'answered'},
+      ],
+    },
+    {'revision': 3},
+  ]) {
+    testWidgets('does not POST against inconsistent intake GET: $override', (
+      tester,
+    ) async {
+      final backend = _IntakeBackend();
+      await _openQuestion(tester, backend);
+      backend.intakeOverride = override;
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+
+      expect(backend.answerPosts, 0);
+      expect(find.text('合成の質問q1'), findsOneWidget);
+    });
+  }
+
+  testWidgets('does not POST when session changes after preflight GET', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend();
+    await _openQuestion(tester, backend);
+    // answer(): captures owner, then the GET reads its owner, checks after
+    // token refresh, checks after response, and finally compares the captured
+    // owner before POST. Change identity at that last check without notifying
+    // the widget's change stream.
+    backend.sessionReads = 0;
+    backend.switchSessionAtRead = 5;
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+
+    expect(backend.answerPosts, 0);
+    expect(find.text('合成の質問q1'), findsOneWidget);
+  });
 
   testWidgets('discards delayed next-question GET after session change', (
     tester,

@@ -40,7 +40,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   int _generation = 0;
   String? _error, _notice, _intakeId, _questionnaireId, _deliveryId;
   String? _createKey, _finalizeKey, _sendKey;
-  String? _disclosureVersion;
+  String? _disclosureVersion, _disclosureHash;
   String _bodyLocation = 'whole_body';
   Map<String, dynamic>? _intake, _question, _summary, _facility, _delivery;
   List<dynamic> _history = [];
@@ -82,6 +82,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _intakeId = _questionnaireId = _deliveryId = null;
     _createKey = _finalizeKey = _sendKey = null;
     _disclosureVersion = null;
+    _disclosureHash = null;
     _history = [];
     _symptom.clear();
     _password.clear();
@@ -324,6 +325,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   Future<void> _loadFacility() async {
     _facility = null;
     _disclosureVersion = null;
+    _disclosureHash = null;
     _share = false;
     _sendKey = null;
     final result = await api.request(
@@ -334,13 +336,16 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     final version = (docs['documents'] as Map?)?['hospital_disclosure'];
     if (version is! Map ||
         version['version'] is! String ||
-        (version['version'] as String).isEmpty) {
+        (version['version'] as String).trim().isEmpty ||
+        version['documentHash'] is! String ||
+        (version['documentHash'] as String).trim().isEmpty) {
       throw const PatientRequestFailure('412');
     }
     if (mounted) {
       setState(() {
         _facility = result;
         _disclosureVersion = version['version'] as String;
+        _disclosureHash = version['documentHash'] as String;
       });
     }
   }
@@ -353,10 +358,15 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         facility['receivingEnabled'] != true) {
       throw const PatientRequestFailure('412');
     }
-    if (_disclosureVersion == null) {
+    if (_disclosureVersion == null || _disclosureHash == null) {
       throw const PatientRequestFailure('412');
     }
     _sendKey ??= patientOperationKey();
+    final scope = {
+      'includeProfile': _profile,
+      'includeConfirmedMedications': _medications,
+      'includePrescriptionImages': false,
+    };
     final result = await api.request(
       'POST',
       '/deliveries',
@@ -365,11 +375,12 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         'questionnaireId': _id(_questionnaireId),
         'questionnaireRevision': _questionnaireRevision,
         'facilityId': _id(facility['facilityId']),
-        'consentDocumentVersion': _disclosureVersion,
-        'shareScope': {
-          'includeProfile': _profile,
-          'includeConfirmedMedications': _medications,
-          'includePrescriptionImages': false,
+        'shareScope': scope,
+        'consent': {
+          'accepted': true,
+          'documentVersion': _disclosureVersion,
+          'documentHash': _disclosureHash,
+          'shareScope': scope,
         },
       },
     );

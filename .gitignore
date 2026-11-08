@@ -27,6 +27,8 @@ firestore-debug.log
 database-debug.log
 ui-debug.log
 firebase-export-*/
+# Temp emulator config written by apps/patient/tool/run_intake_e2e.sh
+.firebase-e2e.json
 
 # OS
 .DS_Store

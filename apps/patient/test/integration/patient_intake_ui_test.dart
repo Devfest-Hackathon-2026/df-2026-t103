@@ -58,6 +58,24 @@ void main() {
       await tester.runAsync(() async { await tester.tap(find.text('ログイン')); });
       await waitFor(find.text('症状（必須）'));
       await tester.enterText(find.byType(TextField), '合成テストの症状入力です');
+      await tester.ensureVisible(find.text('頭'));
+      await tester.tap(
+        find
+            .ancestor(of: find.text('頭'), matching: find.byType(CheckboxListTile))
+            .first,
+      );
+      await tester.pump();
+      await tester.ensureVisible(find.text('左膝'));
+      await tester.tap(
+        find
+            .ancestor(
+              of: find.text('左膝'),
+              matching: find.byType(CheckboxListTile),
+            )
+            .first,
+      );
+      await tester.pump();
+      await tester.ensureVisible(find.text('症状を保存'));
       await tester.runAsync(() async { await tester.tap(find.text('症状を保存')); });
       // 保存後は IntakeQuestionFlow が起動し、BE の next-question へ実接続して
       // 対話ループへ入る（P-013/P-014）。導入文言＋実 API 由来の最初の質問

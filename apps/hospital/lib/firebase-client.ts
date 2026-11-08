@@ -13,6 +13,8 @@ function initialize() {
     provider: new ReCaptchaEnterpriseProvider(config.appCheckSiteKey!), isTokenAutoRefreshEnabled: true,
   });
   const auth = initializeAuth(app, { persistence: inMemoryPersistence });
+  // Match the Japanese portal when Firebase sends password-reset emails.
+  auth.languageCode = "ja";
   if (config.emulator) connectAuthEmulator(auth, config.authEmulatorUrl!, { disableWarnings: true });
   const api = createApiClient({
     apiBaseUrl: config.apiBaseUrl, emulator: config.emulator,

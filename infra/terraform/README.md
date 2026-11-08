@@ -50,3 +50,8 @@ remote stateの設定は `backend.tf.example` をローカルの `backend.local.
 - `terraform.tfvars` と `*.tfstate` はコミットしない（`.gitignore` 済）。状態は GCS backend。
 - 既存の `gcloud`/YAML 版（`infra/cloud-run/*.yaml`・`infra/*.sh`）は手動運用・参照用として残す。
   管理対象資源はTerraformを正本とし、同じ資源へ手動gcloud/YAMLを並行適用しない（ADR-0021）。
+
+## 病院ポータルの独立管理
+
+未作成の病院runtimeは [専用root](../hospital/README.md) と別stateで管理する。
+このrootの不明な既存stateを作り直して病院を追加しない。病院の資源宣言はこのrootから除去済み。

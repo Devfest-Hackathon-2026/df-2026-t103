@@ -72,12 +72,12 @@ Cloud RunのallUsers invokerはログイン画面へのHTTPアクセス用であ
    | `NEXT_PUBLIC_APP_CHECK_SITE_KEY` | 登録したEnterprise site key |
 
 3. 同じ公開値をbuild argsに渡してhospital `prod` imageをbuild/pushする。
-   `infra/terraform/hospital.tf` の `hospital_image` にその初期イメージを、
-   `hospital_client_config` に同じ公開値を指定し、既存stateを使ってplanを確認して適用する。
+   `infra/hospital/main.tf` の `hospital_image` にその初期イメージを、
+   `hospital_client_config` に同じ公開値を指定し、[病院専用root](../infra/hospital/README.md) の専用stateでplanを確認して適用する。
    他資源の未importや破壊的差分があるplanは適用しない（ADR-0021）。
    runtime SAは専用 `hospital-run-sa` とし、FirestoreやSecretへの権限は付けない。
    min=0 / max=2、1CPU / 512MiBで、初期はリクエストに応じた課金となる。
-   `hospital_image=null` の既定値では何も新設しない。
+   このrootは未作成と確認した病院4資源だけを管理し、既存API等をimportしない。
 4. mainのCIが成功してから `cd-hospital` をmainに対して手動起動する。
    必須値・本番接続設定を検証し、不足時はクラウドへの書込み前に失敗する。
    サービス設定はTerraform、以後のイメージ差替えはCDが管理する。
@@ -89,8 +89,8 @@ rollbackは確認済みのhospitalリビジョンを `gcloud run services update
 --project project-7efcc4c4-6c86-490c-ba5 --region asia-northeast1
 --to-revisions <revision>=100` で指定する。API用rollbackとは対象が違う。
 
-2026-11-08の読取時点ではこのプロジェクトのFirebase app一覧は空で、hospitalサービスも
-未作成。この初回構築と実認証受入は未完了。CDの修正だけでWeb利用可能とは扱わない。
+初回構築・実認証受入の結果はIssue #26/#34/#90の最新作業ログを参照する。
+CDやTerraform構文検証の成功だけでWeb利用可能とは扱わない。
 
 ## 患者Web
 

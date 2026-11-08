@@ -23,13 +23,15 @@ class IntakeApiException implements Exception {
 /// One submission attempt. Keep it on uncertain failures; a retry uses the same
 /// creation key and symptom text. Never reuse it across authentication sessions.
 class IntakeSubmission {
-  IntakeSubmission(String text)
+  IntakeSubmission(String text, {List<String> bodyLocations = const []})
     : text = text.trim(),
+      bodyLocations = List.unmodifiable(bodyLocations),
       key = List.generate(
         24,
         (_) => Random.secure().nextInt(256),
       ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
   final String text;
+  final List<String> bodyLocations;
   final String key;
   String? _intakeId;
   IntakeIdentity? _owner;
@@ -171,7 +173,7 @@ class PatientIntakeApi {
         '$path/symptoms',
         body: {
           'initialSymptomText': submission.text,
-          'bodyLocations': <String>[],
+          'bodyLocations': submission.bodyLocations,
           'expectedIntakeRevision': 1,
         },
       );

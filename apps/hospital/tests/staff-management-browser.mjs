@@ -1,0 +1,63 @@
+import assert from "node:assert/strict";
+
+/** Real UI and callbacks checking actual Firestore/Auth/API state. */
+export async function staffManagementBrowser({ evaluate, poll, typeText, fixture }) {
+  const targetRow = `[...document.querySelectorAll('tbody tr')].find(row=>row.innerText.includes(${JSON.stringify(fixture.email)}))`;
+  const rowButton = (label) => `[...(${targetRow}).querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`;
+  const dialogButton = (label) => `[...document.querySelectorAll('[role=dialog] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`;
+  await evaluate("document.querySelector('a[href=\"/staff\"]').click()");
+  await poll(`location.pathname==='/staff' && !!(${targetRow})`);
+  await fixture.assertMembership("facility_staff", "active", 0, 0);
+  assert.deepEqual(await evaluate("(()=>{const rows=[...document.querySelectorAll('tbody tr')].filter(row=>row.innerText.includes('（あなた）'));return {count:rows.length,safe:rows.every(row=>row.querySelector('select')?.disabled && ![...row.querySelectorAll('button')].some(b=>b.textContent==='停止する'))}})()"), { count: 1, safe: true });
+  const openInvite = async () => {
+    await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='職員を招待する').click()");
+    await poll("!!document.querySelector('#invite-form input[type=email]')");
+    await evaluate("(()=>{const input=document.querySelector('#invite-form input[type=email]'); input.focus(); input.select()})()");
+    await typeText(fixture.inviteEmail);
+  };
+  await openInvite();
+  await fixture.assertInvitations(0);
+  await evaluate(dialogButton("キャンセル"));
+  await poll("!document.querySelector('[role=dialog]')");
+  await fixture.assertInvitations(0);
+  await openInvite();
+  await evaluate(dialogButton("招待を送信"));
+  await poll(`!document.querySelector('[role=dialog]') && document.body.innerText.includes(${JSON.stringify(fixture.inviteEmail)})`);
+  await fixture.assertInvitations(1);
+  await openInvite();
+  await evaluate(dialogButton("招待を送信"));
+  await poll("document.querySelector('[role=dialog]')?.innerText.includes('招待はすでに保留中です')");
+  await fixture.assertInvitations(1);
+  await evaluate(dialogButton("キャンセル"));
+  await poll("!document.querySelector('[role=dialog]')");
+  await evaluate(`const role=(${targetRow}).querySelector('select'); role.value='facility_clinician'; role.dispatchEvent(new Event('change',{bubbles:true}))`);
+  await poll(`!!(${targetRow}) && [...(${targetRow}).querySelectorAll('button')].some(b=>b.textContent==='役割を変更')`);
+  await evaluate(rowButton("役割を変更"));
+  await poll("!!document.querySelector('[role=dialog]')");
+  await fixture.assertMembership("facility_staff", "active", 0, 0);
+  await evaluate(dialogButton("キャンセル"));
+  await poll("!document.querySelector('[role=dialog]')");
+  await fixture.assertMembership("facility_staff", "active", 0, 0);
+  await evaluate(rowButton("役割を変更"));
+  await poll("!!document.querySelector('[role=dialog]')");
+  await evaluate(dialogButton("変更する"));
+  await poll(`!document.querySelector('[role=dialog]') && (${targetRow})?.querySelector('select')?.value==='facility_clinician' && ![...(${targetRow}).querySelectorAll('button')].some(b=>b.textContent==='役割を変更')`);
+  await fixture.assertMembership("facility_clinician", "active", 1, 0);
+  await evaluate(rowButton("停止する"));
+  await poll("!!document.querySelector('[role=dialog]')");
+  await fixture.assertMembership("facility_clinician", "active", 1, 0);
+  await evaluate(dialogButton("キャンセル"));
+  await poll("!document.querySelector('[role=dialog]')");
+  await fixture.assertMembership("facility_clinician", "active", 1, 0);
+  await evaluate(rowButton("停止する"));
+  await poll("!!document.querySelector('[role=dialog]')");
+  await evaluate(dialogButton("停止する"));
+  await poll(`!document.querySelector('[role=dialog]') && (${targetRow})?.innerText.includes('停止中')`);
+  await fixture.assertMembership("facility_clinician", "revoked", 1, 1);
+  await evaluate(rowButton("再有効化"));
+  await poll("!!document.querySelector('[role=dialog]')");
+  await fixture.assertMembership("facility_clinician", "revoked", 1, 1);
+  await evaluate(dialogButton("再有効化する"));
+  await poll(`!document.querySelector('[role=dialog]') && [...(${targetRow}).querySelectorAll('button')].some(b=>b.textContent==='停止する')`);
+  await fixture.assertMembership("facility_clinician", "active", 2, 1);
+}

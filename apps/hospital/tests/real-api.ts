@@ -14,6 +14,7 @@ import { browserSmoke } from "./browser-smoke.mjs";
 import { hospitalTenantSmoke } from "./hospital-tenant-smoke";
 import { staffSessionSmoke } from "./staff-session-smoke";
 import { hmacSha256Hex } from "../../../services/api/src/lib/hash";
+import { createStaffManagementFixture } from "./staff-management-fixture";
 
 test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify + Next (no API stub)", { timeout: 90000 }, async () => {
   assert.equal(process.env.FIREBASE_PROJECT_ID, "demo-mmr-dev");
@@ -53,6 +54,7 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
+  let staffManagement: Awaited<ReturnType<typeof createStaffManagementFixture>> | undefined;
   try {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Real BE startup timed out")), 20000);
@@ -71,6 +73,7 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
     if (process.env.HOSPITAL_BROWSER_SMOKE === "true") {
       await browserStaffMembership.set({ userUid: uid, facilityId: uid, role: "facility_admin", status: "active" });
       await browserOtherMembership.set({ userUid: uid, facilityId: `${uid}-reject`, role: "facility_staff", status: "active" });
+      staffManagement = await createStaffManagementFixture({ firebase, apiBaseUrl: `http://127.0.0.1:${port}/v1`, facilityId: uid, hmacSecret: loadConfig().hmacSecret });
     }
     await job.set({ status: "failed", errorCode: "engine_unavailable", attempt: 2, updatedAt: new Date(), patientUid: "SYNTHETIC_PRIVATE_VALUE" });
     const page = await api.jobFailures("ocr");
@@ -145,11 +148,12 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
         assert.equal(audits.docs.filter((doc) => doc.data().action === "DELIVERY_ACKNOWLEDGED" && doc.data().decision === "allow").length, 1);
       }
     };
-    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, staffIdToken: await auth.currentUser!.getIdToken(), assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver, assertBrowserDelivery });
+    if (process.env.HOSPITAL_BROWSER_SMOKE === "true") await browserSmoke({ apiBaseUrl: `http://127.0.0.1:${port}/v1`, authHost: process.env.FIREBASE_AUTH_EMULATOR_HOST!, email, password, facilityId: uid, rejectedFacilityId: `${uid}-reject`, staffIdToken: await auth.currentUser!.getIdToken(), assertStillPending: async () => assert.equal((await facility.get()).data()?.verificationStatus, "pending"), assertStillReceiving: assertReceivingAndDeliver, assertBrowserDelivery, staffManagement });
     else {
       await api.reviewFacility(uid, "verified", { checks: allChecks, verificationRecordId: "SYNTHETIC_REFERENCE" });
       await api.reviewFacility(`${uid}-reject`, "rejected", { checks: { ...allChecks, applicant: false }, verificationRecordId: "SYNTHETIC_REFERENCE", reason: "SYNTHETIC_REVIEW_PRIVATE_VALUE" });
     }
+    await staffManagement?.cleanup();
     assert.equal((await facility.get()).data()?.verificationStatus, "verified");
     assert.equal((await rejectedFacility.get()).data()?.verificationStatus, "rejected");
     assert.equal((await rejectedFacility.get()).data()?.receivingEnabled, false);
@@ -203,6 +207,7 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
     const unauthenticated = await fetch(`http://127.0.0.1:${port}/v1/operator/job-failures?type=ocr`);
     assert.equal(unauthenticated.status, 401);
   } finally {
+    await staffManagement?.cleanup();
     if (child.exitCode === null) { const exited = once(child, "exit"); child.kill("SIGTERM"); await exited; }
     const generatedRecords = await firebase.firestore.collection("facilityVerificationRecords").where("facilityId", "in", [uid, `${uid}-reject`]).get();
     await Promise.all(generatedRecords.docs.map((doc) => doc.ref.delete()));

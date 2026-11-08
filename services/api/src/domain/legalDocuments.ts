@@ -4,6 +4,8 @@ export interface LegalDocumentVersion {
   version: string;
   documentHash: string;
   publishedAt: string;
+  /** Reviewed plain text; its UTF-8 SHA-256 must match documentHash. */
+  text?: string;
 }
 
 export interface LegalDocumentSet {

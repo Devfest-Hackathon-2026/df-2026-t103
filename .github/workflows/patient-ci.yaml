@@ -15,6 +15,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  patient-ios:
+    name: patient / iOS Release compile (unsigned)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+      # Compile only. This synthetic configuration never accesses Firebase and
+      # produces no installable IPA. No Apple or Firebase credentials in PR CI.
+      - name: Compile public iOS entrypoint
+        working-directory: apps/patient
+        run: >-
+          python3 tool/build_ios.py
+          --config ios/public-config.example.json
+          --build-number "${{ github.run_number }}"
+          --unsigned
+
   patient:
     runs-on: ubuntu-latest
     steps:

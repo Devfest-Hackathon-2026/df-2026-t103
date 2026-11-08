@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { Deps } from "../deps.js";
@@ -46,6 +47,9 @@ function toPublicDocument(d: unknown): LegalDocumentVersion | undefined {
     version: v.version,
     documentHash: v.documentHash,
     publishedAt: toIso(v.publishedAt),
+    ...(typeof v.text === "string" && v.text.length > 0 && v.text.length <= 50_000 &&
+      v.documentHash === "sha256:" + createHash("sha256").update(v.text, "utf8").digest("hex")
+      ? { text: v.text } : {}),
   };
 }
 

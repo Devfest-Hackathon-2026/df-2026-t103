@@ -72,6 +72,7 @@ wait_port "$AUTH_HOST"; wait_port "$FS_HOST"; wait_port "$DB_HOST"; wait_port "$
 
 echo "==> seeding ready patient"
 node services/api/scripts/seedPatientE2E.mjs
+node services/api/scripts/seedPublicPatientE2E.mjs
 
 echo "==> starting API on :8080"
 PORT=8080 node services/api/dist/index.js >/tmp/intake-e2e-api.log 2>&1 &

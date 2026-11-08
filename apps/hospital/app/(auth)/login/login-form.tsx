@@ -4,14 +4,12 @@ import { useRouter } from "next/navigation";
 import { useState, useSyncExternalStore, type FormEvent } from "react";
 import {
   getMultiFactorResolver,
-  multiFactor,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
   TotpMultiFactorGenerator,
   type MultiFactorError,
   type MultiFactorResolver,
-  type TotpSecret,
 } from "firebase/auth";
 import { HxButton } from "../../../components/design-system/hx-button";
 import { HxField, hxInputClass } from "../../../components/design-system/hx-field";
@@ -21,8 +19,7 @@ import { establishSession } from "../../../lib/staff-session";
 
 type Step =
   | { kind: "credentials" }
-  | { kind: "mfa"; resolver: MultiFactorResolver; hintUid: string }
-  | { kind: "enroll"; secret: TotpSecret };
+  | { kind: "mfa"; resolver: MultiFactorResolver; hintUid: string };
 
 const subscribe = () => () => {};
 const clientReady = () => true;
@@ -70,15 +67,9 @@ export function LoginForm({ next }: { next: string }) {
     setBusy(true);
     setMessage("");
     try {
-      const cred = await signInWithEmailAndPassword(firebaseClient().auth, email, password);
-      if (multiFactor(cred.user).enrolledFactors.length === 0) {
-        // 職員はMFA必須（NFR-05）。未登録ならこの場でTOTP登録を求める。
-        const session = await multiFactor(cred.user).getSession();
-        const secret = await TotpMultiFactorGenerator.generateSecret(session);
-        setStep({ kind: "enroll", secret });
-      } else {
-        await finish();
-      }
+      await signInWithEmailAndPassword(firebaseClient().auth, email, password);
+      // Existing enrolled factors are still challenged by Firebase below.
+      await finish();
     } catch (error) {
       const code = (error as { code?: string }).code;
       if (code === "auth/multi-factor-auth-required") {
@@ -106,29 +97,6 @@ export function LoginForm({ next }: { next: string }) {
       await finish();
     } catch {
       setMessage("認証コードが正しくありません。期限切れの場合はログインからやり直してください。");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitEnroll(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (step.kind !== "enroll") return;
-    const code = String(new FormData(event.currentTarget).get("code") ?? "");
-    const user = firebaseClient().auth.currentUser;
-    if (!user) {
-      setMessage("ログイン状態を確認できません。もう一度ログインしてください。");
-      setStep({ kind: "credentials" });
-      return;
-    }
-    setBusy(true);
-    setMessage("");
-    try {
-      const assertion = TotpMultiFactorGenerator.assertionForEnrollment(step.secret, code);
-      await multiFactor(user).enroll(assertion, "認証アプリ");
-      await finish();
-    } catch {
-      setMessage("登録用の認証コードが正しくありません。アプリの時刻を確認して再入力してください。");
     } finally {
       setBusy(false);
     }
@@ -186,44 +154,6 @@ export function LoginForm({ next }: { next: string }) {
             ログインに戻る
           </HxButton>
           <HxButton type="submit" disabled={!ready} loading={busy}>確認する</HxButton>
-        </div>
-      </form>
-    );
-  }
-
-  if (step.kind === "enroll") {
-    return (
-      <form method="post" onSubmit={submitEnroll} className="space-y-5 rounded-md border border-hx-border bg-hx-surface p-6">
-        <div className="space-y-1">
-          <h2 className="text-hx-section-title font-semibold">多要素認証の設定</h2>
-          <p className="text-hx-body text-hx-text-subtle">
-            職員アカウントには多要素認証が必要です。認証アプリに次のキーを登録し、
-            表示される6桁のコードを入力してください。
-          </p>
-        </div>
-        <div className="space-y-2 rounded-sm bg-hx-surface-subtle p-3 text-hx-caption">
-          <p className="break-all font-mono">{step.secret.generateQrCodeUrl("もしもし問診 医療機関ポータル")}</p>
-          <p>
-            手動キー：<span className="font-mono font-semibold">{step.secret.secretKey}</span>
-          </p>
-        </div>
-        <HxField label="認証コード" required description="登録したアプリに表示される6桁のコード">
-          <input
-            name="code"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            pattern="[0-9]{6}"
-            maxLength={6}
-            className={hxInputClass}
-            data-autofocus
-          />
-        </HxField>
-        {message ? <p role="alert" className="text-hx-caption font-semibold text-hx-danger">{message}</p> : null}
-        <div className="flex items-center justify-between gap-3">
-          <HxButton variant="subtle" onClick={() => void backToCredentials()} disabled={busy}>
-            ログインに戻る
-          </HxButton>
-          <HxButton type="submit" disabled={!ready} loading={busy}>登録する</HxButton>
         </div>
       </form>
     );

@@ -393,6 +393,8 @@ export const deliveryGetResponseSchema = z.object({
   facilityId: z.string(),
   questionnaireId: z.string(),
   questionnaireRevisionId: z.string(),
+  /** 本送信の施設別同意証跡（legalConsents 送信証跡 doc）への参照。 */
+  consentId: z.string(),
   createdAt: z.string().nullable(),
   deliveredAt: z.string().nullable(),
   acknowledgedAt: z.string().nullable(),

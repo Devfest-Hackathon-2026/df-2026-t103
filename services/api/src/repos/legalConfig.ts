@@ -6,6 +6,9 @@ import type { FirestoreLike } from "./helpers.js";
 
 const PATH = "appConfigs/publicLegalVersion";
 
+/** appConfigs/publicLegalVersion の doc パス（tx 内 read で版ローテーション競合を検知する用途向け）。 */
+export const LEGAL_DOCUMENTS_PATH = PATH;
+
 /** appConfigs/publicLegalVersion の現行文書セットを読む。 */
 export async function getLegalDocuments(
   db: FirestoreLike,

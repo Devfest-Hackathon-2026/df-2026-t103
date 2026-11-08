@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { makeTestDeps, type TestDeps } from "../helpers/deps.js";
+import { DEV_LEGAL_DOCUMENTS } from "../../src/domain/legalDocuments.js";
 import {
   authHeader,
   buildTestApp,
@@ -92,18 +93,49 @@ async function seedFacility(
   });
 }
 
+const DISCLOSURE = DEV_LEGAL_DOCUMENTS.documents.hospital_disclosure!;
+const SHARE_SCOPE = {
+  includeProfile: true,
+  includeConfirmedMedications: true,
+  includePrescriptionImages: false,
+} as const;
+
 function deliveryPayload(questionnaireId: string, revision = 1) {
   return {
     questionnaireId,
     questionnaireRevision: revision,
     facilityId: FAC_ID,
-    consentDocumentVersion: "sharing-v1",
-    shareScope: {
-      includeProfile: true,
-      includeConfirmedMedications: true,
-      includePrescriptionImages: false,
+    shareScope: { ...SHARE_SCOPE },
+    consent: {
+      accepted: true,
+      documentVersion: DISCLOSURE.version,
+      documentHash: DISCLOSURE.documentHash,
+      shareScope: { ...SHARE_SCOPE },
     },
   };
+}
+
+/** 施設別同意の state doc（legalConsents/fc_{uid}_{facilityId}）をシードする。 */
+async function seedFacilityConsent(
+  deps: TestDeps,
+  uid: string,
+  opts: { decision?: "granted" | "denied"; revoked?: boolean } = {},
+): Promise<string> {
+  const path = `legalConsents/fc_${uid}_${FAC_ID}`;
+  await deps.db.doc(path).set({
+    subjectUid: uid,
+    consentType: "hospital_disclosure",
+    documentVersion: DISCLOSURE.version,
+    documentHash: DISCLOSURE.documentHash,
+    decision: opts.decision ?? "granted",
+    method: "explicit_checkbox",
+    registrationSource: "facility_consent",
+    scope: { facilityId: FAC_ID, purpose: "medical_intake_preparation" },
+    occurredAt: Timestamp.fromDate(deps.clock.now()),
+    revokedAt: opts.revoked ? Timestamp.fromDate(deps.clock.now()) : null,
+    schemaVersion: "1",
+  });
+  return path;
 }
 
 describe("delivery routes (#17, API-029/030)", () => {
@@ -123,6 +155,83 @@ describe("delivery routes (#17, API-029/030)", () => {
     const body = res.json() as { deliveryId: string; status: string };
     expect(body.status).toBe("created");
     expect(body.deliveryId).toMatch(/^dlv_/);
+  });
+
+  it("POST /deliveries は同意証跡を同一txで保存し delivery.consentId が証跡を指す (#219)", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-consent-1" },
+      payload: deliveryPayload(qid),
+    });
+    expect(res.statusCode).toBe(202);
+    const { deliveryId } = res.json() as { deliveryId: string };
+
+    const delivery = (await deps.db.doc(`deliveries/${deliveryId}`).get()).data() as {
+      consentId: string;
+      consentDocumentVersion: string;
+      consentDocumentHash: string;
+      facilityConsentId: string;
+    };
+    // クライアント申告文字列ではなく実レコードへの参照
+    expect(delivery.consentId).not.toBe("sharing-v1");
+    expect(delivery.consentId).not.toBe(DISCLOSURE.version);
+    expect(delivery.consentDocumentVersion).toBe(DISCLOSURE.version);
+    expect(delivery.consentDocumentHash).toBe(DISCLOSURE.documentHash);
+    expect(delivery.facilityConsentId).toBe(`fc_${UID}_${FAC_ID}`);
+
+    // 送信証跡 doc: subjectUid/facilityId/revision/shareScope/deliveryId に紐づく
+    const sendConsent = (
+      await deps.db.doc(`legalConsents/${delivery.consentId}`).get()
+    ).data() as {
+      subjectUid: string;
+      consentType: string;
+      documentVersion: string;
+      documentHash: string;
+      decision: string;
+      method: string;
+      revokedAt: unknown;
+      scope: Record<string, unknown>;
+    };
+    expect(sendConsent.subjectUid).toBe(UID);
+    expect(sendConsent.consentType).toBe("hospital_disclosure");
+    expect(sendConsent.documentVersion).toBe(DISCLOSURE.version);
+    expect(sendConsent.documentHash).toBe(DISCLOSURE.documentHash);
+    expect(sendConsent.decision).toBe("granted");
+    expect(sendConsent.method).toBe("explicit_checkbox");
+    expect(sendConsent.revokedAt).toBeNull();
+    expect(sendConsent.scope).toMatchObject({
+      facilityId: FAC_ID,
+      questionnaireId: qid,
+      questionnaireRevisionId: "1",
+      deliveryId,
+      // 同意した範囲と実際に送信した範囲は別々に記録される
+      shareScope: SHARE_SCOPE,
+      sentShareScope: SHARE_SCOPE,
+    });
+    expect(sendConsent.scope["facilityConsentId"]).toBe(`fc_${UID}_${FAC_ID}`);
+
+    // (uid, facilityId) 単位の同意 state doc も granted で保存される
+    const state = (
+      await deps.db.doc(`legalConsents/fc_${UID}_${FAC_ID}`).get()
+    ).data() as {
+      decision: string;
+      revokedAt: unknown;
+      registrationSource: string;
+      scope: Record<string, unknown>;
+    };
+    expect(state.decision).toBe("granted");
+    expect(state.revokedAt).toBeNull();
+    expect(state.registrationSource).toBe("facility_consent");
+    expect(state.scope).toMatchObject({
+      facilityId: FAC_ID,
+      lastDeliveryId: deliveryId,
+      lastConsentId: delivery.consentId,
+    });
   });
 
   it("POST /deliveries は includeProfile 同意時に本人確認スナップショットと表示名を保存する", async () => {
@@ -305,6 +414,218 @@ describe("delivery routes (#17, API-029/030)", () => {
       payload: deliveryPayload(qid),
     });
     expect(res.statusCode).toBe(412);
+
+    // 同意検証以外の 412 は DELIVERY_REJECTED 監査を出さない（責務の分離）
+    const audits = await deps.db.collection("auditEvents").get();
+    expect(
+      audits.docs.filter((d) => d.data()["action"] === "DELIVERY_REJECTED"),
+    ).toHaveLength(0);
+  });
+
+  it.each([
+    ["consent.accepted=false", "not-accepted", "consent_not_accepted",
+      (p: Record<string, unknown>) => ({
+        ...p, consent: { ...(p["consent"] as object), accepted: false },
+      })],
+    ["documentVersion が旧版", "stale-version", "document_version_mismatch",
+      (p: Record<string, unknown>) => ({
+        ...p, consent: { ...(p["consent"] as object), documentVersion: "2020-01-01" },
+      })],
+    ["documentHash 不一致", "hash-mismatch", "document_hash_mismatch",
+      (p: Record<string, unknown>) => ({
+        ...p, consent: { ...(p["consent"] as object), documentHash: "sha256:deadbeef" },
+      })],
+    ["shareScope が同意範囲を超過", "scope-exceeds", "share_scope_exceeds_consent",
+      (p: Record<string, unknown>) => ({
+        ...p,
+        shareScope: { ...SHARE_SCOPE, includePrescriptionImages: true },
+      })],
+  ])("POST /deliveries returns 412 + DELIVERY_REJECTED audit when %s (#219)", async (_name, key, expectedReason, mutate) => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+
+    const payload = mutate(deliveryPayload(qid) as unknown as Record<string, unknown>);
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": `dlv-deny-${key}` },
+      payload,
+    });
+    expect(res.statusCode).toBe(412);
+
+    // 副作用なし（配送・同意証跡ともに残らない）
+    const deliveries = await deps.db.collection("deliveries").get();
+    expect(deliveries.empty).toBe(true);
+
+    const audits = await deps.db.collection("auditEvents").get();
+    const rejections = audits.docs
+      .map((d) => d.data())
+      .filter((e) => e["action"] === "DELIVERY_REJECTED");
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]!["decision"]).toBe("deny");
+    expect(rejections[0]!["facilityId"]).toBe(FAC_ID);
+    const details = rejections[0]!["details"] as Record<string, unknown>;
+    expect(details["reason"]).toBe(expectedReason);
+    // 監査証跡として申告された版/hash を記録する
+    expect(details["documentVersion"]).toBeTruthy();
+    expect(details["documentHash"]).toBeTruthy();
+    // PHI・生IDを含めない
+    expect(rejections[0]!["actorUidHash"]).not.toBe(UID);
+  });
+
+  it("POST /deliveries returns 412 when 施設別同意が撤回済み (#219)", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+    await seedFacilityConsent(deps, UID, { revoked: true });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-revoked" },
+      payload: deliveryPayload(qid),
+    });
+    expect(res.statusCode).toBe(412);
+    const deliveries = await deps.db.collection("deliveries").get();
+    expect(deliveries.empty).toBe(true);
+    const audits = await deps.db.collection("auditEvents").get();
+    const rejections = audits.docs
+      .map((d) => d.data())
+      .filter((e) => e["action"] === "DELIVERY_REJECTED");
+    expect(rejections).toHaveLength(1);
+    expect((rejections[0]!["details"] as Record<string, unknown>)["reason"]).toBe(
+      "facility_consent_revoked",
+    );
+  });
+
+  it("POST /deliveries returns 412 when 施設別同意が denied (#219)", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+    await seedFacilityConsent(deps, UID, { decision: "denied" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-denied" },
+      payload: deliveryPayload(qid),
+    });
+    expect(res.statusCode).toBe(412);
+    const deliveries = await deps.db.collection("deliveries").get();
+    expect(deliveries.empty).toBe(true);
+  });
+
+  it("POST /deliveries returns 412 when fc_ doc の主体/施設が不一致 (#219)", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+    // ID が衝突した他主体の同意 doc（scope.facilityId がリクエストと異なる）
+    await deps.db.doc(`legalConsents/fc_${UID}_${FAC_ID}`).set({
+      subjectUid: OTHER,
+      consentType: "hospital_disclosure",
+      documentVersion: DISCLOSURE.version,
+      documentHash: DISCLOSURE.documentHash,
+      decision: "granted",
+      method: "explicit_checkbox",
+      registrationSource: "facility_consent",
+      scope: { facilityId: "fac-other", purpose: "medical_intake_preparation" },
+      occurredAt: Timestamp.fromDate(deps.clock.now()),
+      revokedAt: null,
+      schemaVersion: "1",
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-mismatched" },
+      payload: deliveryPayload(qid),
+    });
+    expect(res.statusCode).toBe(412);
+    const deliveries = await deps.db.collection("deliveries").get();
+    expect(deliveries.empty).toBe(true);
+  });
+
+  it("POST /deliveries returns 400 when consent フィールドが欠落 (#219)", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+
+    const payload = deliveryPayload(qid) as unknown as Record<string, unknown>;
+    delete payload["consent"];
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-no-consent" },
+      payload,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("冪等リプレイで同意証跡を重複生成しない (#219)", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+
+    const headers = { ...authHeader(UID), "idempotency-key": "dlv-idem-consent" };
+    const payload = deliveryPayload(qid);
+    const r1 = await app.inject({ method: "POST", url: "/v1/deliveries", headers, payload });
+    const r2 = await app.inject({ method: "POST", url: "/v1/deliveries", headers, payload });
+    expect(r1.statusCode).toBe(202);
+    expect(r2.statusCode).toBe(202);
+
+    // hospital_disclosure の同意証跡は state doc + 送信証跡の 2 件のみ
+    const consents = await deps.db
+      .collection("legalConsents")
+      .where("consentType", "==", "hospital_disclosure")
+      .get();
+    expect(consents.size).toBe(2);
+  });
+
+  it("別の冪等キーでの再送信は state doc の最新参照を更新し送信証跡は1送信1件 (#219)", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps);
+    const payload = deliveryPayload(qid);
+
+    const r1 = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-resend-1" },
+      payload,
+    });
+    const r2 = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-resend-2" },
+      payload,
+    });
+    expect(r1.statusCode).toBe(202);
+    expect(r2.statusCode).toBe(202);
+    const dlv1 = r1.json<{ deliveryId: string }>().deliveryId;
+    const dlv2 = r2.json<{ deliveryId: string }>().deliveryId;
+    expect(dlv1).not.toBe(dlv2);
+
+    // state doc は1件のまま、最新の送信を指す
+    const state = (
+      await deps.db.doc(`legalConsents/fc_${UID}_${FAC_ID}`).get()
+    ).data() as { scope: { lastDeliveryId?: string } };
+    expect(state.scope.lastDeliveryId).toBe(dlv2);
+
+    // 送信証跡は送信ごとに1件ずつ（state doc + 証跡2件 = 3件）
+    const consents = await deps.db
+      .collection("legalConsents")
+      .where("consentType", "==", "hospital_disclosure")
+      .get();
+    expect(consents.size).toBe(3);
+    const evidenceDocs = consents.docs.filter(
+      (d) => d.data()["registrationSource"] === "delivery_send",
+    );
+    expect(evidenceDocs).toHaveLength(2);
+    const evidenceDeliveryIds = evidenceDocs
+      .map((d) => (d.data()["scope"] as Record<string, unknown>)["deliveryId"])
+      .sort();
+    expect(evidenceDeliveryIds).toEqual([dlv1, dlv2].sort());
   });
 
   it("GET /deliveries/:id returns delivery status for sender", async () => {
@@ -330,11 +651,21 @@ describe("delivery routes (#17, API-029/030)", () => {
       deliveryId: string;
       status: string;
       facilityId: string;
+      consentId: string;
     };
     expect(body.deliveryId).toBe(deliveryId);
     // 施設側コピーは作成=配送済み（created→delivered はtx内で完結）
     expect(body.status).toBe("delivered");
     expect(body.facilityId).toBe(FAC_ID);
+    // consentId は本送信の同意証跡 doc を指す（#219）
+    const sendConsent = await deps.db
+      .doc(`legalConsents/${body.consentId}`)
+      .get();
+    expect(sendConsent.exists).toBe(true);
+    expect(
+      (sendConsent.data() as { scope: { deliveryId?: string } }).scope
+        .deliveryId,
+    ).toBe(deliveryId);
   });
 
   it("GET /deliveries/:id returns 404 for another user's delivery", async () => {

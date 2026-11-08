@@ -37,6 +37,8 @@ export const AUDIT_ACTIONS = {
   // ---- 配送・施設 ----
   SUBMISSION_ACCEPTED: "SUBMISSION_ACCEPTED",
   DELIVERY_CREATED: "DELIVERY_CREATED",
+  /** 同意検証等の前提不備で配送作成を拒否（証跡は details.reason のみ、PHI なし）。 */
+  DELIVERY_REJECTED: "DELIVERY_REJECTED",
   DELIVERY_VIEWED: "DELIVERY_VIEWED",
   /** 施設側の受領確認（閲覧済み ≠ 診療予約、FR-H10）。 */
   DELIVERY_ACKNOWLEDGED: "DELIVERY_ACKNOWLEDGED",

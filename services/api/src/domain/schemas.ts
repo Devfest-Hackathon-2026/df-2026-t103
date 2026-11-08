@@ -333,17 +333,37 @@ export const intakeFinalizeSchema = z
 export type IntakeFinalizeBody = z.infer<typeof intakeFinalizeSchema>;
 
 /** API-029 POST /deliveries（03 §5.4）。Idempotency-Key ヘッダ必須。 */
+export const shareScopeSchema = z
+  .object({
+    includeProfile: z.boolean(),
+    includeConfirmedMedications: z.boolean(),
+    includePrescriptionImages: z.boolean(),
+  })
+  .strict();
+export type ShareScope = z.infer<typeof shareScopeSchema>;
+
 export const deliveryCreateSchema = z
   .object({
     questionnaireId: z.string().min(1).max(200),
     questionnaireRevision: z.number().int().min(1),
-    facilityId: z.string().min(1).max(200),
-    consentDocumentVersion: z.string().min(1).max(100),
-    shareScope: z.object({
-      includeProfile: z.boolean(),
-      includeConfirmedMedications: z.boolean(),
-      includePrescriptionImages: z.boolean(),
-    }),
+    // Firestore の doc path に埋め込むため "/" は許可しない
+    facilityId: z.string().min(1).max(200).regex(/^[^/]+$/),
+    shareScope: shareScopeSchema,
+    /**
+     * P-032 で取得した施設別の明示的な送信同意の申告。
+     * サーバは公開済み `hospital_disclosure` 文書の版/hash、同意した
+     * shareScope、施設別同意の撤回状態と照合してから配送を作成し、
+     * クライアント申告値を証跡としてそのまま保存しない（#219）。
+     */
+    consent: z
+      .object({
+        accepted: z.boolean(),
+        documentVersion: z.string().min(1).max(100),
+        documentHash: z.string().min(1).max(200),
+        /** 同意した送信範囲。shareScope はこれを超えられない。 */
+        shareScope: shareScopeSchema,
+      })
+      .strict(),
   })
   .strict();
 export type DeliveryCreateBody = z.infer<typeof deliveryCreateSchema>;

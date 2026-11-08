@@ -34,7 +34,7 @@ export function registerDeliveryRoutes(
         body: deliveryCreateSchema,
         response: {
           202: deliveryCreateResponseSchema,
-          ...errors(400, 401, 403, 409, 412, 429),
+          ...errors(400, 401, 403, 404, 409, 412, 429, 500, 503),
         },
         tags: ["deliveries"],
         summary: "問診票を施設へ配送（冪等・トランザクション管理）",
@@ -61,7 +61,7 @@ export function registerDeliveryRoutes(
         params: deliveryIdParam,
         response: {
           200: deliveryGetResponseSchema,
-          ...errors(401, 403, 404),
+          ...errors(401, 403, 404, 500),
         },
         tags: ["deliveries"],
         summary: "配送状況取得（pending/delivered/failed 区別）",

@@ -106,11 +106,18 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
     await Promise.all(consentFixtures.map((ref, i) => {
       const type = DEV_LEGAL_DOCUMENTS.requiredConsents[i]!;
       const document = DEV_LEGAL_DOCUMENTS.documents[type]!;
-      return ref.set({ subjectUid: patientUid, consentType: type, documentVersion: document.version, documentHash: document.documentHash, decision: "granted", revokedAt: null, occurredAt: new Date() });
+      return ref.set({ subjectUid: patientUid, consentType: type, documentVersion: document.version, documentHash: document.documentHash, decision: "granted", method: "explicit_checkbox", registrationSource: "email_registration", revokedAt: null, occurredAt: new Date(), schemaVersion: "1" });
     }));
     await questionnaire.set({ patientUid, status: "finalized" });
     await revision.set({ versionNumber: 1, patientUid, schemaVersion: "1", chiefComplaint: { value: "SYNTHETIC_QUESTIONNAIRE", source: "patient" }, sections: {}, bodyLocations: [], unansweredTopics: [], medicalHistorySnapshot: [], medicationSnapshots: [], rawAnswerSnapshotHash: "a".repeat(64), summaryReviewConfirmedAt: new Date(), createdAt: new Date() });
-    const deliveryBody = { questionnaireId: patientUid, questionnaireRevision: 1, facilityId: uid, consentDocumentVersion: DEV_LEGAL_DOCUMENTS.documents.hospital_disclosure!.version, shareScope: { includeProfile: true, includeConfirmedMedications: false, includePrescriptionImages: false } };
+    const disclosureDoc = DEV_LEGAL_DOCUMENTS.documents.hospital_disclosure!;
+    const deliveryBody = {
+      questionnaireId: patientUid,
+      questionnaireRevision: 1,
+      facilityId: uid,
+      shareScope: { includeProfile: true, includeConfirmedMedications: false, includePrescriptionImages: false },
+      consent: { accepted: true, documentVersion: disclosureDoc.version, documentHash: disclosureDoc.documentHash, shareScope: { includeProfile: true, includeConfirmedMedications: false, includePrescriptionImages: false } },
+    };
     const sendDelivery = async (key: string) => fetch(`http://127.0.0.1:${port}/v1/deliveries`, { method: "POST", headers: { Authorization: `Bearer ${await patientAuth.currentUser!.getIdToken()}`, "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(deliveryBody) });
     let deliveredId: string | undefined;
     let deliveredBeforeStop: unknown;
@@ -219,6 +226,11 @@ test("hospital client and staff Cookie/BFF use real Auth + Firestore + Fastify +
       await firebase.firestore.doc(`idempotencyKeys/${keyHash}`).delete();
       await doc.ref.delete();
     }
+    // 配送フローが作る施設別同意 state doc (fc_*) と送信証跡 doc も掃除する
+    const patientConsents = await firebase.firestore.collection("legalConsents").where("subjectUid", "==", patientUid).get();
+    await Promise.all(patientConsents.docs
+      .filter((doc) => !consentFixtures.some((ref) => ref.id === doc.id))
+      .map((doc) => doc.ref.delete()));
     await Promise.all([patientAccount.delete(), revision.delete(), questionnaire.delete(), ...consentFixtures.map((ref) => ref.delete()), firebase.auth.deleteUser(patientUid).catch(() => {})]);
     if (previousLegalConfig.exists) await legalConfig.set(previousLegalConfig.data()!);
     else await legalConfig.delete();

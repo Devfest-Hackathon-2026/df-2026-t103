@@ -23,7 +23,14 @@ import {
   registerDevice,
   unregisterDevice,
 } from "../services/devices.js";
-import { latestGrantedByType, listConsents } from "../repos/accounts.js";
+import {
+  latestConsentsByType,
+  listConsents,
+} from "../repos/accounts.js";
+import {
+  CONSENT_HISTORY_SOURCES,
+  CONSENT_TYPES,
+} from "../domain/types.js";
 import { getActiveMemberships, getFacilityById } from "../repos/facilities.js";
 import { z } from "zod";
 import {
@@ -203,14 +210,23 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
     {
       config: { access: { tier: "authenticated" } },
       schema: {
-        response: { 200: consentsResponseSchema, ...errors(401, 403, 429) },
+        response: { 200: consentsResponseSchema, ...errors(401, 403, 429, 500) },
         tags: ["me"],
         summary: "同意履歴と現行版マッピング",
         security: [{ bearerAuth: [] }],
       },
     },
     async (req) => {
-      const consents = await listConsents(deps.db, uidOf(req));
+      const uid = uidOf(req);
+      // 履歴は表示対象の source のみ（送信証跡の高頻度書き込みで
+      // 登録系同意が押し出されないよう registrationSource で絞る、#219）。
+      // 現行状態は履歴の先頭100件ではなく種別ごとのクエリで解決する。
+      const [consents, current] = await Promise.all([
+        listConsents(deps.db, uid, { sources: CONSENT_HISTORY_SOURCES }),
+        latestConsentsByType(deps.db, uid, [...CONSENT_TYPES], {
+          sources: CONSENT_HISTORY_SOURCES,
+        }),
+      ]);
       return {
         consents: consents.map(({ id, data }) => ({
           consentId: id,
@@ -223,10 +239,7 @@ export function registerMeRoutes(app: FastifyInstance, deps: Deps): void {
           revokedAt: toIso(data.revokedAt) ?? null,
         })),
         currentByType: Object.fromEntries(
-          [...latestGrantedByType(consents)].map(([type, doc]) => [
-            type,
-            doc.documentVersion,
-          ]),
+          [...current].map(([type, doc]) => [type, doc.documentVersion]),
         ),
       };
     },

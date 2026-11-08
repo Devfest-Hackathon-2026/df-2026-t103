@@ -19,6 +19,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
+# Allow CI to inject "npx -y firebase-tools@<ver>" when firebase is not global.
+# Used unquoted on purpose so the npx form word-splits into its arguments.
+FIREBASE_BIN="${FIREBASE_BIN:-firebase}"
 PROJECT_ID="demo-mmr-dev"
 AUTH_HOST="127.0.0.1:9099"
 FS_HOST="127.0.0.1:8081"
@@ -61,7 +64,8 @@ echo "==> firestore on 8081 (frees 8080 for the API)"
 node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('firebase.json'));c.emulators.firestore.port=8081;c.emulators.auth.port=9099;fs.writeFileSync('$TMP_CONFIG',JSON.stringify(c));"
 
 echo "==> starting emulators"
-firebase emulators:start --only auth,firestore,database,storage \
+# shellcheck disable=SC2086
+$FIREBASE_BIN emulators:start --only auth,firestore,database,storage \
   --project "$PROJECT_ID" --config "$TMP_CONFIG" >/tmp/intake-e2e-emu.log 2>&1 &
 EMU_PID=$!
 wait_port "$AUTH_HOST"; wait_port "$FS_HOST"; wait_port "$DB_HOST"; wait_port "$STORAGE_HOST"

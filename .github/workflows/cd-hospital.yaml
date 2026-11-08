@@ -1,0 +1,94 @@
+name: cd-hospital
+
+# Direct Cloud Run origin: preserves all of the portal's HttpOnly cookies.
+# Firebase Hosting's cookie filtering is incompatible with the current BFF.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: cd-hospital
+  cancel-in-progress: false
+
+env:
+  GCP_REGION: asia-northeast1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: stg
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_AR_REPO: ${{ vars.GCP_AR_REPO }}
+      RUN_SERVICE_HOSPITAL: ${{ vars.RUN_SERVICE_HOSPITAL }}
+      NEXT_PUBLIC_USE_FIREBASE_EMULATOR: 'false'
+      NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      NEXT_PUBLIC_FIREBASE_API_KEY: ${{ vars.NEXT_PUBLIC_FIREBASE_API_KEY }}
+      NEXT_PUBLIC_FIREBASE_APP_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_APP_ID }}
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+      NEXT_PUBLIC_APP_CHECK_SITE_KEY: ${{ vars.NEXT_PUBLIC_APP_CHECK_SITE_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const gate = require('./scripts/cd-gate.cjs');
+            await gate({github, context, core});
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Validate production client settings before any cloud writes
+        run: |
+          for key in GCP_PROJECT_ID GCP_AR_REPO RUN_SERVICE_HOSPITAL NEXT_PUBLIC_API_BASE_URL NEXT_PUBLIC_FIREBASE_API_KEY NEXT_PUBLIC_FIREBASE_APP_ID NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN NEXT_PUBLIC_APP_CHECK_SITE_KEY; do
+            test -n "${!key}" || { echo "::error::Missing variable: $key (see docs/CD.md)"; exit 1; }
+          done
+          test "$GCP_PROJECT_ID" = project-7efcc4c4-6c86-490c-ba5 || exit 1
+          npm ci --prefix services/api --ignore-scripts
+          npm ci --prefix apps/hospital
+          cd apps/hospital
+          node --import tsx -e 'require("./lib/client-config.ts").clientConfig()'
+      - uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+          token_format: access_token
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Require Terraform-managed hospital runtime
+        run: |
+          gcloud run services describe "$RUN_SERVICE_HOSPITAL" \
+            --project "$GCP_PROJECT_ID" --region "$GCP_REGION" --format='value(metadata.name)'
+      - name: Build and push server image
+        run: |
+          image="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_AR_REPO}/hospital:${GITHUB_SHA}"
+          echo "HOSPITAL_IMAGE=$image" >> "$GITHUB_ENV"
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          docker build -f docker/hospital/Dockerfile --target prod -t "$image" \
+            --build-arg NEXT_PUBLIC_API_BASE_URL \
+            --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID \
+            --build-arg NEXT_PUBLIC_FIREBASE_API_KEY \
+            --build-arg NEXT_PUBLIC_FIREBASE_APP_ID \
+            --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN \
+            --build-arg NEXT_PUBLIC_APP_CHECK_SITE_KEY .
+          docker push "$image"
+      - name: Deploy server without changing Terraform runtime settings
+        run: |
+          gcloud run deploy "$RUN_SERVICE_HOSPITAL" \
+            --project "$GCP_PROJECT_ID" --region "$GCP_REGION" \
+            --image "$HOSPITAL_IMAGE" --no-traffic \
+            --revision-suffix "sha-${GITHUB_SHA::12}" --quiet
+          gcloud run services update-traffic "$RUN_SERVICE_HOSPITAL" \
+            --project "$GCP_PROJECT_ID" --region "$GCP_REGION" \
+            --to-revisions "${RUN_SERVICE_HOSPITAL}-sha-${GITHUB_SHA::12}=100" --quiet
+      - name: Verify unauthenticated login and report origin
+        run: |
+          origin="$(gcloud run services describe "$RUN_SERVICE_HOSPITAL" --project "$GCP_PROJECT_ID" --region "$GCP_REGION" --format='value(status.url)')"
+          curl --fail --silent --show-error "$origin/login" -o /dev/null
+          echo "Hospital origin: $origin (commit $GITHUB_SHA)" >> "$GITHUB_STEP_SUMMARY"

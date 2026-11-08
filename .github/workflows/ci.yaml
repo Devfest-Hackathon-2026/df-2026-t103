@@ -32,6 +32,10 @@ jobs:
       - run: npm test
       - run: npm run build
 
+      - name: Test deployment gate
+        working-directory: .
+        run: node --test scripts/cd-gate.test.cjs
+
   api-emulator:
     name: api / firebase emulator integration tests
     runs-on: ubuntu-latest
@@ -72,6 +76,17 @@ jobs:
 
       - name: Build api image (all targets)
         run: docker build -f docker/api/Dockerfile .
+
+      - name: Build hospital server image
+        run: docker build -f docker/hospital/Dockerfile --target prod -t hospital-ci .
+
+      - name: Smoke test the packaged hospital server
+        run: |
+          container="$(docker run -d -p 127.0.0.1::8080 hospital-ci)"
+          trap 'docker rm -f "$container" >/dev/null' EXIT
+          port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8080/tcp") 0).HostPort}}' "$container")"
+          curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 1 "http://127.0.0.1:$port/login" -o /dev/null
+          node scripts/hospital-server-smoke.mjs "http://127.0.0.1:$port"
 
       - name: Build firebase emulator image
         run: docker build -f docker/firebase/Dockerfile .

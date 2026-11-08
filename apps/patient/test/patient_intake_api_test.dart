@@ -66,6 +66,7 @@ void main() {
               'initialSymptomText': text,
             }),
             200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
           );
         });
         addTearDown(client.close);

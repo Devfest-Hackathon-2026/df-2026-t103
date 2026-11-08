@@ -3,7 +3,10 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { Deps } from "../deps.js";
 import { RateRules } from "../lib/rateLimit.js";
-import { requireIdempotencyKey } from "../lib/idempotency.js";
+import {
+  optionalIdempotencyKey,
+  requireIdempotencyKey,
+} from "../lib/idempotency.js";
 import {
   intakeAnswerPatchSchema,
   intakeAnswerSchema,
@@ -170,15 +173,20 @@ export function registerIntakeRoutes(
         },
         tags: ["intakes"],
         summary: "回答保存（患者原文をそのまま保持, FR-I05）",
+        description:
+          "Idempotency-Key は任意（省略時は従来動作）。指定時の重複排除は台帳が存在し有効期限内の同一操作再試行に限る。期限切れ台帳が残っている場合は409。TTL物理削除後の同一キー再利用は保証しないため、呼び出し側は期限後に同一操作を自動再送しないこと。",
         security: [{ bearerAuth: [] }],
       },
     },
-    async (req) =>
-      saveAnswer(deps, {
+    async (req) => {
+      const idempotencyKey = optionalIdempotencyKey(req);
+      return saveAnswer(deps, {
         uid: uidOf(req),
         intakeId: req.params.intakeId,
         body: req.body,
-      }),
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      });
+    },
   );
 
   // API-014 回答修正（後続の active 質問を invalidated）

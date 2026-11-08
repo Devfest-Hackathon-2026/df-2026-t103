@@ -18,7 +18,7 @@
 
 ## 今回の変更（v1.1）
 
-- 副作用APIの冪等ヘッダーは **`Idempotency-Key`** へ統一（従来の`X-Idempotency-Key`は廃止）。
+- 副作用APIの冪等ヘッダーは **`Idempotency-Key`** へ統一（従来の`X-Idempotency-Key`は廃止）。問診回答保存 `POST /intakes/{intakeId}/answers` のみ既存クライアント互換のため任意で、省略時は従来動作を維持する。
 - メール新規登録 **P-004** は同意チェックを登録フォームに統合。サーバ `POST /auth/register` で同意と文書版を**Admin SDK起動前**に検証し、同意済みの場合だけFirebase Authユーザーを作成してFirestoreに必要情報を保存。
 - Google/Passkeyはプロバイダ認証後、初回の **P-002**（追加情報・必須同意）を通す。同意済みならP-006プロフィール登録。すべての業務APIは有効な同意を確認。
 - **`POST /consents` は廃止**。初回メールの同意は `/auth/register`、Google/Passkey初回・規約改定時の同意は `/onboarding/consents` に統合。履歴参照 `GET /consents` は存続。

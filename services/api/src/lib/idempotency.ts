@@ -22,6 +22,13 @@ export function requireIdempotencyKey(req: FastifyRequest): string {
   return key;
 }
 
+/** Optional migration path for existing clients; supplied keys use the same validation. */
+export function optionalIdempotencyKey(req: FastifyRequest): string | undefined {
+  const raw = req.headers["idempotency-key"];
+  if (raw === undefined) return undefined;
+  return requireIdempotencyKey(req);
+}
+
 export function requestHash(deps: Deps, body: unknown): string {
   return hmacParts(deps.config.hmacSecret, canonicalJson(body));
 }
@@ -54,6 +61,8 @@ export async function runIdempotent<T>(
     principal: string;
     requestHash: string;
     execute: (tx: Transaction) => Promise<T>;
+    validateReplay?: (tx: Transaction) => Promise<void>;
+    rejectExpiredReplay?: boolean;
     ttlHours?: number;
   },
 ): Promise<IdempotentOutcome<T>> {
@@ -78,6 +87,18 @@ export async function runIdempotent<T>(
         );
       }
       if (doc.status === "completed") {
+        // Firestore TTL deletion is asynchronous. Callers which cannot safely
+        // repeat an old operation may opt to reject at the logical deadline.
+        if (
+          params.rejectExpiredReplay &&
+          (doc.expiresAt as Timestamp).toMillis() <= deps.clock.now().getTime()
+        ) {
+          throw ApiError.conflict(
+            ErrorCodes.IDEMPOTENCY_CONFLICT,
+            "このIdempotency-Keyの有効期限が切れました。新しいキーで再送してください。",
+          );
+        }
+        await params.validateReplay?.(tx);
         return { result: doc.result as T, replayed: true };
       }
       throw new ApiError(

@@ -356,11 +356,16 @@ export async function submitSymptoms(
  */
 export async function saveAnswer(
   deps: Deps,
-  params: { uid: string; intakeId: string; body: IntakeAnswerBody },
+  params: {
+    uid: string;
+    intakeId: string;
+    body: IntakeAnswerBody;
+    idempotencyKey?: string;
+  },
 ): Promise<{ answerId: string; intakeRevision: number }> {
   const body = params.body;
   // 選択肢コードは当該質問の options に存在するものだけ（サービス側でも検査）
-  const result = await deps.db.runTransaction(async (tx) => {
+  const execute = async (tx: Transaction) => {
     const intakeSnap = await tx.get(deps.db.doc(`intakes/${params.intakeId}`));
     const intake = intakeSnap.data() as IntakeDoc | undefined;
     if (!intakeSnap.exists || !intake || intake.patientUid !== params.uid) {
@@ -462,7 +467,30 @@ export async function saveAnswer(
       answerId: body.questionId,
       intakeRevision: intake.revision + 1,
     };
-  });
+  };
+  const result = params.idempotencyKey
+    ? (
+        await runIdempotent(deps, {
+          namespace: "intake_answer",
+          key: params.idempotencyKey,
+          principal: params.uid,
+          requestHash: requestHash(deps, { intakeId: params.intakeId, body }),
+          execute,
+          // Do not re-execute an old answer after key expiry: it can overwrite
+          // a later revision. TTL cleanup is asynchronous, so check expiresAt.
+          rejectExpiredReplay: true,
+          // Replays still verify that the authenticated caller currently owns
+          // an existing intake; do not disclose stored results after deletion.
+          validateReplay: async (tx) => {
+            const snap = await tx.get(deps.db.doc(`intakes/${params.intakeId}`));
+            const intake = snap.data() as IntakeDoc | undefined;
+            if (!snap.exists || !intake || intake.patientUid !== params.uid) {
+              throw ApiError.notFound("問診が見つかりません。");
+            }
+          },
+        })
+      ).result
+    : await deps.db.runTransaction(execute);
   if ("kind" in result) throw draftExpiredError();
   return result;
 }

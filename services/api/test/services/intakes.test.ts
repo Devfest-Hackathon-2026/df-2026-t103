@@ -10,6 +10,7 @@ import {
   transitionIntake,
 } from "../../src/services/intakes.js";
 import type { ApiError } from "../../src/lib/errors.js";
+import { idempotencyKeyHash } from "../../src/lib/idempotency.js";
 import type {
   IntakeDoc,
   QuestionDoc,
@@ -283,6 +284,96 @@ describe("intake domain (#9)", () => {
       (x) => x.questionId === q.questionId,
     );
     expect(question?.status).toBe("answered");
+  });
+
+  it("replays a keyed answer after commit and rejects a changed payload", async () => {
+    const deps = makeTestDeps();
+    const intakeId = await makeQuestioning(deps);
+    const q = await appendQuestion(deps, {
+      uid: UID,
+      intakeId,
+      expectedIntakeRevision: 2,
+      question: {
+        questionText: "期間は？",
+        topic: "onset",
+        options: [{ code: "A", label: "今日" }],
+        generatedBy: "fixed_template",
+      },
+    });
+    const params = {
+      uid: UID,
+      intakeId,
+      idempotencyKey: "answer-retry-key",
+      body: {
+        questionId: q.questionId,
+        questionRevision: 1,
+        selectedCodes: ["A"],
+        answerState: "answered" as const,
+        expectedIntakeRevision: q.intakeRevision,
+      },
+    };
+    const first = await saveAnswer(deps, params);
+    const replay = await saveAnswer(deps, params);
+    expect(replay).toEqual(first);
+    expect((await getIntakeDetail(deps, { uid: UID, intakeId })).revision).toBe(
+      first.intakeRevision,
+    );
+    await expect(
+      saveAnswer(deps, {
+        ...params,
+        body: { ...params.body, selectedCodes: [] },
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "IDEMPOTENCY_CONFLICT" });
+
+    // Key reuse is deliberately rejected at the logical expiry boundary;
+    // replaying the old write after a later edit could roll back an answer.
+    const keyDoc = await deps.memDb
+      .doc(`idempotencyKeys/${idempotencyKeyHash(deps, "intake_answer", UID, params.idempotencyKey)}`)
+      .get();
+    expect(keyDoc.exists).toBe(true);
+    const expiresAt = (keyDoc.data() as { expiresAt: { toMillis(): number } })
+      .expiresAt.toMillis();
+    deps.clock.advanceMs(expiresAt - deps.clock.now().getTime() - 1);
+    expect(await saveAnswer(deps, params)).toEqual(first);
+    deps.clock.advanceMs(1);
+    await expect(saveAnswer(deps, params)).rejects.toMatchObject({
+      statusCode: 409,
+      code: "IDEMPOTENCY_CONFLICT",
+    });
+    expect((await getIntakeDetail(deps, { uid: UID, intakeId })).revision).toBe(
+      first.intakeRevision,
+    );
+
+    // The guarantee ends when TTL physically removes the ledger. The stale
+    // answer is then evaluated as a fresh operation (and rejected here by the
+    // intake revision guard); callers must not rely on replay or 409 behavior.
+    await deps.memDb
+      .doc(`idempotencyKeys/${idempotencyKeyHash(deps, "intake_answer", UID, params.idempotencyKey)}`)
+      .delete();
+    await expect(saveAnswer(deps, params)).rejects.toMatchObject({
+      statusCode: 409,
+      code: "REVISION_CONFLICT",
+    });
+  });
+
+  it("scopes keyed answer replay to UID and intake, and rechecks intake ownership", async () => {
+    const deps = makeTestDeps();
+    const intakeId = await makeQuestioning(deps);
+    const q = await appendQuestion(deps, {
+      uid: UID, intakeId, expectedIntakeRevision: 2,
+      question: { questionText: "期間は？", topic: "onset", options: [{ code: "A", label: "今日" }], generatedBy: "fixed_template" },
+    });
+    const params = {
+      uid: UID, intakeId, idempotencyKey: "scoped-answer-key",
+      body: { questionId: q.questionId, questionRevision: 1, selectedCodes: ["A"], answerState: "answered" as const, expectedIntakeRevision: q.intakeRevision },
+    };
+    const result = await saveAnswer(deps, params);
+    await expect(saveAnswer(deps, { ...params, uid: "other-patient" })).rejects.toMatchObject({ statusCode: 404 });
+    const otherIntake = await makeQuestioning(deps);
+    await expect(saveAnswer(deps, { ...params, intakeId: otherIntake })).rejects.toMatchObject({ statusCode: 409, code: "IDEMPOTENCY_CONFLICT" });
+    await deps.memDb.doc(`intakes/${intakeId}`).delete();
+    await expect(saveAnswer(deps, params)).rejects.toMatchObject({ statusCode: 404 });
+    expect(result.intakeRevision).toBe(q.intakeRevision + 1);
   });
 
   it("rejects answer codes not in the question options", async () => {

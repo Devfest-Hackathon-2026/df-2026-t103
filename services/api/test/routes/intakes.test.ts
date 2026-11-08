@@ -238,6 +238,33 @@ describe("intake routes (#11, API-009〜016)", () => {
     expect(stale.statusCode).toBe(409);
   });
 
+  it("POST /answers remains authenticated and rejects a malformed optional key", async () => {
+    const { app } = await setup();
+    const unauthenticated = await app.inject({
+      method: "POST",
+      url: "/v1/intakes/intake-id/answers",
+      payload: {},
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const q = await nextQuestion(app, intakeId, rev);
+    const invalidKey = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/answers`,
+      headers: { ...authHeader(UID), ...idem("invalid key") },
+      payload: {
+        questionId: q.questionId,
+        questionRevision: 1,
+        selectedCodes: ["LT_WEEK"],
+        answerState: "answered",
+        expectedIntakeRevision: q.revision,
+      },
+    });
+    expect(invalidKey.statusCode).toBe(400);
+  });
+
   it("PATCH /answers/{id} edits answer (FR-I08)", async () => {
     const { app } = await setup();
     const { intakeId } = await createIntake(app);

@@ -17,4 +17,12 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Node CLI helper scripts (emulator seeding, etc.) run under the Node
+    // runtime, so expose its globals to the linter.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: { process: "readonly", console: "readonly" },
+    },
+  },
 );

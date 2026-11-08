@@ -75,7 +75,16 @@ export async function clearSession(): Promise<void> {
     FACILITY_COOKIE_PROD, // 施設コンテキストも共有端末の次ユーザに残さない
     FACILITY_COOKIE_DEV,
   ]) {
-    jar.delete(name);
+    // __Host- cookies require Secure even on the expiration response. A bare
+    // delete omits it, so browsers reject the deletion and retain credentials.
+    jar.set(name, "", {
+      httpOnly: true,
+      sameSite: "strict",
+      secure: name.startsWith("__Host-"),
+      path: "/",
+      expires: new Date(0),
+      maxAge: 0,
+    });
   }
 }
 

@@ -135,4 +135,16 @@ console.log(`seeded ready patient uid=${uid} email=${EMAIL}`);
 const gateUid = await ensureNamedUser(GATE_EMAIL, GATE_PASSWORD);
 await seedLegalPendingAccount(gateUid);
 console.log(`seeded consent-gated patient uid=${gateUid} email=${GATE_EMAIL}`);
+
+// A separate ready patient for the deletion lifecycle E2E (E2E-005), so
+// requesting/cancelling deletion never mutates the intake patient's state.
+const DEL_EMAIL =
+  process.env.E2E_DELETION_EMAIL ?? "synthetic-deletion@example.test";
+const DEL_PASSWORD =
+  process.env.E2E_DELETION_PASSWORD ?? "local-only-deletion-123!";
+const delUid = await ensureNamedUser(DEL_EMAIL, DEL_PASSWORD);
+await seedAccount(delUid);
+await seedCompleteProfile(delUid);
+await seedCurrentConsents(delUid);
+console.log(`seeded deletion patient uid=${delUid} email=${DEL_EMAIL}`);
 process.exit(0);

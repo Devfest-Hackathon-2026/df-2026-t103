@@ -49,6 +49,10 @@ enum EmailAuthFailure {
   registrationRejected,
   unavailable,
   signInFailed,
+  // Too many attempts or a temporary lock (FR-A02). Distinct from a plain
+  // failure so the UI can ask the user to wait instead of retrying at once,
+  // without revealing whether the account exists.
+  rateLimited,
 }
 
 class EmailAuthException implements Exception {
@@ -150,6 +154,10 @@ class EmailAuthClient {
     } catch (_) {
       throw const EmailAuthException(EmailAuthFailure.unavailable);
     }
+    if (status == 429) {
+      // The API throttled the request; the account state is unchanged (FR-A02).
+      throw const EmailAuthException(EmailAuthFailure.rateLimited, statusCode: 429);
+    }
     if (status != 201) {
       throw EmailAuthException(
         EmailAuthFailure.registrationRejected,
@@ -164,6 +172,15 @@ class EmailAuthClient {
     }
     try {
       await signInProvider.signIn(email, password);
+    } on FirebaseAuthException catch (e) {
+      // Firebase reports both throttling and temporary account locks as
+      // too-many-requests; surface it as rate limited so the UI asks the user
+      // to wait (FR-A02). The error detail is not propagated to avoid leaking
+      // credentials or whether the account exists.
+      if (e.code == 'too-many-requests') {
+        throw const EmailAuthException(EmailAuthFailure.rateLimited);
+      }
+      throw const EmailAuthException(EmailAuthFailure.signInFailed);
     } catch (_) {
       throw const EmailAuthException(EmailAuthFailure.signInFailed);
     }

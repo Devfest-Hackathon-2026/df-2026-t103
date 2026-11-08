@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-enum EmailAuthResult { success, failure, cancelled }
+enum EmailAuthResult { success, failure, cancelled, rateLimited }
 
 /// The caller must supply the current, approved document, not placeholder text.
 class AuthLegalDocument {
@@ -119,6 +119,10 @@ class _EmailAuthFormState extends State<EmailAuthForm> {
           EmailAuthResult.success => null,
           EmailAuthResult.failure => '処理に失敗しました。もう一度お試しください。',
           EmailAuthResult.cancelled => '処理はキャンセルされました。',
+          // Rate limited or temporarily locked: ask the user to wait rather than
+          // retry at once, and do not reveal whether the account exists (FR-A02).
+          EmailAuthResult.rateLimited =>
+            '試行が多いため、安全のため一時的に制限されています。しばらく時間をおいてからお試しください。',
         };
       });
     } catch (_) {

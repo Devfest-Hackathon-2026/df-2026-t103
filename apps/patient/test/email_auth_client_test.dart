@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart' show FirebaseAuthException;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:patient/email_auth_client.dart';
 
@@ -24,9 +25,12 @@ class FakeTransport implements RegistrationTransport {
 class FakeSignIn implements EmailSignIn {
   int calls = 0;
   bool fail = false;
+  // When set, signIn throws this instead of the generic StateError.
+  Object? throwThis;
   @override
   Future<void> signIn(String email, String password) async {
     calls++;
+    if (throwThis != null) throw throwThis!;
     if (fail) throw StateError('untrusted provider detail');
   }
 }
@@ -191,6 +195,48 @@ void main() {
         ),
       ),
     );
+  });
+
+  test('surfaces too-many-requests sign-in as rate limited (FR-A02)', () async {
+    signIn.throwThis = FirebaseAuthException(code: 'too-many-requests');
+    await expectLater(
+      client.signIn(email: 'person@example.invalid', password: 'example123'),
+      throwsA(
+        isA<EmailAuthException>().having(
+          (e) => e.reason,
+          'reason',
+          EmailAuthFailure.rateLimited,
+        ),
+      ),
+    );
+  });
+
+  test('other FirebaseAuth errors stay a generic sign-in failure', () async {
+    signIn.throwThis = FirebaseAuthException(code: 'wrong-password');
+    await expectLater(
+      client.signIn(email: 'person@example.invalid', password: 'example123'),
+      throwsA(
+        isA<EmailAuthException>().having(
+          (e) => e.reason,
+          'reason',
+          EmailAuthFailure.signInFailed,
+        ),
+      ),
+    );
+  });
+
+  test('registration throttling (429) is rate limited, not rejected (FR-A02)',
+      () async {
+    transport.status = 429;
+    await expectLater(
+      register(),
+      throwsA(
+        isA<EmailAuthException>()
+            .having((e) => e.reason, 'reason', EmailAuthFailure.rateLimited)
+            .having((e) => e.statusCode, 'status', 429),
+      ),
+    );
+    expect(signIn.calls, 0);
   });
 
   group('registration input limits mirror the API schema', () {

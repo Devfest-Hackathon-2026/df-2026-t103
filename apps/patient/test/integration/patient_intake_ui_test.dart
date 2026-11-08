@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:patient/patient_intake_api.dart';
 import 'package:patient/patient_intake_screen.dart';
 import 'package:patient/patient_theme.dart';
@@ -18,7 +19,11 @@ void main() {
   const enabled = bool.fromEnvironment('RUN_INTAKE_UI_INTEGRATION');
   if (enabled) _LiveBinding();
   testWidgets('real sign-in → symptom UI → API persistence → logout', (tester) async {
-    final client = http.Client();
+    // IntakeQuestionFlow が保存直後に next-question を実発火するため、
+    // dart:io の HttpClient を直接保持し、teardown で force クローズして
+    // keep-alive のアイドルタイマーを残さない（pending-timer invariant 対策）。
+    final httpClient = HttpClient();
+    final client = IOClient(httpClient);
     final changes = StreamController<void>.broadcast(sync: true);
     IntakeIdentity? owner;
     final api = PatientIntakeApi(origin: 'http://127.0.0.1:8080', client: client,
@@ -54,13 +59,16 @@ void main() {
       await waitFor(find.text('症状（必須）'));
       await tester.enterText(find.byType(TextField), '合成テストの症状入力です');
       await tester.runAsync(() async { await tester.tap(find.text('症状を保存')); });
-      await waitFor(find.text('問診の症状を保存しました。'));
-      expect(find.text('医療機関への送信や問診票の確定はまだ行っていません。'), findsOneWidget);
+      // 保存後は IntakeQuestionFlow が起動し、BE の next-question へ実接続して
+      // 対話ループへ入る（P-013/P-014）。導入文言＋実 API 由来の最初の質問
+      // （常に「答えたくない」を伴う）が描画されることで、保存成功と対話接続を確認。
+      await waitFor(find.text('症状を保存しました。続けて質問にお答えください。'));
+      await waitFor(find.text('答えたくない'));
       await tester.tap(find.text('ログアウト'));
       await tester.pump();
-      expect(find.text('問診の症状を保存しました。'), findsNothing);
+      expect(find.text('症状を保存しました。続けて質問にお答えください。'), findsNothing);
       expect(find.text('ログイン'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
-    } finally { client.close(); await changes.close(); }
+    } finally { httpClient.close(force: true); await changes.close(); }
   }, skip: !enabled);
 }

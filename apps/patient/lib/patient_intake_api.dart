@@ -129,7 +129,9 @@ class PatientIntakeApi {
 
   /// Saves initial symptoms, then reads the actual saved record. This does not
   /// finalize a questionnaire or deliver information to a medical institution.
-  Future<void> submit(IntakeSubmission submission) async {
+  /// Returns the intake revision once it reaches `questioning` (2), which the
+  /// question loop uses as the first `expectedIntakeRevision`.
+  Future<int> submit(IntakeSubmission submission) async {
     if (submission.text.isEmpty ||
         submission.text.length > 1000 ||
         !RegExp(r'[぀-ヿ一-鿿a-zA-Z0-9]').hasMatch(submission.text)) {
@@ -176,11 +178,235 @@ class PatientIntakeApi {
       stored = await _request(owner, 'GET', path);
     }
     _check(owner);
+    final revision = stored['revision'];
     if (stored['intakeId'] != submission._intakeId ||
         stored['initialSymptomText'] != submission.text ||
         stored['status'] != 'questioning' ||
-        stored['revision'] != 2) {
+        revision != 2) {
+      throw const IntakeApiException('SAVE_NOT_CONFIRMED');
+    }
+    return revision as int;
+  }
+
+  /// Confirms the submission still belongs to the current session and has a
+  /// started intake. The question loop methods below read [IntakeSubmission]
+  /// state established by [submit].
+  Future<IntakeIdentity> _resume(IntakeSubmission submission) async {
+    final owner = await identity();
+    _check(owner);
+    final previous = submission._owner;
+    if (previous == null ||
+        previous.uid != owner.uid ||
+        !identical(previous.epoch, owner.epoch)) {
+      throw const IntakeApiException('SESSION_CHANGED');
+    }
+    if (submission._intakeId == null) {
+      throw const IntakeApiException('NOT_STARTED');
+    }
+    return owner;
+  }
+
+  /// API-012. Asks the backend for the next question. The server generates it
+  /// with the LLM (or the deterministic fixed set as fallback) and persists a
+  /// snapshot before returning. A `null` question means questioning is complete
+  /// and the caller should move to the review summary.
+  Future<NextQuestion> nextQuestion(
+    IntakeSubmission submission,
+    int expectedIntakeRevision,
+  ) async {
+    final owner = await _resume(submission);
+    final res = await _request(
+      owner,
+      'POST',
+      '/intakes/${submission._intakeId}/next-question',
+      body: {'expectedIntakeRevision': expectedIntakeRevision},
+    );
+    final revision = res['intakeRevision'];
+    if (revision is! int) {
+      throw const IntakeApiException('INVALID_RESPONSE');
+    }
+    final question = res['question'];
+    if (question == null) return NextQuestion(null, revision);
+    if (question is! Map<String, dynamic>) {
+      throw const IntakeApiException('INVALID_RESPONSE');
+    }
+    return NextQuestion(_parseQuestion(question), revision);
+  }
+
+  IntakeQuestion _parseQuestion(Map<String, dynamic> q) {
+    final id = q['questionId'];
+    final text = q['questionText'];
+    final topic = q['topic'];
+    final generatedBy = q['generatedBy'];
+    final questionRevision = q['questionRevision'];
+    final stepIndex = q['stepIndex'];
+    final rawOptions = q['options'];
+    if (id is! String ||
+        text is! String ||
+        topic is! String ||
+        generatedBy is! String ||
+        questionRevision is! int ||
+        stepIndex is! int ||
+        rawOptions is! List) {
+      throw const IntakeApiException('INVALID_RESPONSE');
+    }
+    final options = <IntakeOption>[];
+    for (final o in rawOptions) {
+      if (o is! Map || o['code'] is! String || o['label'] is! String) {
+        throw const IntakeApiException('INVALID_RESPONSE');
+      }
+      options.add(IntakeOption(o['code'] as String, o['label'] as String));
+    }
+    final modelVersion = q['modelVersion'];
+    return IntakeQuestion(
+      questionId: id,
+      questionRevision: questionRevision,
+      stepIndex: stepIndex,
+      questionText: text,
+      topic: topic,
+      options: options,
+      generatedBy: generatedBy,
+      modelVersion: modelVersion is String ? modelVersion : null,
+    );
+  }
+
+  /// API-013. Saves the patient's answer to [question]. `answerState` is one of
+  /// `answered`, `unknown`, `skipped`. Returns the new intake revision, which
+  /// must be threaded into the following request as `expectedIntakeRevision`.
+  Future<int> saveAnswer(
+    IntakeSubmission submission, {
+    required IntakeQuestion question,
+    required List<String> selectedCodes,
+    required String answerState,
+    required int expectedIntakeRevision,
+    String? freeText,
+  }) async {
+    final owner = await _resume(submission);
+    final res = await _request(
+      owner,
+      'POST',
+      '/intakes/${submission._intakeId}/answers',
+      body: {
+        'questionId': question.questionId,
+        'questionRevision': question.questionRevision,
+        'selectedCodes': selectedCodes,
+        'answerState': answerState,
+        'expectedIntakeRevision': expectedIntakeRevision,
+        'freeText': ?freeText,
+      },
+    );
+    final revision = res['intakeRevision'];
+    if (revision is! int) {
+      throw const IntakeApiException('INVALID_RESPONSE');
+    }
+    return revision;
+  }
+
+  /// API-015. Moves the intake to `review` and returns the summary. Unanswered
+  /// topics stay unanswered (they are not inferred as "none").
+  Future<IntakeSummary> summarize(
+    IntakeSubmission submission,
+    int expectedIntakeRevision,
+  ) async {
+    final owner = await _resume(submission);
+    final res = await _request(
+      owner,
+      'POST',
+      '/intakes/${submission._intakeId}/summary',
+      body: {'expectedIntakeRevision': expectedIntakeRevision},
+    );
+    final revision = res['intakeRevision'];
+    final summary = res['summary'];
+    if (revision is! int ||
+        res['status'] != 'review' ||
+        summary is! Map<String, dynamic>) {
+      throw const IntakeApiException('INVALID_RESPONSE');
+    }
+    final chief = summary['chiefComplaint'];
+    final chiefValue = chief is Map ? chief['value'] : null;
+    final unanswered = <String>[];
+    final rawUnanswered = summary['unansweredTopics'];
+    if (rawUnanswered is List) {
+      for (final t in rawUnanswered) {
+        if (t is String) unanswered.add(t);
+      }
+    }
+    return IntakeSummary(
+      intakeRevision: revision,
+      chiefComplaint: chiefValue is String ? chiefValue : null,
+      unansweredTopics: unanswered,
+    );
+  }
+
+  /// API-016. Finalizes the reviewed intake into an immutable questionnaire.
+  /// The patient must have confirmed the review (`summaryReviewConfirmed`).
+  Future<void> finalize(
+    IntakeSubmission submission,
+    int expectedIntakeRevision,
+  ) async {
+    final owner = await _resume(submission);
+    final res = await _request(
+      owner,
+      'POST',
+      '/intakes/${submission._intakeId}/finalize',
+      body: {
+        'expectedIntakeRevision': expectedIntakeRevision,
+        'summaryReviewConfirmed': true,
+      },
+      key: 'finalize-${submission.key}',
+    );
+    if (res['status'] != 'finalized') {
       throw const IntakeApiException('SAVE_NOT_CONFIRMED');
     }
   }
+}
+
+/// One selectable choice on a question.
+class IntakeOption {
+  const IntakeOption(this.code, this.label);
+  final String code;
+  final String label;
+}
+
+/// A generated question snapshot returned by the backend (API-012).
+class IntakeQuestion {
+  const IntakeQuestion({
+    required this.questionId,
+    required this.questionRevision,
+    required this.stepIndex,
+    required this.questionText,
+    required this.topic,
+    required this.options,
+    required this.generatedBy,
+    this.modelVersion,
+  });
+  final String questionId;
+  final int questionRevision;
+  final int stepIndex;
+  final String questionText;
+  final String topic;
+  final List<IntakeOption> options;
+
+  /// `llm` when produced by the model, `fallback`/`fixed_template` otherwise.
+  final String generatedBy;
+  final String? modelVersion;
+}
+
+/// Result of a next-question request. A `null` [question] ends questioning.
+class NextQuestion {
+  const NextQuestion(this.question, this.intakeRevision);
+  final IntakeQuestion? question;
+  final int intakeRevision;
+}
+
+/// Minimal review summary (API-015) used to confirm before finalizing.
+class IntakeSummary {
+  const IntakeSummary({
+    required this.intakeRevision,
+    required this.chiefComplaint,
+    required this.unansweredTopics,
+  });
+  final int intakeRevision;
+  final String? chiefComplaint;
+  final List<String> unansweredTopics;
 }

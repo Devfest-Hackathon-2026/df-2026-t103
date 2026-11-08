@@ -14,7 +14,7 @@
     "test:emulator": "node --dns-result-order=ipv4first --import tsx --test tests/*.integration.ts"
   },
   "dependencies": {
-    "firebase": "^12.6.0",
+    "firebase": "^13.2.0",
     "next": "16.4.5",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -25,7 +25,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "eslint": "^9.0.0",
+    "eslint": "^10.14.0",
     "eslint-config-next": "16.4.5",
     "tailwindcss": "^4.3.4",
     "tsx": "^4.0.0",

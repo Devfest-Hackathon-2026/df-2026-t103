@@ -136,7 +136,7 @@ export function registerStaffRoutes(app: FastifyInstance, deps: Deps): void {
     for (let i = 0; i < staffMembers.length; i += 20) {
       const chunk = await Promise.all(
         staffMembers.slice(i, i + 20).map(async ({ row: r, role, status }) => {
-          let email: string | null = null;
+          let email: string | null;
           try {
             const user = await deps.authAdmin.getUser(r.data.userUid);
             email = user?.email ?? null;

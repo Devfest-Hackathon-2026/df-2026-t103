@@ -27,6 +27,16 @@ bool allowsDemoApiOrigin(
   return androidHostAliasAllowed && baseUrl == 'http://10.0.2.2:8080';
 }
 
+/// Shared fail-closed origin validation for local API clients.
+void requireDemoApiOrigin(String origin) {
+  if (!allowsDemoApiOrigin(
+    origin,
+    androidHostAliasAllowed: allowsAndroidHostAlias,
+  )) {
+    throw ArgumentError('Only explicit local demo API origins are allowed');
+  }
+}
+
 /// Local demo only. The caller owns and closes [client].
 class DemoRegistrationTransport implements RegistrationTransport {
   DemoRegistrationTransport({

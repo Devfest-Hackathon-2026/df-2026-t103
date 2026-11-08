@@ -160,6 +160,20 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     await poll("!!document.querySelector('#hx-login-email') && !!document.querySelector('button[type=submit]:not(:disabled)')");
     assert.equal(await evaluate("document.querySelector('form').method"), "post");
     assert.equal(await evaluate("location.search"), "");
+    // Real password-only staff login, without a pre-injected session.
+    await evaluate(`document.querySelector('[name=email]').value=${JSON.stringify(email)}; document.querySelector('[name=password]').value=${JSON.stringify(password)}; document.querySelector('form').requestSubmit();`);
+    await poll("location.pathname === '/facilities' && document.body.innerText.includes('合成審査施設')");
+    const { cookies } = await send("Network.getCookies", { urls: [origin] }, sessionId);
+    const sessionCookie = cookies.find((cookie) => cookie.name === "mmr-session");
+    assert.ok(sessionCookie, "Password-only sign-in must issue a verified session Cookie");
+    assert.equal(sessionCookie.httpOnly, true);
+    assert.equal(sessionCookie.sameSite, "Strict");
+    assert.ok(!(await evaluate("document.cookie")).includes("mmr-session"));
+    assert.deepEqual(await evaluate("window.cspViolations"), [], "Staff login must preserve CSP");
+    await send("Page.navigate", { url: `${origin}/api/session/logout` }, sessionId);
+    await poll("location.pathname === '/login' && !!document.querySelector('#hx-login-email')");
+    const loggedOut = await send("Network.getCookies", { urls: [origin] }, sessionId);
+    assert.equal(loggedOut.cookies.filter((cookie) => cookie.name === "mmr-session").length, 0);
   } finally {
     socket?.close();
     for (const process of [chrome, next]) {

@@ -100,6 +100,7 @@ jobs:
       - name: Smoke test the packaged hospital server
         run: |
           container="$(docker run -d -p 127.0.0.1::8080 \
+            -e HOSPITAL_PUBLIC_ORIGIN=https://hospital-ci.example.test \
             -e NEXT_PUBLIC_USE_FIREBASE_EMULATOR \
             -e NEXT_PUBLIC_API_BASE_URL -e NEXT_PUBLIC_FIREBASE_PROJECT_ID \
             -e NEXT_PUBLIC_FIREBASE_API_KEY -e NEXT_PUBLIC_FIREBASE_APP_ID \

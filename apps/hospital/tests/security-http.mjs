@@ -7,7 +7,7 @@ import { test } from "node:test";
 // credentials, browsers or patient fixtures are used.
 test("production HTTP responses retain CSP, fresh script nonces and no-store", { timeout: 30000 }, async () => {
   const child = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "0"], {
-    env: { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1" },
+    env: { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", HOSPITAL_PUBLIC_ORIGIN: "https://public.example.test" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -57,6 +57,21 @@ test("production HTTP responses retain CSP, fresh script nonces and no-store", {
         const assetResponse = await fetch(new URL(asset, origin));
         assert.equal(assetResponse.status, 200);
       }
+    }
+    // Production routes must not derive redirects from the bind/forwarded host.
+    for (const [path, expected] of [
+      ["/deliveries?status=delivered", "/login?next=%2Fdeliveries%3Fstatus%3Ddelivered"],
+      ["/api/session/logout", "/login"],
+      ["/api/session/logout?next=%2Fdeliveries", "/login?next=%2Fdeliveries"],
+      ["/api/session/logout?next=https%3A%2F%2Fevil.example", "/login"],
+    ]) {
+      const response = await fetch(`${origin}${path}`, { redirect: "manual", headers: {
+        "x-forwarded-host": "evil.example", "x-forwarded-proto": "https",
+      } });
+      assert.equal(response.status, 307);
+      assert.equal(response.headers.get("location"), `https://public.example.test${expected}`);
+      assert.match(response.headers.get("cache-control"), /no-store/);
+      if (path.startsWith("/api/session/logout")) assert.match(response.headers.get("set-cookie"), /Expires=Thu, 01 Jan 1970/);
     }
     // Router prefetches and RSC are also covered; no request-header opt-out.
     for (const headers of [{ "next-router-prefetch": "1", purpose: "prefetch" }, { RSC: "1" }]) {

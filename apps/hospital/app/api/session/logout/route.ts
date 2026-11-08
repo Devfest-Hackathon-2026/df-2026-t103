@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { portalRedirect } from "../../../../lib/portal-redirect";
 import { clearSession } from "../../../../lib/session";
 
 /**
@@ -13,11 +14,11 @@ export async function GET(req: NextRequest) {
   }
   await clearSession();
   const next = req.nextUrl.searchParams.get("next") ?? "";
-  const loginUrl = new URL("/login", req.url);
+  const query = new URLSearchParams();
   if (next.startsWith("/") && !next.startsWith("//")) {
-    loginUrl.searchParams.set("next", next);
+    query.set("next", next);
   }
-  const res = NextResponse.redirect(loginUrl);
+  const res = portalRedirect(req.url, "/login", query);
   res.headers.set("cache-control", "no-store");
   return res;
 }

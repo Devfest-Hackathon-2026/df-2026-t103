@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { staffManagementBrowser } from "./staff-management-browser.mjs";
 
-// Optional real-browser extension of test:api. Uses the real UI + SDK + BE;
+// test:browser exercises the real UI + SDK + BE;
 // no page routes, API responses, or Firebase services are intercepted.
 export async function browserSmoke({ apiBaseUrl, authHost, email, password, facilityId, rejectedFacilityId, staffIdToken, assertStillPending, assertStillReceiving, assertBrowserDelivery, staffManagement }) {
+  const chromePath = process.env.HOSPITAL_CHROME_PATH || (process.platform === "darwin"
+    ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    : "/usr/bin/google-chrome");
+  const browserCheck = spawnSync(chromePath, ["--version"], { stdio: "ignore", timeout: 5000 });
+  if (browserCheck.error || browserCheck.status !== 0) {
+    throw new Error("Chrome is unavailable. Install Chrome or set HOSPITAL_CHROME_PATH; browser tests cannot be skipped.");
+  }
   const profile = await mkdtemp(join(tmpdir(), "hospital-browser-"));
   const origin = "http://127.0.0.1:33090";
   const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "--webpack", "--hostname", "127.0.0.1", "--port", "33090"], {
@@ -19,7 +26,7 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
   let socket;
   try {
     await ready(next, (text) => text.includes("Ready in"));
-    chrome = spawn(process.env.HOSPITAL_CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ["--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { stdio: ["ignore", "pipe", "pipe"] });
+    chrome = spawn(chromePath, ["--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { stdio: ["ignore", "pipe", "pipe"] });
     const output = await ready(chrome, (text) => /DevTools listening on (ws:\/\/[^\s]+)/.test(text));
     const endpoint = output.match(/DevTools listening on (ws:\/\/[^\s]+)/)[1];
     socket = new WebSocket(endpoint);

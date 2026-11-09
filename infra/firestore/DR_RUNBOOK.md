@@ -92,5 +92,40 @@ gcloud firestore databases restore \
 検証後の新DB削除は別の承認された作業として行い、default DBやバックアップを自動削除しません。
 演習未実施・削除再適用/接続切替未完成の間はIssue #43を閉じません。
 
+## 演習時刻のローカル判定
+
+`dr_timing.py` は機密の演習記録から**時刻6項目だけ**を標準入力で受け取り、
+RPO（障害起点−snapshot）とRTO（サービス再開−障害起点）を判定します。
+クラウド接続・復元・削除・接続切替は実行しません。次は架空の記録です。
+
+```sh
+python3 infra/firestore/dr_timing.py <<'JSON'
+{
+  "snapshotTime": "2026-11-08T00:00:00Z",
+  "incidentTime": "2026-11-09T00:00:00Z",
+  "restoreCompletedAt": "2026-11-09T01:00:00Z",
+  "deletionReappliedAt": "2026-11-09T02:00:00Z",
+  "validationCompletedAt": "2026-11-09T03:00:00Z",
+  "serviceResumedAt": "2026-11-09T08:00:00Z"
+}
+JSON
+```
+
+実演習では各工程の完了を検証してから時刻を記録します。未実施工程に仮の時刻を
+埋めません。`incidentTime` は検知時刻やrestore開始時刻ではなく、障害/演習の起点です。
+RTOはrestore完了で打ち切らず、削除再適用・権限/業務検証・再開までを含みます。
+各時刻は上記順で同時刻または昇順、UTCの `Z` 表記、秒または小数点以下6桁までです。
+精度を黙って丸めないため、7桁以上の小数秒は拒否します。
+全6項目が必須で、余分なキー・重複キー・不正な日付・時刻逆転はexit 2です。
+UIDや自由記述、元の演習記録全体を渡さないでください。
+
+両目標内（24時間/8時間の境界を含む）はexit 0 `timing_targets_met`、どちらか超過は
+exit 1 `timing_targets_exceeded`。出力は判定と秒数のみです。秒数は切り上げ表示ですが、
+判定は入力の小数秒精度で行います。不正入力時も入力値や例外内容は出力しません。
+この判定は入力時刻の計算に限定されます。工程実施の真偽、削除の網羅性、復旧データの
+正しさや再開承認を証明せず、exit 0だけで復旧公開やIssue完了を判断しません。
+別途、上記の権限・削除・業務検証の証跡と実施者/検証者の記録が必要です。
+全ローカル試験は事前確認節のunittest discoverコマンドに含まれます。
+
 参照: [Firestoreバックアップ](https://firebase.google.com/docs/firestore/backups)、
 [スケジュール作成](https://docs.cloud.google.com/sdk/gcloud/reference/firestore/backups/schedules/create)。

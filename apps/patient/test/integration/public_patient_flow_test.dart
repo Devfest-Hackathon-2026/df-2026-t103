@@ -593,7 +593,19 @@ void main() {
       );
       expect(restoredAnswer['freeText'], editedFreeText);
       _flowMarker('review');
-      await waitFor(find.text('問診の内容を確認しました'));
+      final reviewConfirmation = find.text('問診の内容を確認しました');
+      final finalizeButton = find.widgetWithText(ElevatedButton, 'この内容で問診票を確定');
+      await waitFor(reviewConfirmation);
+      expect(
+        tester.widget<ElevatedButton>(finalizeButton).onPressed,
+        isNull,
+        reason: 'Re-entering review requires a fresh confirmation.',
+      );
+      await tap('問診の内容を確認しました', finder: reviewConfirmation);
+      expect(
+        tester.widget<ElevatedButton>(finalizeButton).onPressed,
+        isNotNull,
+      );
       await tap('この内容で問診票を確定');
       await waitFor(find.text('合成データ受入施設'));
       await tap('「合成データ受入施設」へ、この問診票と選択した情報を送信することに同意します');

@@ -214,6 +214,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (emulator && !projectId.startsWith("demo-")) {
     throw new Error("Firebase emulators require a demo- project ID");
   }
+  if (parsed.NODE_ENV === "production" && emulator) {
+    throw new Error("Firebase emulators must not be configured in production");
+  }
   if (!emulator && projectId.startsWith("demo-")) {
     throw new Error("A non-demo Firebase project ID is required without emulators");
   }

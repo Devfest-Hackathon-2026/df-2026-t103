@@ -25,6 +25,29 @@ describe("Firebase connection configuration", () => {
   });
 
   it.each([
+    { appCheckMode: undefined, hmacSecret: "test-secret" },
+    { appCheckMode: "permissive", hmacSecret: "test-secret" },
+    { appCheckMode: "permissive", hmacSecret: "change-me-local-dev" },
+  ] as const)(
+    "rejects production emulator configuration with APP_CHECK_MODE=$appCheckMode and HMAC=$hmacSecret",
+    ({ appCheckMode, hmacSecret }) => {
+      expect(() => loadConfig({
+        ...local,
+        NODE_ENV: "production",
+        SERVER_HMAC_SECRET: hmacSecret,
+        ...(appCheckMode === undefined ? {} : { APP_CHECK_MODE: appCheckMode }),
+      })).toThrow("Firebase emulators must not be configured in production");
+    },
+  );
+
+  it.each(["test", "development"] as const)(
+    "keeps the demo emulator configuration in %s",
+    (nodeEnv) => expect(loadConfig({ ...local, NODE_ENV: nodeEnv })).toMatchObject({
+      emulator: true, appCheckMode: "permissive",
+    }),
+  );
+
+  it.each([
     "FIRESTORE_EMULATOR_HOST", "FIREBASE_AUTH_EMULATOR_HOST",
     "FIREBASE_STORAGE_EMULATOR_HOST", "FIREBASE_DATABASE_EMULATOR_HOST",
   ] as const)("rejects missing or empty %s", (key) => {

@@ -1,4 +1,4 @@
-// Deterministic TestFlight artwork, using the patient's teal conversation motif.
+// Launch artwork only. Launcher icons come from generate_app_icon.dart.
 // Run from apps/patient: swift tool/render_ios_icon.swift
 import AppKit
 
@@ -38,14 +38,6 @@ func render(size: Int, launch: Bool = false) -> Data {
     .representation(using: .png, properties: [:])!
 }
 
-let icon = assets.appendingPathComponent("AppIcon.appiconset")
-let manifest = try JSONSerialization.jsonObject(
-  with: Data(contentsOf: icon.appendingPathComponent("Contents.json"))) as! [String: Any]
-for entry in manifest["images"] as! [[String: String]] {
-  guard let filename = entry["filename"], let points = entry["size"], let scale = entry["scale"] else { continue }
-  let size = Int(Double(points.split(separator: "x")[0])! * Double(scale.dropLast())!)
-  try render(size: size).write(to: icon.appendingPathComponent(filename))
-}
 let launch = assets.appendingPathComponent("LaunchImage.imageset")
 for (scale, filename) in [(1, "LaunchImage.png"), (2, "LaunchImage@2x.png"), (3, "LaunchImage@3x.png")] {
   try render(size: 160 * scale, launch: true).write(to: launch.appendingPathComponent(filename))

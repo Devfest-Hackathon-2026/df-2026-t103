@@ -30,9 +30,9 @@ Firebaseプロジェクトは `project-7efcc4c4-6c86-490c-ba5` のみを使う�
 App Attestは実機で検証する。シミュレータでコンパイル成功しても、実トークンの取得成功とは扱わない。
 DeviceCheckへ自動切替しないため、DeviceCheck用p8秘密鍵の追加は不要。
 
-iOSアイコンと起動画像は患者アプリのティール配色の暫定素材。
-`cd apps/patient && swift tool/render_ios_icon.swift` で再生成する。
-正式なブランド素材の決定（#207）とは区別する。
+iOSアイコンはオーナー提供の `apps/patient/assets/icon/source.png` を使用する。
+`cd apps/patient && dart run tool/generate_app_icon.dart` でiOS・Android・Webのアイコンを再生成する。
+起動画像は別の暫定素材で、`swift tool/render_ios_icon.swift` は起動画像だけを更新する。
 
 ## 署名なしビルド
 

@@ -68,9 +68,12 @@ jobs:
   patient-e2e:
     name: patient / intake E2E (emulator)
     runs-on: ubuntu-latest
-    # Script-level bounds: build 5m + startup waits 4m + seeding 2m + Flutter
-    # 10m + bounded cleanup 20s = <22m, leaving >13m for CI setup/teardown.
-    timeout-minutes: 35
+    # Dedicated GitHub-hosted disposable VM only. Script bounds: build 5m +
+    # readiness 4m + seeding 2m + Flutter (7 x 2m + recovery 15m) 29m +
+    # bounded cleanup reserve 20s = 40m20s. The 55m job timeout leaves 14m40s
+    # for checkout/setup/npm install/post-job cleanup. Bounds are best-effort;
+    # timeout cleanup cannot prove descendants exited, so VM disposal is final.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 

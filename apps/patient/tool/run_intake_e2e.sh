@@ -5,7 +5,7 @@
 # ready patient (auth user + account + complete profile + current consents),
 # starts the real API against the emulators on :8080, then runs the gated
 # Flutter integration test (real sign-in → symptom UI → API persistence →
-# logout). Everything is torn down on exit.
+# logout). Cleanup is best-effort; timeout descendant cleanup is not guaranteed.
 #
 # Emulator-only, no production credentials. All listeners are loopback-only.
 #
@@ -53,7 +53,8 @@ EMU_PID=""
 API_PID=""
 
 # Portable bounded command execution (unlike GNU `timeout`, this also works on
-# the macOS runners). Kill the command's entire process group on timeout.
+# the macOS runners). Process-group termination is best-effort: descendants may
+# outlive the leader, so this runner is restricted to a disposable hosted VM.
 run_timed() {
   local seconds="$1"
   shift
@@ -70,7 +71,8 @@ except subprocess.TimeoutExpired:
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
         process.wait()
-    raise SystemExit(f"command timed out after {seconds}s: {command[0]}")
+    print(f"timeout after {seconds}s", file=sys.stderr)
+    raise SystemExit(124)
 raise SystemExit(status)
 PY
 }
@@ -110,6 +112,8 @@ PY
 }
 
 cleanup() {
+  # This cleanup is not a proof that every descendant exited. On timeout/failure
+  # the job must fail and the GitHub-hosted disposable VM must be discarded.
   stop_group "$API_PID" || true
   stop_group "$EMU_PID" || true
   rm -rf "$RUN_DIR"
@@ -195,8 +199,53 @@ API_PID="$(start_group "$RUN_DIR/api.pid" "$RUN_DIR/api.log" \
   node services/api/dist/index.js)"
 wait_log "$RUN_DIR/api.log" "Server listening at" "$API_PID"
 
-echo "==> running Flutter intake E2E (E2E-001 happy path + 001B consent gate)"
+# Resolve dependencies before enabling machine output: Flutter's pub messages
+# are human-readable and would otherwise be mixed into the JSONL event stream.
 cd apps/patient
-run_timed 600 "$FLUTTER_BIN" test test/integration/ \
-  --dart-define=RUN_INTAKE_UI_INTEGRATION=true
-echo "==> E2E passed"
+echo "==> resolving Flutter dependencies outside machine output"
+run_timed 300 "$FLUTTER_BIN" pub get >/dev/null
+
+# Preserve the original directory-wide selection order. JSON is retained only
+# in the private temporary run directory; the parser emits aggregate counts.
+# This per-file order can affect shared test state/order-dependent outcomes.
+shopt -s nullglob
+test_files=(test/integration/*_test.dart)
+recovery_file="test/integration/public_patient_answer_recovery_test.dart"
+if [ "${#test_files[@]}" -eq 0 ] || [ ! -f "$recovery_file" ]; then
+  echo "==> required Flutter integration test selection is missing; refusing to report success" >&2
+  exit 1
+fi
+for test_file in "${test_files[@]}"; do
+  # The prior CI run emitted the required recovery test's success at the 600s
+  # boundary, then Flutter failed to finalize after SIGTERM. Allow 50% extra
+  # for natural process/reporter finalization; still require exit 0 and parser
+  # confirmation, so reaching this longer bound is not success.
+  test_timeout=120
+  if [ "$test_file" = "$recovery_file" ]; then
+    test_timeout=900
+  fi
+  echo "==> running Flutter integration test: ${test_file##*/} (timeout ${test_timeout}s)"
+  if run_timed "$test_timeout" "$FLUTTER_BIN" test "$test_file" \
+    --no-pub \
+    --dart-define=RUN_INTAKE_UI_INTEGRATION=true \
+    --machine >"$RUN_DIR/${test_file##*/}.jsonl" 2>/dev/null; then
+    if [ "$test_file" = "$recovery_file" ]; then
+      python3 tool/summarize_flutter_machine.py "$RUN_DIR/${test_file##*/}.jsonl" --require-recovery
+    elif [ "${test_file##*/}" = "demo_email_registration_test.dart" ]; then
+      # This suite requires RUN_DEMO_AUTH_INTEGRATION, not the intake define;
+      # its intentional all-skipped result is not evidence of exercised tests.
+      python3 tool/summarize_flutter_machine.py "$RUN_DIR/${test_file##*/}.jsonl" --allow-all-skipped
+    else
+      python3 tool/summarize_flutter_machine.py "$RUN_DIR/${test_file##*/}.jsonl"
+    fi
+  else
+    status=$?
+    if [ "$status" -eq 124 ]; then
+      echo "==> Flutter test process timeout: ${test_timeout}s; exit code 124; target ${test_file##*/}; output suppressed" >&2
+    else
+      echo "==> Flutter test process nonzero exit: exit code $status; target ${test_file##*/}; output suppressed" >&2
+    fi
+    exit "$status"
+  fi
+done
+echo "==> all selected Flutter integration tests passed, including answer recovery"

@@ -97,6 +97,30 @@ describe("VertexAiLlmAdapter (synthetic fetch only)", () => {
     });
   });
 
+  it("通信例外の cause に含まれる query key や入力内容をログ可能なエラーへ渡さない", async () => {
+    const fakeKey = "SYNTHETIC_QUERY_KEY_DO_NOT_LOG";
+    const fakePatientText = "SYNTHETIC_PATIENT_TEXT_DO_NOT_LOG";
+    const transportError = new TypeError(
+      `fetch failed for https://example.invalid/?key=${fakeKey} ${fakePatientText}`,
+    );
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockRejectedValue(transportError));
+
+    const error = await adapter().generateQuestions({
+      ...input,
+      symptomText: fakePatientText,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      statusCode: 502,
+      code: ErrorCodes.UPSTREAM_UNAVAILABLE,
+      message: "質問生成サービスに接続できません。",
+    });
+    expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(String(error)).not.toContain(fakeKey);
+    expect(String(error)).not.toContain(fakePatientText);
+  });
+
   it("モデル応答が不正JSONなら内容をエラーへ含めず拒否する", async () => {
     const privateMarker = "SYNTHETIC_PRIVATE_RESPONSE_MARKER";
     vi.stubGlobal(

@@ -59,6 +59,12 @@ jobs:
         working-directory: apps/patient
         run: flutter test
 
+      - name: Test iOS build configuration (no Apple tools)
+        working-directory: apps/patient
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tool -p 'test_*.py' -v
+
   patient-e2e:
     name: patient / intake E2E (emulator)
     runs-on: ubuntu-latest

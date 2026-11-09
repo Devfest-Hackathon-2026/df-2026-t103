@@ -14,8 +14,32 @@
   status code、通信例外を `UNAVAILABLE` に変換します。原文を含み得る例外・応答bodyを
   監視へそのまま転送する変更は、この境界を壊します。
 - [公開入口](../../apps/patient/lib/main_public.dart) の起動失敗は固定文言です。
-  [患者manifest](../../apps/patient/pubspec.yaml) には現時点でAnalytics/Crashlytics/Sentryの
-  直接依存がありません。本書は全SDK/通信の不存在や、アプリ全体のサニタイズ完了を主張しません。
+  [患者manifest](../../apps/patient/pubspec.yaml) には公式Analytics SDKを追加しました。
+  Crashlytics/Sentryの導入とアプリ全体のサニタイズ完了は未達です。
+
+## 最初の実装範囲（収集停止）
+
+[PatientAnalytics](../../apps/patient/lib/patient_analytics.dart) は固定した2イベント名だけを
+受け取り、属性・例外・URL・識別子を渡す引数を持ちません。公開APIの成功したfinalize後に
+`intake_completed`、配送APIの失敗時に `delivery_failed` を通知します。
+後者は失敗した要求試行数であり配送レコード数ではありません。前者も再試行の重複を除去した
+監査台帳ではなく、統計用のbest-effortイベントです。元のrequest/body/responseは渡しません。
+監視の例外や未完了FutureはAPI応答を失敗・待機させません。
+
+iOSは実SDKの `logEvent` へ接続しますが、このリリースのInfo.plistでは
+`FIREBASE_ANALYTICS_COLLECTION_DEACTIVATED=true` により収集を停止しています。
+SDK初期化でもcollection=falseを設定し、自動画面計測・IDFVも無効にします。
+標準iOSビルド補助は公式pluginの `FIREBASE_ANALYTICS_WITHOUT_ADID=true` を設定して
+広告識別子サポートを除いたSPM productを選びます。手動ビルドでも同変数が必要です。
+Androidのnative設定も収集停止。公開Webではadapterを無効にし、外部bootstrapで
+Analyticsの自動script loaderを抑止します。CSPを緩めません。
+
+アプリ操作やDart defineだけで収集を有効にするスイッチは設けていません。
+送信を試験する際はnative停止設定を含む別の変更・ビルドと、以下の実送信受入が必要です。
+この実装ではダッシュボード到達・端末全体の非送信を実証済みとはしません。
+
+公式参照: [iOS収集停止と優先順位](https://firebase.google.com/docs/analytics/ios/configure-data-collection)、
+[自動画面計測](https://firebase.google.com/docs/analytics/screenviews)。
 
 ## Sentry導入の評価結果
 
@@ -62,5 +86,6 @@ PHI漏えいを防止できたとは判断しません。採用する場合は�
 4. 設定無効時の送信停止と、監視サービスが落ちても問診が継続できることを確認します。
    送信先の保持・閲覧主体とデータ移転の受入は、アプリ内のredaction試験とは区別します。
 
-現時点ではこれらのSDK実装・実送信試験・ダッシュボード受入は未実施です。
+現時点の実装は上記の固定イベント境界と収集停止までです。
+Crashlytics導入と各platformの実送信試験・ダッシュボード受入は未実施です。
 本書によるSentry評価だけで、Crashlytics/GA4/FCMのPHI非送信を検証済みとしたり、Issue #40を閉じたりしません。

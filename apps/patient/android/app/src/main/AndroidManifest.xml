@@ -3,6 +3,10 @@
         android:label="patient"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- Public monitoring rollout is not enabled on Android either. -->
+        <meta-data android:name="firebase_analytics_collection_deactivated" android:value="true" />
+        <meta-data android:name="firebase_analytics_collection_enabled" android:value="false" />
+        <meta-data android:name="google_analytics_automatic_screen_reporting_enabled" android:value="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

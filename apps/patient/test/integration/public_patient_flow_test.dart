@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -24,7 +25,7 @@ void main() {
     final changes = StreamController<void>.broadcast(sync: true);
     var epoch = Object();
     String? patientToken;
-    const symptom = '合成データの問診入力です';
+    final symptom = '合成問診-${DateTime.now().toUtc().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
     Future<String> login(String email, String password) async {
       final response = await client.post(
         Uri.parse(
@@ -111,6 +112,10 @@ void main() {
       await waitFor(find.text('新しい問診をはじめる'));
       await tap('新しい問診をはじめる');
       await tester.enterText(find.byType(TextField).first, symptom);
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('お腹').last);
+      await tester.pumpAndSettle();
       await tap('保存して質問へ進む');
       for (var step = 0; step < 20; step++) {
         await waitFor(
@@ -135,32 +140,74 @@ void main() {
           'local-only-public-staff-123!',
         ),
       );
-      final inbox = await tester.runAsync(
-        () => client.get(
-          Uri.parse(
-            'http://127.0.0.1:8080/v1/hospitals/synthetic-public-facility/deliveries',
-          ),
-          headers: {'Authorization': 'Bearer $staffToken'},
-        ),
-      );
-      expect(inbox!.statusCode, 200);
-      final rows = (jsonDecode(inbox.body) as Map)['deliveries'] as List;
-      expect(rows, isNotEmpty);
-      final deliveryId = (rows.first as Map)['deliveryId'];
-      final received = await tester.runAsync(
-        () => client.get(
-          Uri.parse(
-            'http://127.0.0.1:8080/v1/hospitals/synthetic-public-facility/deliveries/$deliveryId',
-          ),
-          headers: {'Authorization': 'Bearer $staffToken'},
-        ),
-      );
-      expect(received!.statusCode, 200);
+      const facility = 'synthetic-public-facility';
+      final headers = {'Authorization': 'Bearer $staffToken'};
+      String? cursor;
+      final seenCursors = <String>{};
+      final matchingDetails = <Map<String, dynamic>>[];
+      var exhaustedPages = false;
+      for (var page = 0; page < 5; page++) {
+        final uri = Uri.parse(
+          'http://127.0.0.1:8080/v1/hospitals/$facility/deliveries',
+        ).replace(queryParameters: {
+          'limit': '10',
+          'cursor': ?cursor,
+        });
+        final inbox = await tester.runAsync(
+          () => client.get(uri, headers: headers),
+        );
+        expect(inbox!.statusCode, 200);
+        final payload = jsonDecode(inbox.body) as Map<String, dynamic>;
+        final rows = payload['deliveries'] as List;
+        for (final row in rows.whereType<Map>()) {
+          final deliveryId = row['deliveryId'];
+          if (deliveryId is! String) continue;
+          final received = await tester.runAsync(
+            () => client.get(
+              Uri.parse(
+                'http://127.0.0.1:8080/v1/hospitals/$facility/deliveries/$deliveryId',
+              ),
+              headers: headers,
+            ),
+          );
+          expect(received!.statusCode, 200);
+          final body = jsonDecode(received.body) as Map<String, dynamic>;
+          final snapshot = body['questionnaireSnapshot'] as Map;
+          if ((snapshot['chiefComplaint'] as Map)['value'] == symptom) {
+            matchingDetails.add(body);
+          }
+        }
+        final nextCursor = payload['nextCursor'];
+        expect(nextCursor, anyOf(isNull, isA<String>()));
+        if (nextCursor == null) {
+          exhaustedPages = true;
+          break;
+        }
+        expect(
+          seenCursors.add(nextCursor as String),
+          isTrue,
+          reason: 'Delivery cursor repeated; pagination may be looping.',
+        );
+        cursor = nextCursor;
+      }
       expect(
-        (jsonDecode(received.body)
-            as Map)['questionnaireSnapshot']['chiefComplaint']['value'],
+        exhaustedPages,
+        isTrue,
+        reason: 'Delivery pagination exceeded safety cap (50 details).',
+      );
+      expect(
+        matchingDetails,
+        hasLength(1),
+        reason: 'Exactly this run\'s delivery must exist.',
+      );
+      final matchedBody = matchingDetails.single;
+      expect(matchedBody['questionnaireSnapshot'], isA<Map>());
+      final snapshot = matchedBody['questionnaireSnapshot'] as Map;
+      expect(
+        (snapshot['chiefComplaint'] as Map)['value'],
         symptom,
       );
+      expect(snapshot['bodyLocations'], contains('abdomen'));
       await tap('ログアウト');
       await waitFor(find.text('ログイン'));
       expect(find.text(symptom), findsNothing);

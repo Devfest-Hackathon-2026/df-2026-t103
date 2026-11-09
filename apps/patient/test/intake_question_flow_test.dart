@@ -37,9 +37,13 @@ Map<String, dynamic> _question(
 class _Backend {
   int revision = 2;
   final List<String> answered = [];
+  final List<String?> answerFreeTexts = [];
   bool summarized = false;
   bool finalized = false;
   int nextCalls = 0;
+  int answerRequests = 0;
+  bool failAnswer = false;
+  bool includeSecondQuestion = false;
 
   // http.Response defaults to latin1 without a charset, so always declare utf-8
   // for bodies that carry Japanese text.
@@ -88,6 +92,16 @@ class _Backend {
           ]),
         });
       }
+      if (nextCalls == 2 && includeSecondQuestion) {
+        return _json({
+          'intakeId': 'intake-1',
+          'intakeRevision': revision,
+          'question': _question('q2', '症状は悪化していますか？', [
+            {'code': 'YES', 'label': 'はい'},
+            {'code': 'NO', 'label': 'いいえ'},
+          ]),
+        });
+      }
       // No more questions.
       return _json({
         'intakeId': 'intake-1',
@@ -96,9 +110,17 @@ class _Backend {
       });
     }
     if (path.endsWith('/answers')) {
+      answerRequests++;
       final body = jsonDecode(request.body) as Map;
       expect(body['expectedIntakeRevision'], revision);
+      if (failAnswer) {
+        failAnswer = false;
+        return _json({
+          'error': {'code': 'INTERNAL'},
+        }, 500);
+      }
       answered.add(body['answerState'] as String);
+      answerFreeTexts.add(body['freeText'] as String?);
       return _json({'answerId': 'a1', 'intakeRevision': ++revision});
     }
     if (path.endsWith('/summary')) {
@@ -166,11 +188,14 @@ void main() {
     expect(find.text('今日から'), findsOneWidget);
 
     // Answer the question; flow fetches the (null) next question → review.
+    await tester.enterText(find.byType(TextField), '昨夜から続いています');
     await tester.tap(find.text('今日から'));
     await tester.pumpAndSettle();
     expect(backend.answered, ['answered']);
+    expect(backend.answerFreeTexts, ['昨夜から続いています']);
     expect(backend.summarized, isTrue);
     expect(find.text('ここまでの回答'), findsOneWidget);
+    expect(find.textContaining('昨夜から続いています'), findsOneWidget);
     expect(find.textContaining('未回答の項目: 1件'), findsOneWidget);
 
     // Confirm and finalize.
@@ -209,5 +234,164 @@ void main() {
     await tester.tap(find.text('分からない'));
     await tester.pumpAndSettle();
     expect(backend.answered, ['unknown']);
+  });
+
+  testWidgets('skipping does not submit entered free text', (tester) async {
+    final backend = _Backend();
+    final owner = IntakeIdentity('patient-a', Object(), 'synthetic-token');
+    final api = PatientIntakeApi(
+      origin: 'http://127.0.0.1:8080',
+      client: backend.client(),
+      identity: () async => owner,
+      isCurrent: (_) => true,
+    );
+    final submission = IntakeSubmission('合成の症状');
+    final startRevision = await api.submit(submission);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: IntakeQuestionFlow(
+              api: api,
+              submission: submission,
+              startRevision: startRevision,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('いつ頃からですか？'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), '送信しない内容');
+    await tester.tap(find.text('答えたくない'));
+    await tester.pumpAndSettle();
+    expect(backend.answered, ['skipped']);
+    expect(backend.answerFreeTexts, [null]);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('ここまでの回答'), findsOneWidget);
+  });
+
+  testWidgets('blocks text exceeding API UTF-16 length before sending', (
+    tester,
+  ) async {
+    final backend = _Backend();
+    final owner = IntakeIdentity('patient-a', Object(), 'synthetic-token');
+    final api = PatientIntakeApi(
+      origin: 'http://127.0.0.1:8080',
+      client: backend.client(),
+      identity: () async => owner,
+      isCurrent: (_) => true,
+    );
+    final submission = IntakeSubmission('合成の症状');
+    final startRevision = await api.submit(submission);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: IntakeQuestionFlow(
+              api: api,
+              submission: submission,
+              startRevision: startRevision,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('いつ頃からですか？'), findsOneWidget);
+    // 1001 emoji are 1001 grapheme clusters but 2002 UTF-16 code units.
+    await tester.enterText(find.byType(TextField), '😀' * 1001);
+    await tester.tap(find.text('今日から'));
+    await tester.pumpAndSettle();
+    expect(backend.answered, isEmpty);
+    expect(find.textContaining('API上限'), findsOneWidget);
+  });
+
+  testWidgets('saves free text and clears it when the next question arrives', (
+    tester,
+  ) async {
+    final backend = _Backend()..includeSecondQuestion = true;
+    final owner = IntakeIdentity('patient-a', Object(), 'synthetic-token');
+    final api = PatientIntakeApi(
+      origin: 'http://127.0.0.1:8080',
+      client: backend.client(),
+      identity: () async => owner,
+      isCurrent: (_) => true,
+    );
+    final submission = IntakeSubmission('合成の症状');
+    final startRevision = await api.submit(submission);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: IntakeQuestionFlow(
+              api: api,
+              submission: submission,
+              startRevision: startRevision,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final textField = find.byType(TextField);
+    await tester.enterText(textField, '昨夜から続いています');
+    await tester.tap(find.text('今日から'));
+    await tester.pumpAndSettle();
+
+    expect(backend.answerFreeTexts, ['昨夜から続いています']);
+    expect(find.text('症状は悪化していますか？'), findsOneWidget);
+    expect(tester.widget<TextField>(textField).controller!.text, isEmpty);
+  });
+
+  testWidgets('does not advance after uncertain answer save failure', (
+    tester,
+  ) async {
+    final backend = _Backend()..failAnswer = true;
+    final owner = IntakeIdentity('patient-a', Object(), 'synthetic-token');
+    final api = PatientIntakeApi(
+      origin: 'http://127.0.0.1:8080',
+      client: backend.client(),
+      identity: () async => owner,
+      isCurrent: (_) => true,
+    );
+    final submission = IntakeSubmission('合成の症状');
+    final startRevision = await api.submit(submission);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: IntakeQuestionFlow(
+              api: api,
+              submission: submission,
+              startRevision: startRevision,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('いつ頃からですか？'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), '保存結果不明の回答');
+    await tester.tap(find.text('今日から'));
+    await tester.pumpAndSettle();
+    expect(backend.nextCalls, 1);
+    expect(backend.answerRequests, 1);
+    expect(find.text('再試行'), findsNothing);
+    expect(find.text('いつ頃からですか？'), findsOneWidget);
+    expect(find.textContaining('安全に再開・照合する方法がない'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '保存結果不明の回答',
+    );
+
+    // Neither another option nor skip nor edits can cause a stale-revision
+    // answer request after the save outcome became uncertain.
+    await tester.tap(find.text('今日から'));
+    await tester.tap(find.text('答えたくない'));
+    await tester.pumpAndSettle();
+    expect(backend.answerRequests, 1);
+    expect(backend.nextCalls, 1);
+    expect(find.text('再試行'), findsNothing);
   });
 }

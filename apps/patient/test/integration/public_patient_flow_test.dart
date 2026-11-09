@@ -119,6 +119,60 @@ void main() {
   });
 
   test(
+    'revision observer appends after an existing next-question history',
+    () async {
+      final history = List<int>.generate(12, (index) => index + 2);
+      final responses = [
+        for (final revision in history)
+          http.StreamedResponse(
+            Stream<List<int>>.value(
+              utf8.encode('{"intakeRevision":$revision}'),
+            ),
+            200,
+          ),
+        http.StreamedResponse(
+          Stream<List<int>>.value(
+            utf8.encode('{"intakeRevision":${history.last + 1}}'),
+          ),
+          200,
+        ),
+        http.StreamedResponse(
+          Stream<List<int>>.value(
+            utf8.encode('{"intakeRevision":${history.last + 2}}'),
+          ),
+          200,
+        ),
+      ];
+      final client = _CaptureIntakeIdClient(_QueuedResponseClient(responses));
+
+      Future<void> observe(String method, String path) async {
+        final response = await client.send(
+          http.Request(method, Uri.parse('http://127.0.0.1$path')),
+        );
+        await response.stream.drain<void>();
+      }
+
+      for (var index = 0; index < history.length; index++) {
+        await observe('POST', '/v1/intakes/synthetic/next-question');
+      }
+      final previousRevision = history.last;
+      final previousNextQuestionCount = client.nextQuestionRevisions.length;
+      final previousPatchCount = client.patchRevisions.length;
+      await observe('PATCH', '/v1/intakes/synthetic/answers/question');
+      await observe('POST', '/v1/intakes/synthetic/next-question');
+
+      expect(
+        client.nextQuestionRevisions,
+        hasLength(previousNextQuestionCount + 1),
+      );
+      expect(client.nextQuestionRevisions.last, previousRevision + 2);
+      expect(client.patchRevisions, hasLength(previousPatchCount + 1));
+      expect(client.patchRevisions.last, previousRevision + 1);
+      client.close();
+    },
+  );
+
+  test(
     'revision observer preserves response metadata and chunk boundaries',
     () async {
       final client = _CaptureIntakeIdClient(
@@ -416,6 +470,8 @@ void main() {
         savedAnswer['selectedCodes'] as List,
       );
       final editedFreeText = '$answerFreeText（編集済み）';
+      final previousNextQuestionCount = client.nextQuestionRevisions.length;
+      final previousPatchCount = client.patchRevisions.length;
       final answerCard = find.ancestor(
         of: find.text(answerFreeText),
         matching: find.byType(Card),
@@ -443,15 +499,19 @@ void main() {
       final afterEdit = await getIntake();
       _flowMarker('edit-after-get-completed');
       _flowMarker('edit-patch-observation-check-start');
-      expect(client.patchRevisions, hasLength(1));
-      expect(client.patchRevisions.single, previousRevision + 1);
+      expect(client.patchRevisions, hasLength(previousPatchCount + 1));
+      expect(client.patchRevisions.last, previousRevision + 1);
       _flowMarker('edit-patch-observation-check-completed');
       _flowMarker('edit-next-question-observation-check-start');
-      expect(client.nextQuestionRevisions, hasLength(1));
-      expect(client.nextQuestionRevisions.single, previousRevision + 2);
+      expect(
+        client.nextQuestionRevisions,
+        hasLength(previousNextQuestionCount + 1),
+      );
+      final nextQuestionRevision = client.nextQuestionRevisions.last;
+      expect(nextQuestionRevision, previousRevision + 2);
       _flowMarker('edit-next-question-observation-check-completed');
       _flowMarker('edit-status-check-start');
-      expect(afterEdit['revision'], client.nextQuestionRevisions.single);
+      expect(afterEdit['revision'], nextQuestionRevision);
       expect(afterEdit['status'], 'questioning');
       _flowMarker('edit-status-check-completed');
       _flowMarker('edit-answer-check-start');
@@ -643,6 +703,19 @@ class _SingleResponseClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async =>
       response;
+
+  @override
+  void close() {}
+}
+
+class _QueuedResponseClient extends http.BaseClient {
+  _QueuedResponseClient(this.responses);
+
+  final List<http.StreamedResponse> responses;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async =>
+      responses.removeAt(0);
 
   @override
   void close() {}

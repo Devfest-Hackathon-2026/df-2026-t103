@@ -423,6 +423,7 @@ export const facilityDetailResponseSchema = z.object({
   formattedAddress: z.string(),
   verificationStatus: z.string(),
   receivingEnabled: z.boolean(),
+  syntheticRecipient: z.boolean().describe("認証患者に限定された合成デモ施設の受信可否。施設の検証済み状態を意味しない。"),
 });
 
 export const deviceRegisterResponseSchema = z.object({

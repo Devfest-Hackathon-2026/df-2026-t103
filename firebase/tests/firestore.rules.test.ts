@@ -23,6 +23,7 @@ const DENIED_COLLECTIONS = [
   "uploads",
   "ocrJobs",
   "facilities",
+  "syntheticDemoPatients",
   "facilityVerificationRecords",
   "facilityMemberships",
   "facilityInvitations",

@@ -33,6 +33,7 @@ import {
 } from "../lib/audit.js";
 import { AUDIT_ACTIONS } from "../domain/auditEvents.js";
 import { deliveryRef, getDelivery } from "../repos/deliveries.js";
+import { isSyntheticRecipient } from "../repos/facilities.js";
 import { facilityConsentRef } from "../repos/accounts.js";
 import { LEGAL_DOCUMENTS_PATH } from "../repos/legalConfig.js";
 
@@ -151,8 +152,16 @@ export async function createDelivery(
         const facDoc = facSnap.data() as {
           verificationStatus: string;
           receivingEnabled: boolean;
+          syntheticDemo?: boolean;
+          syntheticPatientUid?: string;
         };
-        if (facDoc.verificationStatus !== "verified") {
+        // Read the server-owned patient binding inside the transaction so a
+        // concurrent revocation is rechecked before committing the delivery.
+        const syntheticPatient = facDoc.verificationStatus === "pending"
+          ? await tx.get(deps.db.doc(`syntheticDemoPatients/${senderUid}`))
+          : undefined;
+        const syntheticDemoDelivery = isSyntheticRecipient(facDoc, senderUid, body.facilityId, syntheticPatient?.data());
+        if (facDoc.verificationStatus !== "verified" && !syntheticDemoDelivery) {
           throw ApiError.precondition("この施設は現在問診票の受付を行っていません。");
         }
         if (!facDoc.receivingEnabled) {

@@ -13,6 +13,37 @@ import type { FacilityDoc } from "../../src/repos/facilities.js";
 
 const UID = "u-facility-1";
 
+describe("synthetic facility detail authorization", () => {
+  it.each([
+    [{ verificationStatus: "pending", syntheticDemo: true, syntheticPatientUid: UID }, true],
+    [{ verificationStatus: "pending", syntheticDemo: true, syntheticPatientUid: "other" }, false],
+    [{ verificationStatus: "pending", syntheticDemo: false, syntheticPatientUid: UID }, false],
+    [{ verificationStatus: "pending" }, false],
+    [{ verificationStatus: "pending", syntheticDemo: true, syntheticPatientUid: UID, receivingEnabled: false }, false],
+    [{ verificationStatus: "verified", syntheticDemo: true, syntheticPatientUid: UID }, false],
+  ] as const)("only exposes a scoped boolean for %o", async (facility, allowed) => {
+    const { deps, app } = await setup();
+    await seedFacility(deps, "synthetic", facility);
+    await deps.db.doc(`syntheticDemoPatients/${UID}`).set({ facilityId: "synthetic" });
+    const res = await app.inject({ method: "GET", url: "/v1/facilities/synthetic", headers: authHeader(UID) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().syntheticRecipient).toBe(allowed);
+    expect(res.headers["cache-control"]).toBe("private, no-store");
+    expect(res.json()).not.toHaveProperty("syntheticPatientUid");
+    expect(res.json()).not.toHaveProperty("syntheticDemo");
+    await app.close();
+  });
+
+  it.each([undefined, {}, { facilityId: "other" }])("denies missing or mismatched patient binding %o", async (binding) => {
+    const { deps, app } = await setup();
+    await seedFacility(deps, "synthetic", { verificationStatus: "pending", syntheticDemo: true, syntheticPatientUid: UID });
+    if (binding) await deps.db.doc(`syntheticDemoPatients/${UID}`).set(binding);
+    const res = await app.inject({ method: "GET", url: "/v1/facilities/synthetic", headers: authHeader(UID) });
+    expect(res.json().syntheticRecipient).toBe(false);
+    await app.close();
+  });
+});
+
 async function setup(): Promise<{ deps: TestDeps; app: FastifyInstance }> {
   const deps = makeTestDeps();
   await seedLegalDocuments(deps);

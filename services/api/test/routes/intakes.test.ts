@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { makeTestDeps, type TestDeps } from "../helpers/deps.js";
+import type { AppConfig } from "../../src/config.js";
 import {
   authHeader,
   buildTestApp,
@@ -15,8 +16,10 @@ import type {
 const UID = "u-intake-1";
 const OTHER = "u-intake-2";
 
-async function setup(): Promise<{ deps: TestDeps; app: FastifyInstance }> {
-  const deps = makeTestDeps();
+async function setup(
+  configOverrides: Partial<AppConfig> = {},
+): Promise<{ deps: TestDeps; app: FastifyInstance }> {
+  const deps = makeTestDeps(configOverrides);
   await seedLegalDocuments(deps);
   await seedAccount(deps, UID);
   await seedCurrentConsents(deps, UID);
@@ -48,14 +51,17 @@ async function toQuestioning(
   app: FastifyInstance,
   intakeId: string,
   uid = UID,
+  symptoms: { initialSymptomText: string; bodyLocations: string[] } = {
+    initialSymptomText: "3日前から頭痛",
+    bodyLocations: ["head"],
+  },
 ): Promise<number> {
   const res = await app.inject({
     method: "POST",
     url: `/v1/intakes/${intakeId}/symptoms`,
     headers: authHeader(uid),
     payload: {
-      initialSymptomText: "3日前から頭痛",
-      bodyLocations: ["head"],
+      ...symptoms,
       expectedIntakeRevision: 1,
     },
   });
@@ -198,6 +204,80 @@ describe("intake routes (#11, API-009〜016)", () => {
       payload: { expectedIntakeRevision: 1 },
     });
     expect(early.statusCode).toBe(412);
+  });
+
+  it("POST /next-question passes synthetic symptoms to the enabled LLM and reports llm", async () => {
+    const { app, deps } = await setup({ aiIntakeEnabled: true });
+    deps.fakeLlm.result = {
+      questions: [
+        {
+          questionText: "合成症状について、いつから痛みが続いていますか？",
+          topic: "onset_timing",
+          options: [
+            { code: "LT_DAY", label: "1日未満" },
+            { code: "LT_WEEK", label: "1週間未満" },
+          ],
+        },
+      ],
+      modelVersion: "synthetic-test-v1",
+    };
+    const { intakeId } = await createIntake(app);
+    const symptomText = "テスト専用の合成症状：左手の軽い違和感";
+    const bodyLocations = ["left_hand"];
+    const rev = await toQuestioning(app, intakeId, UID, {
+      initialSymptomText: symptomText,
+      bodyLocations,
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/next-question`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(deps.fakeLlm.calls).toHaveLength(1);
+    expect(deps.fakeLlm.calls[0]).toMatchObject({
+      symptomText,
+      bodyLocations,
+    });
+    expect(res.json()).toMatchObject({
+      question: {
+        questionText: "合成症状について、いつから痛みが続いていますか？",
+        generatedBy: "llm",
+        modelVersion: "synthetic-test-v1",
+      },
+    });
+    expect(
+      (res.json() as { question: { generatedBy: string } }).question.generatedBy,
+    ).not.toBe("fixed_template");
+  });
+
+  it("POST /next-question reports fallback when the enabled LLM fails", async () => {
+    const { app, deps } = await setup({ aiIntakeEnabled: true });
+    deps.fakeLlm.shouldThrow = new Error("synthetic LLM failure");
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/next-question`,
+      headers: authHeader(UID),
+      payload: { expectedIntakeRevision: rev },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(deps.fakeLlm.calls).toHaveLength(1);
+    expect(res.json()).toMatchObject({
+      question: {
+        topic: "onset_timing",
+        generatedBy: "fallback",
+      },
+    });
+    expect(
+      (res.json() as { question: { generatedBy: string } }).question.generatedBy,
+    ).not.toBe("fixed_template");
   });
 
   it("POST /answers saves answer with question revision check", async () => {

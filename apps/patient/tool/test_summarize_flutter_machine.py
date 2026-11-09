@@ -120,6 +120,11 @@ class SummarizerTest(unittest.TestCase):
             {"type": "print", "message": "edit-input-returned"},
             {"type": "print", "message": "edit-save-start"},
             {"type": "print", "message": "edit-save-tap-returned"},
+            *(
+                {"type": "print", "message": marker}
+                for marker in FLOW_MARKERS
+                if marker.startswith("review-") or marker.startswith("hospital-")
+            ),
             *({"type": "print", "message": marker} for marker in FLOW_MARKERS if marker.startswith("edit-after-") or "-check-" in marker),
             {"type": "print", "message": "edit-open SECRET_NAME"},
             {"type": "print", "message": "edit-field-found SECRET_URL"},
@@ -144,7 +149,7 @@ class SummarizerTest(unittest.TestCase):
         self.assertIn("edit-save-start=1", diagnostic)
         self.assertIn("edit-save-tap-returned=1", diagnostic)
         for marker in FLOW_MARKERS:
-            if marker.startswith("edit-after-") or "-check-" in marker:
+            if marker.startswith("review-") or marker.startswith("hospital-") or marker.startswith("edit-after-") or "-check-" in marker:
                 self.assertIn(f"{marker}=1", diagnostic)
         self.assertIn("review=0", diagnostic)
         for secret in ("SECRET_NAME", "SECRET_URL", "SECRET_ERROR", "SECRET_RESULT", "unknown-secret-kind", "edit-open SECRET_NAME", "edit-after-get-completed SECRET_NAME"):

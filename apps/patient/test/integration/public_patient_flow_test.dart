@@ -595,22 +595,36 @@ void main() {
       _flowMarker('review');
       final reviewConfirmation = find.text('問診の内容を確認しました');
       final finalizeButton = find.widgetWithText(ElevatedButton, 'この内容で問診票を確定');
+      _flowMarker('review-confirmation-wait-start');
       await waitFor(reviewConfirmation);
+      _flowMarker('review-confirmation-wait-completed');
       expect(
         tester.widget<ElevatedButton>(finalizeButton).onPressed,
         isNull,
         reason: 'Re-entering review requires a fresh confirmation.',
       );
+      _flowMarker('review-confirmation-tap-start');
       await tap('問診の内容を確認しました', finder: reviewConfirmation);
+      _flowMarker('review-confirmation-tap-returned');
       expect(
         tester.widget<ElevatedButton>(finalizeButton).onPressed,
         isNotNull,
       );
+      _flowMarker('review-finalize-tap-start');
       await tap('この内容で問診票を確定');
+      _flowMarker('review-finalize-tap-returned');
+      _flowMarker('hospital-facility-wait-start');
       await waitFor(find.text('合成データ受入施設'));
+      _flowMarker('hospital-facility-wait-completed');
+      _flowMarker('hospital-consent-tap-start');
       await tap('「合成データ受入施設」へ、この問診票と選択した情報を送信することに同意します');
+      _flowMarker('hospital-consent-tap-returned');
+      _flowMarker('hospital-send-tap-start');
       await tap('同意した施設へ送信');
+      _flowMarker('hospital-send-tap-returned');
+      _flowMarker('hospital-receipt-wait-start');
       await waitFor(find.text('施設の受信箱へ届きました'));
+      _flowMarker('hospital-receipt-wait-completed');
       _flowMarker('hospital');
       final staffToken = await tester.runAsync(
         () => login(

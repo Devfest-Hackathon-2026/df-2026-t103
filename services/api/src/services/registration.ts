@@ -732,8 +732,11 @@ async function tryAdoptOrphanedAuth(
     .get();
   const owner = owners.docs
     .map((d) => ({ ref: d.ref, op: d.data() as RegistrationOperationDoc }))
-    .find(({ op }) => op.requestHash === operation.requestHash);
-  if (!owner || owner.op.status === "enabled") {
+    .find(
+      ({ op }) =>
+        op.requestHash === operation.requestHash && op.status !== "enabled",
+    );
+  if (!owner) {
     return false;
   }
 

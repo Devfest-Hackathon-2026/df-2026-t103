@@ -48,11 +48,10 @@ Next.js `NEXT_PUBLIC_*`）の対応を定める正本。
 | `SERVER_HMAC_SECRET` | Secret Manager → API/Worker env | 自動生成（#32） |
 | `INTERNAL_JOB_TOKEN` | Secret Manager → API/Worker env | 自動生成（#32） |
 | `GOOGLE_PLACES_API_KEY` | Secret Manager → API env | owner 調達 |
-| `VERTEX_AI_API_KEY` | Secret Manager → API/Worker env | owner 調達 |
+| Vertex認証 | API実行SAのADC/OAuth（短命トークン） | `roles/aiplatform.user`、APIキー不要 |
 | `DEPLOY_NOTIFY_WEBHOOK` | GitHub Secret → CD notify | 任意 |
 
-> 命名ドリフト注記: `.secret.example` の `GEMINI_API_KEY`/`LLM_MODEL_ID` に対し、
-> 実コードは `VERTEX_AI_API_KEY`/`VERTEX_AI_MODEL` を読む（#32 README 参照）。
+> Vertex設定は `VERTEX_AI_MODEL`/`VERTEX_AI_LOCATION`。認証はAPI実行SAのADCで、APIキーは使用しない。
 
 ## クライアントビルドの本番値配線
 

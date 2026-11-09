@@ -81,7 +81,7 @@ resource "google_cloud_run_v2_service" "api" {
         value = var.region
       }
       # 問診AIの本番承認フラグ（ADR-009）。true で新規問診の質問生成を
-      # Vertex LLM 経路へ切り替える（VERTEX_AI_API_KEY は Secret で配線済み）。
+      # Vertex LLM 経路へ切り替える（実行SAのADC/OAuthを使用）。
       # 既存進行中の問診には影響せず、LLM 障害時は FR-I10 で固定質問へ安全に
       # フォールバックする。
       env {
@@ -90,7 +90,7 @@ resource "google_cloud_run_v2_service" "api" {
       }
 
       dynamic "env" {
-        for_each = toset(["SERVER_HMAC_SECRET", "INTERNAL_JOB_TOKEN", "GOOGLE_PLACES_API_KEY", "VERTEX_AI_API_KEY"])
+        for_each = toset(["SERVER_HMAC_SECRET", "INTERNAL_JOB_TOKEN", "GOOGLE_PLACES_API_KEY"])
         content {
           name = env.value
           value_source {
@@ -185,7 +185,7 @@ resource "google_cloud_run_v2_service" "worker" {
       }
 
       dynamic "env" {
-        for_each = toset(["SERVER_HMAC_SECRET", "INTERNAL_JOB_TOKEN", "VERTEX_AI_API_KEY"])
+        for_each = toset(["SERVER_HMAC_SECRET", "INTERNAL_JOB_TOKEN"])
         content {
           name = env.value
           value_source {

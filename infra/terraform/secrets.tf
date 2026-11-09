@@ -20,6 +20,7 @@ locals {
   secret_access = {
     for pair in setproduct(local.secret_ids, keys(local.runtime_sas)) :
     "${pair[0]}-${pair[1]}" => { secret = pair[0], sa = local.runtime_sas[pair[1]] }
+    if pair[0] != "VERTEX_AI_API_KEY"
   }
 }
 

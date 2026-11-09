@@ -55,3 +55,15 @@ remote stateの設定は `backend.tf.example` をローカルの `backend.local.
 
 未作成の病院runtimeは [専用root](../hospital/README.md) と別stateで管理する。
 このrootの不明な既存stateを作り直して病院を追加しない。病院の資源宣言はこのrootから除去済み。
+
+## Vertex OAuth移行
+
+APIだけが実行SAのADCから短命トークンを取得する。`iam.tf`の`api_vertex`は
+指定単一projectでAPI SAへ`roles/aiplatform.user`を付与し、worker/deployerへは追加しない。
+`cloud_run.tf`と参照YAMLから旧キーenvを除く。`secrets.tf`は旧キーのruntime Accessorを
+除去するが、`locals.tf`の旧Secret箱は維持するため既存versionは破壊しない。
+
+既存stateへ通常planを実行し、Vertex role追加、API/worker env更新、旧キーAccessor削除
+以外の差分があれば原因を確認する。既存資源の削除・state再作成・一括IAM置換はしない。
+レビュー承認後のapplyとAPI配信が完了したら、合成入力で実LLM由来の質問生成を確認する。
+モデル・地域・AI承認フラグの変更をこの移行へ混ぜない。認証エラーや404だけで原因を断定しない。

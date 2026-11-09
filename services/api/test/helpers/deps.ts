@@ -65,7 +65,6 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     ocrTasksOidcSa: undefined,
     intakeDraftTtlDays: 7,
     aiIntakeEnabled: false,
-    vertexAiApiKey: undefined,
     vertexAiModel: "gemini-2.5-flash-lite",
     vertexAiLocation: "asia-northeast1",
     vertexAiTimeoutMs: 10_000,

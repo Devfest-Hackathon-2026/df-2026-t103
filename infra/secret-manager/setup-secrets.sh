@@ -8,13 +8,13 @@
 # 重要:
 #   - このスクリプトに秘密の実値は書かない。実値は環境変数 or 対話入力で渡す。
 #   - 生成可能なもの（HMAC/トークン）は未指定なら openssl で安全乱数を生成する。
-#   - 外部 API キー（Places / Vertex AI）は owner が実値を用意する。
+#   - 外部 API キー（Places）は owner が実値を用意する。
 #   - orchestrator 指示によりプロジェクトは単一（stg/prod の区別なし）。
 #   - IAM 付与は Project の owner/projectIamAdmin 権限が必要（roles/editor では不可）。
 #
 # 使い方（値は環境変数で渡す。未指定の生成系は自動生成）:
 #   PROJECT_ID=project-7efcc4c4-6c86-490c-ba5 \
-#   GOOGLE_PLACES_API_KEY=xxxx VERTEX_AI_API_KEY=yyyy \
+#   GOOGLE_PLACES_API_KEY=xxxx \
 #   ./infra/secret-manager/setup-secrets.sh
 # =============================================================================
 set -euo pipefail
@@ -59,12 +59,10 @@ INTERNAL_JOB_TOKEN="${INTERNAL_JOB_TOKEN:-$(openssl rand -hex 32)}"
 
 # --- 外部調達の秘密（owner が実値を用意。未指定ならスキップ）---
 GOOGLE_PLACES_API_KEY="${GOOGLE_PLACES_API_KEY:-}"
-VERTEX_AI_API_KEY="${VERTEX_AI_API_KEY:-}"
 
 put_secret SERVER_HMAC_SECRET   "${SERVER_HMAC_SECRET}"
 put_secret INTERNAL_JOB_TOKEN   "${INTERNAL_JOB_TOKEN}"
 put_secret GOOGLE_PLACES_API_KEY "${GOOGLE_PLACES_API_KEY}"
-put_secret VERTEX_AI_API_KEY     "${VERTEX_AI_API_KEY}"
 
 echo "== done =="
 echo "Cloud Run へは service-api.yaml / service-worker.yaml の secretKeyRef（env 注入）で参照される。"

@@ -23,6 +23,7 @@ void main() {
         final owner = IntakeIdentity('patient-a', Object(), 'synthetic-token');
         var created = 0, writes = 0, failed = false;
         String? key, text;
+        List<dynamic>? bodyLocations;
         final client = MockClient((request) async {
           expect(request.headers['authorization'], 'Bearer synthetic-token');
           final path = request.url.path;
@@ -52,6 +53,7 @@ void main() {
             final body = jsonDecode(request.body) as Map;
             expect(body['expectedIntakeRevision'], 1);
             text = body['initialSymptomText'] as String;
+            bodyLocations = body['bodyLocations'] as List<dynamic>;
             writes++;
             if (stage == 'symptoms' && !failed) {
               failed = true;
@@ -76,7 +78,12 @@ void main() {
           identity: () async => owner,
           isCurrent: (_) => true,
         );
-        final attempt = IntakeSubmission('  合成の症状入力  ');
+        final attempt = IntakeSubmission(
+          '  合成の症状入力  ',
+          bodyLocations: stage == 'none'
+              ? const []
+              : const ['head', 'left_knee'],
+        );
         if (stage != 'none') {
           await expectLater(
             api.submit(attempt),
@@ -88,6 +95,10 @@ void main() {
         expect(created, 1);
         expect(writes, 1);
         expect(text, '合成の症状入力');
+        expect(
+          bodyLocations,
+          stage == 'none' ? isEmpty : ['head', 'left_knee'],
+        );
       },
     );
   }

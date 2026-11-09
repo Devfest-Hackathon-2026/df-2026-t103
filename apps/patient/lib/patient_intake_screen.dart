@@ -23,9 +23,35 @@ class PatientIntakeScreen extends StatefulWidget {
 }
 
 class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
+  static const _bodyLocationOptions = <(String, String)>[
+    ('head', '頭'),
+    ('face', '顔'),
+    ('neck', '首'),
+    ('throat', 'のど'),
+    ('chest', '胸'),
+    ('abdomen', 'お腹'),
+    ('upper_back', '背中（上部）'),
+    ('lower_back', '腰・背中（下部）'),
+    ('left_shoulder', '左肩'),
+    ('right_shoulder', '右肩'),
+    ('left_arm', '左腕'),
+    ('right_arm', '右腕'),
+    ('left_hand', '左手'),
+    ('right_hand', '右手'),
+    ('left_leg', '左脚'),
+    ('right_leg', '右脚'),
+    ('left_knee', '左膝'),
+    ('right_knee', '右膝'),
+    ('left_foot', '左足'),
+    ('right_foot', '右足'),
+    ('skin', '皮膚'),
+    ('whole_body', '全身'),
+    ('other', 'その他'),
+  ];
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _symptoms = TextEditingController();
+  final Set<String> _bodyLocations = {};
   late final StreamSubscription<void> _subscription;
   bool _ready = false, _busy = false, _saved = false;
   int _generation = 0;
@@ -45,6 +71,7 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
         _submission = null;
         _startRevision = null;
         _symptoms.clear();
+        _bodyLocations.clear();
         _message = null;
       });
     });
@@ -98,7 +125,10 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
       });
       return;
     }
-    _submission ??= IntakeSubmission(text);
+    _submission ??= IntakeSubmission(
+      text,
+      bodyLocations: _bodyLocations.toList(),
+    );
     final generation = _generation;
     setState(() {
       _busy = true;
@@ -210,6 +240,23 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
                       border: OutlineInputBorder(),
                     ),
                   ),
+                  const SizedBox(height: 16),
+                  const Text('気になる部位（複数選択可・未選択でも可）'),
+                  for (final (code, label) in _bodyLocationOptions)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(label),
+                      value: _bodyLocations.contains(code),
+                      onChanged: _busy || _submission != null
+                          ? null
+                          : (selected) => setState(() {
+                              if (selected == true) {
+                                _bodyLocations.add(code);
+                              } else {
+                                _bodyLocations.remove(code);
+                              }
+                            }),
+                    ),
                   const SizedBox(height: 16),
                   FilledButton(
                     onPressed: _busy ? null : _save,

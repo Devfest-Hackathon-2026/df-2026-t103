@@ -36,6 +36,7 @@ Docker Compose で動かすため、本 flake は Docker デーモンやコン�
 |---|---|---|
 | Flutter（Dart 同梱） | 3.47.4 / Dart 3.13.3 | 患者アプリ |
 | Node.js | 22.23.4 | API / Next.js をホストで直接動かす場合。Docker イメージの Node 22 系に合わせる |
+| Firebase CLI wrapper | `firebase-tools@15.35.0` | 固定版を `npx` で実行。初回は npm registry から取得 |
 | Google Cloud CLI | nixpkgs の固定版 | `gcloud`、ローカル認証と GCP 操作 |
 | Docker CLI | 29.9.2 | `docker` コマンド |
 | Docker Compose | 5.7.0 | `docker compose` / `docker-compose` |
@@ -44,7 +45,8 @@ Docker Compose で動かすため、本 flake は Docker デーモンやコン�
 
 - Dart は Flutter に同梱されるため、個別には導入しない。
 - `docker-client` には Compose プラグインが含まれる。単体の `docker-compose` も同梱する。
-- Firebase Emulator Suite は Docker 側で動くため、`firebase-tools` や Java はホストに含めない。
+- Firebase CLI wrapper はホストの devShell に含む。Firebase Emulator Suite 自体は従来どおり Docker Compose で動き、Java は通常のホスト devShell に含めない。
+- #313 の実ブラウザ統合runner向けに、Linux では追加の `browser-integration` devShell を利用できる（§4.3）。通常の devShell に Java / Python / Firefox / Xvfb は追加しない。
 - Android SDK / Android Emulator / Xcode / CocoaPods は含めない（§5）。
 
 実際のバージョンは次で確認できる。
@@ -52,6 +54,7 @@ Docker Compose で動かすため、本 flake は Docker デーモンやコン�
 ```bash
 nix develop --command flutter --version
 nix develop --command node --version
+nix develop --command firebase --version
 nix develop --command gcloud version
 nix develop --command docker compose version
 nix flake metadata
@@ -112,16 +115,40 @@ CLI のログイン（`gcloud auth login`）とアプリケーションデフォ
 devShell を抜けても残る。Git に含めず、共有プロジェクトを操作する前に対象と権限を確認する。
 これらの認証コマンドは devShell 起動時に自動実行しない。
 
+Firebase CLI wrapper は `firebase-tools@15.35.0` を明示 pin し、既存CIと同じ `npx` 呼び出しを行う。
+初回実行時（npm cache に未取得の場合）は npm registry へのネットワーク接続が必要で、取得物は npm cache に保存され再利用される。
+この取得は Nix store の lock/hash による固定ではなく、npm の配布物・依存関係と registry に依存する。
+Firebase CLI のログインは必要な場合に利用者が
+`firebase login` を手動で実行する。認証は devShell 起動時に行わず、実プロジェクトへの
+操作やデプロイの前に対象プロジェクトとコマンドを確認する。
+
 ### 4.2 非対話でコマンドを実行する
 
 ```bash
 nix develop --command flutter --version
 nix develop --command node --version
+nix develop --command firebase --version
 nix develop --command docker compose version
 nix develop --command make doctor
 ```
 
-### 4.3 開発サーバを起動する
+### 4.3 実ブラウザ統合runner（Linux）
+
+患者アプリの実ブラウザ統合試験（#313）は Java 21、Python 3、Firefox、Xvfb も必要とするため、
+これらは通常の devShell に含めず、Linux 限定の別 shell に分離している。
+
+```bash
+nix develop .#browser-integration
+FIREBASE_BIN=firebase \
+  FLUTTER_BIN=flutter FIREFOX_BIN=firefox \
+  python3 apps/patient/tool/run_browser_integration.py
+```
+
+CI は `FIREBASE_BIN: npx -y firebase-tools@15.35.0` を使い、wrapper も同じ版を実行する。
+runner はローカル Firebase Emulator を使用し、実 GCP には接続しない。
+試験の隔離・cleanup上の制約は [統合試験手順](../apps/patient/test/integration/README.md) を参照。
+
+### 4.4 開発サーバを起動する
 
 ```bash
 nix develop
@@ -172,6 +199,7 @@ nix develop --command flutter --version
 - `flake.nix` は `nixpkgs` を `nixos-unstable` から取得する。
 - `flake.lock` が nixpkgs のリビジョンとハッシュを固定する。現在の pin は
   `1d060086d60cb76a40cf37109f979d88a5bd6396`（2026-11-03）。
+- Firebase CLI wrapper は `firebase-tools@15.35.0` を固定指定する。CLI本体と依存関係は初回実行時に npm registry から取得し、Nix lock には含まれない。
 - `nix develop` は lock に従うため、同じ lock を使う限り同じツール構成になる。
 - lock を更新した場合は、Flutter のバージョンと `make doctor` / 主要コマンドを再検証する。
 

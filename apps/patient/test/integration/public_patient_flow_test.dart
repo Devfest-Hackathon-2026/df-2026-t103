@@ -87,10 +87,11 @@ void main() {
       fail('Real public workflow did not reach the expected state: $finder');
     }
 
-    Future<void> tap(String text) async {
-      await tester.ensureVisible(find.text(text));
+    Future<void> tap(String text, {Finder? finder}) async {
+      final target = finder ?? find.text(text);
+      await tester.ensureVisible(target);
       await tester.runAsync(() async {
-        await tester.tap(find.text(text));
+        await tester.tap(target);
       });
       await tester.pump();
       for (var i = 0; i < 250; i++) {
@@ -230,9 +231,10 @@ void main() {
         of: answerCard,
         matching: find.text('回答を編集'),
       );
+      expect(editButton, findsOneWidget);
       await tester.ensureVisible(editButton);
       _flowMarker('edit-open-start');
-      await tap('回答を編集');
+      await tap('回答を編集', finder: editButton);
       _flowMarker('edit-open-tap-returned');
       await tester.pump();
       final editField = find.byKey(const ValueKey('保存済み回答の補足'));

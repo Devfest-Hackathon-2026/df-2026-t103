@@ -210,6 +210,16 @@ run_timed 300 "$FLUTTER_BIN" pub get >/dev/null
 # This per-file order can affect shared test state/order-dependent outcomes.
 shopt -s nullglob
 test_files=(test/integration/*_test.dart)
+# First-registration integration owns its synthetic legal-document fixture and
+# runs through the isolated, dynamic-port public-registration runner instead.
+# Keep its opt-in test out of this unrelated seeded intake suite; otherwise it
+# is reported as a skipped test and the machine-report gate correctly rejects it.
+filtered_test_files=()
+for test_file in "${test_files[@]}"; do
+  [ "$test_file" = "test/integration/public_patient_registration_test.dart" ] ||
+    filtered_test_files+=("$test_file")
+done
+test_files=("${filtered_test_files[@]}")
 recovery_file="test/integration/public_patient_answer_recovery_test.dart"
 if [ "${#test_files[@]}" -eq 0 ] || [ ! -f "$recovery_file" ]; then
   echo "==> required Flutter integration test selection is missing; refusing to report success" >&2

@@ -140,8 +140,19 @@ wait_for_log "$RUN_DIR/api.log" 'Server listening at' "$API_PID"
 echo '==> run public registration → Auth sign-in → email verification flow'
 cd apps/patient
 "$FLUTTER_BIN" pub get
-"$FLUTTER_BIN" test --no-pub test/integration/public_patient_registration_test.dart \
+REPORT="$RUN_DIR/public-registration.jsonl"
+if "$FLUTTER_BIN" test --no-pub test/integration/public_patient_registration_test.dart \
   --dart-define=RUN_PUBLIC_REGISTRATION_INTEGRATION=true \
   --dart-define="PUBLIC_REGISTRATION_API_ORIGIN=$API_ORIGIN" \
-  --dart-define="PUBLIC_REGISTRATION_AUTH_ORIGIN=$AUTH_ORIGIN"
+  --dart-define="PUBLIC_REGISTRATION_AUTH_ORIGIN=$AUTH_ORIGIN" \
+  --machine >"$REPORT" 2>"$RUN_DIR/flutter.log"; then
+  # The parser requires a complete reporter lifecycle and at least one visible
+  # success. The single integration test is rejected if it was skipped.
+  python3 tool/summarize_flutter_machine.py "$REPORT"
+else
+  status=$?
+  python3 tool/summarize_flutter_machine.py "$REPORT" --diagnostic-partial >&2 || true
+  echo "Public registration Flutter test failed (exit $status)." >&2
+  exit "$status"
+fi
 echo '==> public registration emulator/API integration passed'

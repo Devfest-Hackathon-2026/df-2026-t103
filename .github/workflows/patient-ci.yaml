@@ -111,6 +111,42 @@ jobs:
           E2E_DISPOSABLE_RUNNER: '1'
         run: bash apps/patient/tool/run_intake_e2e.sh
 
+  patient-registration-e2e:
+    name: patient / public registration E2E (emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - name: Set up Java (Firebase emulators requirement)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: Install API dependencies
+        run: npm --prefix services/api ci
+
+      # This runner creates isolated, loopback-only emulators and seeds only
+      # synthetic legal documents. No real Firebase project or credentials.
+      - name: Run public registration E2E
+        env:
+          FIREBASE_BIN: npx -y firebase-tools@15.35.0
+          FLUTTER_BIN: flutter
+        run: bash apps/patient/tool/run_public_registration_e2e.sh
+
   patient-browser-integration:
     name: patient / browser CORS + Dart API (emulators)
     runs-on: ubuntu-latest

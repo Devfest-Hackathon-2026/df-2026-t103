@@ -9,7 +9,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from summarize_flutter_machine import diagnose_partial, run_partial_diagnostic, summarize
+from summarize_flutter_machine import FLOW_MARKERS, diagnose_partial, run_partial_diagnostic, summarize
 
 
 RECOVERY = "patient retries a committed answer with the same key and body"
@@ -114,6 +114,23 @@ class SummarizerTest(unittest.TestCase):
             {"type": "testDone", "result": "SECRET_RESULT", "skipped": False},
             {"type": "done", "success": True, "error": "SECRET_ERROR"},
             {"type": "unknown-secret-kind", "secret": "SECRET"},
+            {"type": "print", "message": "edit-open-start"},
+            {"type": "print", "message": "edit-open-tap-returned"},
+            {"type": "print", "message": "edit-field-found"},
+            {"type": "print", "message": "edit-input-returned"},
+            {"type": "print", "message": "edit-save-start"},
+            {"type": "print", "message": "edit-save-tap-returned"},
+            *(
+                {"type": "print", "message": marker}
+                for marker in FLOW_MARKERS
+                if marker.startswith("review-") or marker.startswith("hospital-")
+            ),
+            *({"type": "print", "message": marker} for marker in FLOW_MARKERS if marker.startswith("edit-after-") or "-check-" in marker),
+            {"type": "print", "message": "edit-open SECRET_NAME"},
+            {"type": "print", "message": "edit-field-found SECRET_URL"},
+            {"type": "print", "message": "edit-after-get-completed SECRET_NAME"},
+            {"type": "print", "message": "SECRET_NAME", "error": "SECRET_ERROR"},
+            {"type": "print", "message": {"marker": "review"}},
         ]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "machine.jsonl"
@@ -124,9 +141,40 @@ class SummarizerTest(unittest.TestCase):
         diagnostic = output.getvalue()
         self.assertIn("testStart=1", diagnostic)
         self.assertIn("success=1 failure=0 error=0 skip=1", diagnostic)
-        self.assertIn("completed=yes", diagnostic)
-        for secret in ("SECRET_NAME", "SECRET_URL", "SECRET_ERROR", "SECRET_RESULT", "unknown-secret-kind"):
+        self.assertIn("reporter_done_success_seen=unknown", diagnostic)
+        self.assertIn("edit-open-start=1", diagnostic)
+        self.assertIn("edit-open-tap-returned=1", diagnostic)
+        self.assertIn("edit-field-found=1", diagnostic)
+        self.assertIn("edit-input-returned=1", diagnostic)
+        self.assertIn("edit-save-start=1", diagnostic)
+        self.assertIn("edit-save-tap-returned=1", diagnostic)
+        for marker in FLOW_MARKERS:
+            if marker.startswith("review-") or marker.startswith("hospital-") or marker.startswith("edit-after-") or "-check-" in marker:
+                self.assertIn(f"{marker}=1", diagnostic)
+        self.assertIn("review=0", diagnostic)
+        for secret in ("SECRET_NAME", "SECRET_URL", "SECRET_ERROR", "SECRET_RESULT", "unknown-secret-kind", "edit-open SECRET_NAME", "edit-after-get-completed SECRET_NAME"):
             self.assertNotIn(secret, diagnostic)
+
+    def test_partial_diagnostic_counts_only_exact_allowlisted_markers(self):
+        events = [
+            {"type": "print", "message": marker}
+            for marker in FLOW_MARKERS
+        ] + [
+            {"type": "print", "message": "edit-after-get-completed-extra"},
+            {"type": "print", "message": "SECRET_TOKEN"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "machine.jsonl"
+            path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                diagnose_partial(path)
+        diagnostic = output.getvalue()
+        for marker in FLOW_MARKERS:
+            self.assertIn(f"{marker}=1", diagnostic)
+        self.assertIn("edit-after-get-completed=1", diagnostic)
+        self.assertNotIn("edit-after-get-completed-extra", diagnostic)
+        self.assertNotIn("SECRET_TOKEN", diagnostic)
 
     def test_partial_diagnostic_marks_truncated_output_incomplete(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -135,7 +183,68 @@ class SummarizerTest(unittest.TestCase):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 diagnose_partial(path)
-        self.assertIn("completed=no", output.getvalue())
+        self.assertIn("reporter_done_success_seen=unknown", output.getvalue())
+
+    def test_partial_diagnostic_requires_valid_terminal_done(self):
+        invalid_reports = (
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\nnot-json\n',
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n{"type":"unknown"}\n',
+            '{"type":"start"}\n{"type":"done","success":true}\n',
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n{"type":"done","success":true}\n',
+        )
+        for contents in invalid_reports:
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "machine.jsonl"
+                path.write_text(contents, encoding="utf-8")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    diagnose_partial(path)
+                self.assertIn("reporter_done_success_seen=unknown", output.getvalue())
+                self.assertNotIn("not-json", output.getvalue())
+
+    def test_partial_diagnostic_reports_only_observed_done_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "machine.jsonl"
+            path.write_text(
+                '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n',
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                diagnose_partial(path)
+        self.assertIn("reporter_done_success_seen=yes", output.getvalue())
+        self.assertNotIn(" completed=", output.getvalue())
+        self.assertIn("testStart=0", output.getvalue())
+        self.assertIn("testDone=0", output.getvalue())
+
+    def test_partial_diagnostic_distinguishes_absent_done_from_false_done(self):
+        cases = (
+            ('{"type":"start"}\n', "unknown"),
+            ('{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":false}\n', "no"),
+            ('{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n', "yes"),
+        )
+        for contents, expected in cases:
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "machine.jsonl"
+                path.write_text(contents, encoding="utf-8")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    diagnose_partial(path)
+                self.assertIn(f"reporter_done_success_seen={expected}", output.getvalue())
+
+    def test_partial_diagnostic_marks_malformed_done_unknown_without_leaking_secret(self):
+        for contents in (
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":"SECRET"}\n',
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n{"type":"print","message":"SECRET_AFTER_DONE"}\n',
+        ):
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "machine.jsonl"
+                path.write_text(contents, encoding="utf-8")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    diagnose_partial(path)
+                self.assertIn("reporter_done_success_seen=unknown", output.getvalue())
+                self.assertNotIn("SECRET", output.getvalue())
 
     def test_partial_diagnostic_ignores_unhashable_event_values(self):
         events = [
@@ -149,7 +258,7 @@ class SummarizerTest(unittest.TestCase):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 diagnose_partial(path)
-        self.assertIn("diagnostic completed=no", output.getvalue())
+        self.assertIn("diagnostic reporter_done_success_seen=unknown", output.getvalue())
         self.assertNotIn("not hashable", output.getvalue())
 
     def test_diagnostic_exception_is_replaced_with_fixed_message(self):
@@ -168,7 +277,7 @@ class SummarizerTest(unittest.TestCase):
         result = subprocess.run(["bash", "-c", runner], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 37)
         self.assertEqual(result.stderr, "")
-        self.assertIn("diagnostic completed=no", result.stdout)
+        self.assertIn("diagnostic reporter_done_success_seen=unknown", result.stdout)
 
 
 if __name__ == "__main__":

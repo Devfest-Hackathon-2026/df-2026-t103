@@ -99,6 +99,14 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   String? _disclosureVersion, _disclosureHash;
   String _bodyLocation = 'whole_body';
   Map<String, dynamic>? _intake, _question, _summary, _facility, _delivery;
+  Map<String, dynamic>? _editingAnswer, _editingQuestion;
+  String _editingState = 'answered';
+  final _editingCodes = <String>{};
+  bool _editingMultiple = false;
+  bool _answerEditNeedsReconcile = false;
+  bool _answerEditQuestionChanged = false;
+  Object? _answerEditOwner;
+  int? _answerEditRevision;
   List<dynamic> _history = [];
   int _questionnaireRevision = 1;
   int? _questionIntakeRevision;
@@ -147,6 +155,14 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _disclosureVersion = null;
     _disclosureHash = null;
     _history = [];
+    _editingAnswer = _editingQuestion = null;
+    _editingCodes.clear();
+    _editingMultiple = false;
+    _answerEditNeedsReconcile = false;
+    _answerEditQuestionChanged = false;
+    _answerEditOwner = null;
+    _answerEditRevision = null;
+    _editingState = 'answered';
     _symptom.clear();
     _answerFreeText.clear();
     _answerAttempted = false;
@@ -690,12 +706,367 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _summary = Map<String, dynamic>.from(result['summary'] as Map);
     await _loadIntake(generation: generation);
     if (!_isCurrent(generation)) return;
+    if (result['intakeRevision'] != _revision(_intake!)) {
+      throw const PatientRequestFailure('409');
+    }
+    final savedAnswers = _intake?['answers'];
+    final questions = _intake?['questions'];
+    if (!_validAnswers(savedAnswers) ||
+        questions is! List ||
+        questions.any(
+          (item) =>
+              item is! Map<String, dynamic> ||
+              item['questionId'] is! String ||
+              item['questionRevision'] is! int ||
+              item['questionText'] is! String ||
+              item['options'] is! List,
+        )) {
+      throw const PatientRequestFailure('INVALID_RESPONSE');
+    }
+    for (final answer in savedAnswers) {
+      final matching = questions.whereType<Map<String, dynamic>>().where(
+        (question) =>
+            question['questionId'] == answer['questionId'] &&
+            question['questionRevision'] == answer['questionRevision'],
+      );
+      if (matching.length != 1) {
+        throw const PatientRequestFailure('INVALID_RESPONSE');
+      }
+    }
     if (mounted) {
       setState(() {
         _reviewed = false;
         _step = 'review';
       });
     }
+  }
+
+  Future<void> _beginAnswerEdit(
+    Map<String, dynamic> answer,
+    Map<String, dynamic> question,
+  ) async {
+    final selected = answer['selectedCodes'] as List;
+    setState(() {
+      _editingAnswer = answer;
+      _editingQuestion = question;
+      _editingState = answer['answerState'] as String;
+      _editingCodes
+        ..clear()
+        ..addAll(selected.cast<String>());
+      // Questions use single-choice UI. Preserve legacy multi-code answers for
+      // free-text-only edits; a selection change must be explicitly confirmed.
+      _editingMultiple = selected.length > 1;
+      _answerEditNeedsReconcile = false;
+      _answerEditQuestionChanged = false;
+      _answerEditOwner = null;
+      _answerEditRevision = null;
+      _answerFreeText.text = answer['freeText'] as String? ?? '';
+    });
+  }
+
+  Future<void> _saveAnswerEdit() async {
+    final answer = _editingAnswer;
+    final question = _editingQuestion;
+    if (answer == null || question == null) {
+      throw const PatientRequestFailure('412');
+    }
+    final generation = _generation;
+    final owner = api.session();
+    final questionId = _id(answer['questionId']);
+    final questionRevision = answer['questionRevision'];
+    if (questionRevision is! int ||
+        questionRevision != question['questionRevision']) {
+      throw const PatientRequestFailure('INVALID_RESPONSE');
+    }
+    final selectedCodes = _editingState == 'answered'
+        ? _editingCodes.toList()
+        : <String>[];
+    if (_editingState == 'answered' && selectedCodes.isEmpty) {
+      throw const PatientRequestFailure('400');
+    }
+    final freeText =
+        _editingState == 'answered' && _answerFreeText.text.trim().isNotEmpty
+        ? _answerFreeText.text
+        : null;
+    if (_answerFreeText.text.length > 2000) {
+      throw const PatientRequestFailure('400');
+    }
+    final body = <String, Object?>{
+      'questionRevision': questionRevision,
+      'selectedCodes': selectedCodes,
+      'freeText': freeText,
+      'answerState': _editingState,
+    };
+    final previousRevision = _revision(_intake!);
+    var patchRevision = previousRevision + 1;
+    var patchConfirmed = false;
+    Object? patchFailure;
+    try {
+      final result = await api.request(
+        'PATCH',
+        '/intakes/${_id(_intakeId)}/answers/$questionId',
+        body: {...body, 'expectedIntakeRevision': previousRevision},
+      );
+      if (result['answerId'] != questionId ||
+          result['intakeRevision'] != previousRevision + 1) {
+        throw const PatientRequestFailure('INVALID_RESPONSE');
+      }
+      patchRevision = result['intakeRevision'] as int;
+      patchConfirmed = true;
+    } on PatientRequestFailure catch (error) {
+      // Explicit client/auth/resource/precondition rejections cannot have
+      // committed this PATCH. Keep the draft editable and do not mislabel it
+      // as an unknown outcome requiring reconciliation.
+      if (const {'400', '401', '403', '404', '412'}.contains(error.code)) {
+        rethrow;
+      }
+      patchFailure = error;
+      // PATCH may have committed even if its response was lost. Never report
+      // success until an authenticated GET confirms the exact edited values.
+    } catch (error) {
+      patchFailure = error;
+    }
+    _answerEditOwner = owner;
+    _answerEditRevision = patchRevision;
+    _answerEditNeedsReconcile = true;
+    await _reconcileAnswerEdit(
+      generation: generation,
+      owner: owner,
+      patchRevision: patchRevision,
+      questionId: questionId,
+      questionRevision: questionRevision,
+      selectedCodes: selectedCodes,
+      freeText: freeText,
+      answerState: _editingState,
+      patchConfirmed: patchConfirmed,
+      patchFailure: patchFailure,
+    );
+  }
+
+  Future<void> _retryAnswerEditReconcile() async {
+    final answer = _editingAnswer;
+    final question = _editingQuestion;
+    final owner = _answerEditOwner;
+    final patchRevision = _answerEditRevision;
+    if (answer == null ||
+        question == null ||
+        owner == null ||
+        patchRevision == null) {
+      throw const PatientRequestFailure('412');
+    }
+    if (!identical(owner, api.session())) {
+      throw const PatientRequestFailure('401');
+    }
+    final selectedCodes = _editingState == 'answered'
+        ? _editingCodes.toList()
+        : <String>[];
+    final freeText =
+        _editingState == 'answered' && _answerFreeText.text.trim().isNotEmpty
+        ? _answerFreeText.text
+        : null;
+    await _reconcileAnswerEdit(
+      generation: _generation,
+      owner: owner,
+      patchRevision: patchRevision,
+      questionId: _id(answer['questionId']),
+      questionRevision: question['questionRevision'] as int,
+      selectedCodes: selectedCodes,
+      freeText: freeText,
+      answerState: _editingState,
+      patchConfirmed: false,
+      patchFailure: const PatientRequestFailure('409'),
+    );
+  }
+
+  Future<void> _reconcileAnswerEdit({
+    required int generation,
+    required Object owner,
+    required int patchRevision,
+    required String questionId,
+    required int questionRevision,
+    required List<String> selectedCodes,
+    required String? freeText,
+    required String answerState,
+    required bool patchConfirmed,
+    required Object? patchFailure,
+  }) async {
+    if (!_isCurrent(generation) || !identical(owner, api.session())) {
+      throw const PatientRequestFailure('401');
+    }
+    Map<String, dynamic> current;
+    try {
+      current = await api.request('GET', '/intakes/${_id(_intakeId)}');
+    } catch (_) {
+      if (_isCurrent(generation) && identical(owner, api.session())) {
+        _answerEditNeedsReconcile = true;
+      }
+      rethrow;
+    }
+    if (!_isCurrent(generation) || !identical(owner, api.session())) {
+      throw const PatientRequestFailure('401');
+    }
+    final answers = current['answers'];
+    final updated = answers is List
+        ? answers.whereType<Map<String, dynamic>>().where(
+            (item) => item['questionId'] == questionId,
+          )
+        : const <Map<String, dynamic>>[];
+    final latestRevision = current['revision'];
+    final saved = updated.length == 1 ? updated.first : null;
+    final latestQuestions = current['questions'];
+    final latestQuestion = latestQuestions is List
+        ? latestQuestions.whereType<Map<String, dynamic>>().where(
+            (item) => item['questionId'] == questionId,
+          )
+        : const <Map<String, dynamic>>[];
+    final questionUnchanged =
+        latestQuestion.length == 1 &&
+        latestQuestion.single['questionRevision'] == questionRevision &&
+        _sameQuestionOptions(latestQuestion.single, _editingQuestion!);
+    final matches =
+        saved != null &&
+        questionUnchanged &&
+        latestRevision is int &&
+        latestRevision == patchRevision &&
+        saved['questionRevision'] == questionRevision &&
+        saved['answerState'] == answerState &&
+        _sameStringList(saved['selectedCodes'], selectedCodes) &&
+        saved['freeText'] == freeText;
+    // A 409 is an explicit rejection, not an ambiguous transport failure.
+    // Even if a concurrent writer happened to save identical values at the
+    // expected next revision, that does not establish that this PATCH worked.
+    if (!patchConfirmed) {
+      _intake = current;
+      _revision(_intake!);
+      _answerEditNeedsReconcile = false;
+      final latestAnswers = current['answers'];
+      final latest = latestAnswers is List
+          ? latestAnswers.whereType<Map<String, dynamic>>().where(
+              (item) => item['questionId'] == questionId,
+            )
+          : const <Map<String, dynamic>>[];
+      if (latest.length == 1) _editingAnswer = latest.single;
+      _answerEditQuestionChanged = !questionUnchanged;
+      if (!questionUnchanged && latestQuestion.length == 1) {
+        _editingQuestion = latestQuestion.single;
+      }
+      if (patchFailure is PatientRequestFailure && patchFailure.code == '409') {
+        throw PatientRequestFailure(
+          questionUnchanged
+              ? 'ANSWER_EDIT_REJECTED'
+              : 'ANSWER_EDIT_QUESTION_CHANGED',
+        );
+      }
+      throw const PatientRequestFailure('ANSWER_EDIT_NOT_CONFIRMED');
+    }
+    if (!matches) {
+      _intake = current;
+      _revision(_intake!);
+      _answerEditNeedsReconcile = false;
+      final latestAnswers = current['answers'];
+      final latest = latestAnswers is List
+          ? latestAnswers.whereType<Map<String, dynamic>>().where(
+              (item) => item['questionId'] == questionId,
+            )
+          : const <Map<String, dynamic>>[];
+      if (latest.length == 1) _editingAnswer = latest.single;
+      _answerEditQuestionChanged = !questionUnchanged;
+      if (!questionUnchanged && latestQuestion.length == 1) {
+        _editingQuestion = latestQuestion.single;
+      }
+      throw const PatientRequestFailure('409');
+    }
+    _intake = current;
+    _revision(_intake!);
+    _editingAnswer = _editingQuestion = null;
+    _answerEditNeedsReconcile = false;
+    _answerEditOwner = null;
+    _answerEditRevision = null;
+    _editingCodes.clear();
+    _answerFreeText.clear();
+    // The edit is confirmed and draft cleared before navigation. A follow-up
+    // review/next request failure must not imply that the save itself failed.
+    try {
+      if (current['status'] == 'review') {
+        await _review();
+      } else if (current['status'] == 'questioning') {
+        await _nextQuestion();
+      } else {
+        throw const PatientRequestFailure('412');
+      }
+    } catch (_) {
+      if (_isCurrent(generation)) {
+        _notice = '回答の変更は保存されました。次の画面を読み込めませんでした。内容を再読み込みしてください。';
+        _step = 'review';
+      }
+    }
+  }
+
+  bool _sameQuestionOptions(
+    Map<String, dynamic> latest,
+    Map<String, dynamic> original,
+  ) {
+    final a = latest['options'], b = original['options'];
+    if (a is! List || b is! List || a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] is! Map ||
+          b[i] is! Map ||
+          a[i]['code'] != b[i]['code'] ||
+          a[i]['label'] != b[i]['label']) {
+        return false;
+      }
+    }
+    return latest['questionText'] == original['questionText'];
+  }
+
+  Map<String, dynamic>? _latestQuestionForAnswer(
+    Object? questions,
+    Object? questionId,
+  ) {
+    if (questions is! List) return null;
+    final matching = questions
+        .whereType<Map<String, dynamic>>()
+        .where((item) => item['questionId'] == questionId);
+    return matching.length == 1 ? matching.single : null;
+  }
+
+  Future<void> _changeAnswerState(String state) async {
+    if (state == _editingState) return;
+    if (_answerFreeText.text.trim().isNotEmpty) {
+      final discard = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('補足を削除しますか？'),
+          content: const Text('「わからない」「答えたくない」に変更すると、入力済みの補足は保存されません。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('戻る'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('補足を削除して変更'),
+            ),
+          ],
+        ),
+      );
+      if (discard != true || !mounted) return;
+    }
+    setState(() {
+      _editingState = state;
+      _editingCodes.clear();
+      _answerFreeText.clear();
+    });
+  }
+
+  bool _sameStringList(Object? actual, List<String> expected) {
+    if (actual is! List || actual.length != expected.length) return false;
+    for (var index = 0; index < actual.length; index++) {
+      if (actual[index] is! String || actual[index] != expected[index]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _finalize() async {
@@ -882,7 +1253,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     if (summary == null) return [];
     final chief = summary['chiefComplaint'];
     final sections = summary['sections'];
-    return [
+    final widgets = <Widget>[
       const Text('あなたが伝えたいこと', style: TextStyle(fontWeight: FontWeight.bold)),
       Text(chief is Map ? '${chief['value'] ?? '未回答'}' : '未回答'),
       if (sections is Map)
@@ -897,6 +1268,181 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       const SizedBox(height: 12),
       const Text('記載されていない内容は未回答です。診断結果ではありません。'),
     ];
+    if (_step != 'review') return widgets;
+    final answers = _intake?['answers'];
+    final questions = _intake?['questions'];
+    if (answers is! List || questions is! List) return widgets;
+    widgets.add(const SizedBox(height: 16));
+    widgets.add(
+      const Text('保存済みの回答', style: TextStyle(fontWeight: FontWeight.bold)),
+    );
+    for (final raw in answers) {
+      if (raw is! Map<String, dynamic>) continue;
+      final question = questions.whereType<Map<String, dynamic>>().where(
+        (item) =>
+            item['questionId'] == raw['questionId'] &&
+            item['questionRevision'] == raw['questionRevision'],
+      );
+      final editingThisAnswer =
+          _editingAnswer?['questionId'] == raw['questionId'];
+      final q = editingThisAnswer &&
+              _latestQuestionForAnswer(questions, raw['questionId']) != null
+          ? _latestQuestionForAnswer(questions, raw['questionId'])
+          : question.length == 1
+          ? question.single
+          : null;
+      if (q == null) continue;
+      final options = q['options'];
+      final selected = raw['selectedCodes'];
+      final labels = options is List && selected is List
+          ? options
+                .whereType<Map>()
+                .where((option) => selected.contains(option['code']))
+                .map((option) => '${option['label']}')
+                .join('、')
+          : '';
+      final answerText = switch (raw['answerState']) {
+        'unknown' => 'わからない',
+        'skipped' => '答えたくない',
+        _ => labels.isEmpty ? '未回答' : labels,
+      };
+      widgets.add(
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '${q['questionText'] ?? ''}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(answerText),
+                if (raw['freeText'] is String &&
+                    (raw['freeText'] as String).isNotEmpty)
+                  Text(raw['freeText'] as String),
+                if (identical(_editingAnswer, raw)) ...[
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      if (options is List)
+                        for (final option in options.whereType<Map>())
+                          ChoiceChip(
+                            label: Text('${option['label']}'),
+                            selected:
+                                _editingState == 'answered' &&
+                                _editingCodes.contains(option['code']),
+                            onSelected: _busy || _answerEditNeedsReconcile
+                                ? null
+                                : (selected) {
+                                    setState(() {
+                                      _editingState = 'answered';
+                                      final code = option['code'] as String;
+                                      if (_editingMultiple &&
+                                          _editingCodes.contains(code)) {
+                                        _editingCodes.remove(code);
+                                      } else if (_editingMultiple) {
+                                        // Do not silently discard legacy codes.
+                                        showDialog<void>(
+                                          context: context,
+                                          builder: (context) => AlertDialog(
+                                            title: const Text(
+                                              '回答を単一選択に変更しますか？',
+                                            ),
+                                            content: const Text(
+                                              '以前の複数選択は、この変更で置き換えられます。',
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(context),
+                                                child: const Text('戻る'),
+                                              ),
+                                              FilledButton(
+                                                onPressed: () {
+                                                  setState(() {
+                                                    _editingMultiple = false;
+                                                    _editingCodes
+                                                      ..clear()
+                                                      ..add(code);
+                                                  });
+                                                  Navigator.pop(context);
+                                                },
+                                                child: const Text('単一選択に変更'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      } else {
+                                        _editingCodes
+                                          ..clear()
+                                          ..add(code);
+                                      }
+                                    });
+                                  },
+                          ),
+                      for (final state in const {
+                        'unknown': 'わからない',
+                        'skipped': '答えたくない',
+                      }.entries)
+                        ChoiceChip(
+                          label: Text(state.value),
+                          selected: _editingState == state.key,
+                          onSelected: _busy || _answerEditNeedsReconcile
+                              ? null
+                              : (selected) => _changeAnswerState(state.key),
+                        ),
+                    ],
+                  ),
+                  TextField(
+                    key: const ValueKey('保存済み回答の補足'),
+                    controller: _answerFreeText,
+                    enabled:
+                        !_busy &&
+                        !_answerEditNeedsReconcile &&
+                        _editingState == 'answered',
+                    maxLength: 2000,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(labelText: '回答の補足'),
+                  ),
+                  if (!_answerEditNeedsReconcile)
+                    _button(
+                      '編集内容を保存',
+                      _saveAnswerEdit,
+                      enabled: !_answerEditQuestionChanged,
+                    ),
+                  if (_answerEditQuestionChanged)
+                    const Text('質問が更新されました。古い回答を送信せず、編集を取り消して最新内容を確認してください。'),
+                  if (_answerEditNeedsReconcile)
+                    _button('保存状態を再取得', _retryAnswerEditReconcile),
+                  TextButton(
+                    onPressed: _busy || _answerEditNeedsReconcile
+                        ? null
+                        : () => setState(() {
+                            _editingAnswer = _editingQuestion = null;
+                            _editingCodes.clear();
+                            _answerEditNeedsReconcile = false;
+                            _answerEditOwner = null;
+                            _answerEditRevision = null;
+                            _answerFreeText.clear();
+                          }),
+                    child: const Text('編集を取り消す'),
+                  ),
+                ] else
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () => _run(() => _beginAnswerEdit(raw, q)),
+                    child: const Text('回答を編集'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    return widgets;
   }
 
   String _topic(String name) =>

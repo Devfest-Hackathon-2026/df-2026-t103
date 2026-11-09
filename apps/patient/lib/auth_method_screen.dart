@@ -11,6 +11,7 @@ class AuthMethodScreen extends StatelessWidget {
   const AuthMethodScreen({
     super.key,
     this.passkeyEnabled = false,
+    this.enabledMethods = AuthMethod.values,
     this.onMethodSelected,
   });
 
@@ -18,6 +19,10 @@ class AuthMethodScreen extends StatelessWidget {
   ///
   /// 未承認時は Widget 自体を生成せず、読み上げにも出さない。
   final bool passkeyEnabled;
+
+  /// 実装済みの認証方式。含まれない方式は無効表示（未接続）になる。
+  /// 既定は全方式（接続時）。
+  final List<AuthMethod> enabledMethods;
 
   /// 認証方式が選ばれたときに呼ばれる。
   ///
@@ -55,7 +60,8 @@ class AuthMethodScreen extends StatelessWidget {
                   _MethodButton(
                     icon: Icons.account_circle_outlined,
                     label: 'Googleで続ける',
-                    onPressed: connected
+                    onPressed:
+                        connected && enabledMethods.contains(AuthMethod.google)
                         ? () => onMethodSelected!(AuthMethod.google)
                         : null,
                   ),
@@ -63,7 +69,8 @@ class AuthMethodScreen extends StatelessWidget {
                   _MethodButton(
                     icon: Icons.mail_outline,
                     label: 'メールアドレスで続ける',
-                    onPressed: connected
+                    onPressed:
+                        connected && enabledMethods.contains(AuthMethod.email)
                         ? () => onMethodSelected!(AuthMethod.email)
                         : null,
                   ),
@@ -72,7 +79,9 @@ class AuthMethodScreen extends StatelessWidget {
                     _MethodButton(
                       icon: Icons.fingerprint,
                       label: 'パスキーで続ける',
-                      onPressed: connected
+                      onPressed:
+                          connected &&
+                              enabledMethods.contains(AuthMethod.passkey)
                           ? () => onMethodSelected!(AuthMethod.passkey)
                           : null,
                     ),

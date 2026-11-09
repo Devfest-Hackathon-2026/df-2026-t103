@@ -46,7 +46,23 @@ void main() {
     await fill('生年月日（必須・例 1950-01-01）', '1950-01-01');
     await fill('電話番号（必須）', '09012345678');
     await fill('郵便番号（必須・7桁）', '100-0001');
-    await fill('住所（必須）', '東京都千代田区（架空）1-2-3');
+    final prefecture = find.byType(DropdownButtonFormField<String>);
+    await tester.ensureVisible(prefecture);
+    await tester.tap(find.descendant(
+      of: prefecture,
+      matching: find.byType(DropdownButton<String>),
+    ));
+    await tester.pumpAndSettle();
+    // メニューは遅延構築されるため、最後の Scrollable をスクロールして項目を現す。
+    await tester.scrollUntilVisible(
+      find.text('東京都'),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('東京都'));
+    await tester.pumpAndSettle();
+    await fill('市区町村（必須）', '千代田区');
+    await fill('番地・建物名など（必須）', '（架空）1-2-3');
     // 持病は空のまま
     final submit = find.widgetWithText(FilledButton, 'この内容で登録する');
     await tester.ensureVisible(submit);

@@ -111,6 +111,10 @@ services:
       NODE_ENV: development
       PORT: "3000"
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080/v1}
+      # サーバ側（Route Handler）から API へ到達するための Compose 内部 URL。
+      # ブラウザ用の NEXT_PUBLIC_API_BASE_URL の localhost はコンテナ内では
+      # コンテナ自身を指すため、サービス名 api を使う別経路が必要。
+      API_BASE_URL_SERVER: ${API_BASE_URL_SERVER:-http://api:8080/v1}
       NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-demo-mmr-dev}
       NEXT_PUBLIC_USE_FIREBASE_EMULATOR: ${NEXT_PUBLIC_USE_FIREBASE_EMULATOR:-true}
       NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL: http://localhost:9099

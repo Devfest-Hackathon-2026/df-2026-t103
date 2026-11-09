@@ -10,6 +10,8 @@
 |---|---|
 | `make doctor` | Docker / Make / Flutter の導入状態を確認 |
 | `make up` | env自動生成 → Firebaseエミュレータ等のコンテナ起動 → ファイル監視 → Flutter Web起動 |
+| `make up SEED=1` | 上記＋起動完了後に合成テストデータを投入 |
+| `make seed` | 起動済み環境へ合成テストデータを投入（`services/api/scripts/seedPatientE2E.mjs`） |
 | `make urls` | 各サービスのURL一覧 |
 | `make ps` | コンテナ＋ホストプロセスの状態 |
 | `make down` | 全停止（コンテナ・watch・Flutter） |

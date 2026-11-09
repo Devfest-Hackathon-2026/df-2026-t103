@@ -4,11 +4,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 
 import 'firebase_bootstrap.dart';
+import 'patient_flow.dart';
 import 'patient_intake_api.dart';
 
 /// The app's existing, explicitly configured Auth Emulator is the only sign-in
 /// authority for this first local slice. Never use a mock or a production token.
-class FirebaseIntakeConnection {
+class FirebaseIntakeConnection implements PatientFlowHost {
   FirebaseIntakeConnection(EmulatorConfig config) {
     config.validate(androidHostAliasAllowed: allowsAndroidHostAlias);
     if (_auth.app.options.projectId != config.projectId) {
@@ -25,6 +26,7 @@ class FirebaseIntakeConnection {
     if (Uri.parse(origin).host != config.host) {
       throw StateError('API and Auth emulator hosts must match');
     }
+    this.origin = origin;
     api = PatientIntakeApi(
       origin: origin,
       client: _http,
@@ -48,13 +50,31 @@ class FirebaseIntakeConnection {
   final _changes = StreamController<void>.broadcast(sync: true);
   late final StreamSubscription<User?> _subscription;
   Object _epoch = Object();
+
+  @override
   late final PatientIntakeApi api;
+
+  /// fail-closed 検証済みの API オリジン。公開登録・法文書の transport と共有する。
+  @override
+  late final String origin;
+
+  /// 登録・法文書 transport と共有する HTTP クライアント（dispose でまとめて閉じる）。
+  @override
+  http.Client get client => _http;
+
+  /// 現在の認証 UID（未サインインは null）。authStateChanges と同一ソース。
+  @override
+  String? get currentUid => _auth.currentUser?.uid;
+
+  @override
   Stream<void> get changes => _changes.stream;
 
+  @override
   Future<void> signIn(String email, String password) async {
     await _auth.signInWithEmailAndPassword(email: email, password: password);
   }
 
+  @override
   Future<void> signOut() => _auth.signOut();
 
   Future<void> dispose() async {

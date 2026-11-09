@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { clientConfig } from "./client-config";
+import { apiBaseUrlForServer, clientConfig } from "./client-config";
 import {
   appCheckCookieName,
   APPCHECK_COOKIE_DEV,
@@ -97,7 +97,7 @@ export async function sessionApiFetch(
   path: string,
   init: { method?: string; body?: unknown; signal?: AbortSignal } = {},
 ): Promise<Response> {
-  const { apiBaseUrl } = clientConfig();
+  const apiBaseUrl = apiBaseUrlForServer();
   const headers: Record<string, string> = { authorization: `Bearer ${session.idToken}` };
   if (session.appCheckToken) headers["x-firebase-appcheck"] = session.appCheckToken;
   if (init.body !== undefined) headers["content-type"] = "application/json";

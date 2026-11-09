@@ -23,7 +23,7 @@ EMU_UI_PORT      ?= 4000
 -include .secret.local
 .EXPORT_ALL_VARIABLES:
 
-PATIENT_DART_DEFINES ?= --dart-define=API_BASE_URL=http://localhost:$(API_PORT)/v1 --dart-define=USE_FIREBASE_EMULATOR=true --dart-define=FIREBASE_PROJECT_ID=demo-mmr-dev
+PATIENT_DART_DEFINES ?= --dart-define=API_BASE_URL=http://localhost:$(API_PORT) --dart-define=USE_FIREBASE_EMULATOR=true --dart-define=FIREBASE_PROJECT_ID=demo-mmr-dev
 
 # ---- アプリ実装の有無で起動対象を自動決定 ------------------------------
 HAS_API      := $(wildcard services/api/package.json)
@@ -46,7 +46,7 @@ endif
         stop-firebase stop-api stop-hospital stop-patient stop-watch \
         restart-firebase restart-api restart-hospital restart-patient restart-watch \
         logs logs-firebase logs-api logs-hospital logs-patient logs-watch \
-        test-firebase-rules test-api-emulator install-templates
+        seed test-firebase-rules test-api-emulator install-templates
 
 ##@ 基本
 
@@ -96,6 +96,9 @@ ifneq ($(HAS_PATIENT),)
 	@$(MAKE) --no-print-directory patient-start
 else
 	@echo "patient: apps/patient が未作成のためスキップ（Flutter実装後に自動で起動対象になります）"
+endif
+ifeq ($(SEED),1)
+	@$(MAKE) --no-print-directory seed
 endif
 	@$(MAKE) --no-print-directory urls
 
@@ -228,6 +231,14 @@ logs-watch: ## ファイル監視のログを表示
 	tail -f $(LOG_DIR)/compose-watch.log
 
 ##@ その他
+
+seed: ## エミュレータに合成患者データを投入（api 起動中に実行。`make up SEED=1` でも可）
+	@[ -n "$$($(COMPOSE) ps -q api 2>/dev/null)" ] || { echo "error: api コンテナがありません。先に make start-firebase start-api（または make up）"; exit 1; }
+	@echo "seed: api/エミュレータの healthy を待機..."
+	@i=0; until [ "$$($(COMPOSE) ps api firebase --format '{{.Status}}' 2>/dev/null | grep -c healthy)" -ge 2 ]; do \
+		i=$$((i+1)); [ $$i -ge 120 ] && { echo "timeout: api/firebase が healthy になりません" >&2; exit 1; }; sleep 2; \
+	done
+	@$(COMPOSE) exec -T api sh -c 'npm run build >/dev/null && FIREBASE_AUTH_EMULATOR_HOST=firebase:9099 FIRESTORE_EMULATOR_HOST=firebase:8080 node scripts/seedPatientE2E.mjs'
 
 test-firebase-rules: ## Security Rules 単体テスト（compose のエミュレータ起動中に実行）
 	@[ -d firebase/tests/node_modules ] || npm --prefix firebase/tests ci

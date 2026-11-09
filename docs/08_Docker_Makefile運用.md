@@ -74,6 +74,7 @@ docker compose を直接使って止める場合: `docker compose stop api`（�
 
 | コマンド | 内容 |
 |---|---|
+| `make seed` | 合成テストデータをエミュレータへ投入（api/firebase の healthy 待機後に `seedPatientE2E.mjs` を api コンテナ内で実行）。患者2名＋病院ポータル用の施設・職員・運営アカウントを作成。投入内容は `docs/howto.md` §2.1 |
 | `make install-templates` | `.github/template/` を `.github/PULL_REQUEST_TEMPLATE.md`・`.github/ISSUE_TEMPLATE/` へコピー |
 
 ## 3. `make up` がやること（順序）
@@ -85,7 +86,8 @@ docker compose を直接使って止める場合: `docker compose stop api`（�
 5. `docker compose up -d --build <検出したサービス>`
 6. `docker compose watch` をバックグラウンド起動（PID: `.local/run/watch.pid`）
 7. `apps/patient` があれば `flutter run -d web-server` をバックグラウンド起動（PID: `.local/run/patient.pid`）
-8. URL一覧を表示
+8. `make up SEED=1` の場合のみ `make seed` を実行（合成テストデータを投入。通常の `make up` では投入しない）
+9. URL一覧を表示
 
 冪等なので、実装追加後・設定変更後は `make up` を再実行すれば差分が適用される。
 

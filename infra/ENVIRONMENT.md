@@ -24,6 +24,7 @@ Next.js `NEXT_PUBLIC_*`）の対応を定める正本。
 | `API_DOCS_ENABLED` | `false` | API env | 本番は非公開 |
 | `API_CORS_ORIGINS` | `https://hospital.moshimoshimonshin.com` | API env | 許可 origin を厳密指定 |
 | `NEXT_PUBLIC_API_BASE_URL` | `https://api.moshimoshimonshin.com/v1` | hospital ビルド | ブラウザから見える URL |
+| `API_BASE_URL_SERVER` | -（本番は不要） | hospital コンテナ env | Compose 内 Route Handler から API へ到達する内部 URL（ローカルは `http://api:8080/v1`、未設定時は `NEXT_PUBLIC_API_BASE_URL` を使用） |
 | `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | `project-7efcc4c4-...` | hospital ビルド | |
 | `NEXT_PUBLIC_USE_FIREBASE_EMULATOR` | `false` | hospital ビルド | 本番は false |
 | `TZ` | `Asia/Tokyo` | API env | |
@@ -59,14 +60,17 @@ Next.js `NEXT_PUBLIC_*`）の対応を定める正本。
 
 ローカル（`.env.example`）:
 ```
---dart-define=API_BASE_URL=http://localhost:8080/v1 --dart-define=USE_FIREBASE_EMULATOR=true --dart-define=FIREBASE_PROJECT_ID=demo-mmr-dev
+--dart-define=API_BASE_URL=http://localhost:8080 --dart-define=USE_FIREBASE_EMULATOR=true --dart-define=FIREBASE_PROJECT_ID=demo-mmr-dev
 ```
 本番（CD `deploy-hosting` の `flutter build web` に渡す）:
 ```
---dart-define=API_BASE_URL=https://api.moshimoshimonshin.com/v1 \
+--dart-define=API_BASE_URL=https://api.moshimoshimonshin.com \
 --dart-define=USE_FIREBASE_EMULATOR=false \
 --dart-define=FIREBASE_PROJECT_ID=project-7efcc4c4-...
 ```
+
+> `API_BASE_URL` はパスを含まない origin を指定する（アプリ側が `/v1` を付与する。
+> `/v1` 付きはクライアント側の origin 検証で起動時に拒否される）。
 
 ### 病院 Next.js（`NEXT_PUBLIC_*`）
 

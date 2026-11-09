@@ -12,11 +12,16 @@ class PatientIntakeScreen extends StatefulWidget {
     required this.signIn,
     required this.signOut,
     required this.sessionChanges,
+    this.startAuthenticated = false,
   });
   final PatientIntakeApi api;
   final Future<void> Function(String email, String password) signIn;
   final Future<void> Function() signOut;
   final Stream<void> sessionChanges;
+
+  /// 上位フローが既に認証を確立している場合 true。ログイン UI を出さず
+  /// 初期化時に利用可否の確認（/me ゲート）だけを行う。
+  final bool startAuthenticated;
 
   @override
   State<PatientIntakeScreen> createState() => _PatientIntakeScreenState();
@@ -62,6 +67,9 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.startAuthenticated) {
+      _resume();
+    }
     _subscription = widget.sessionChanges.listen((_) {
       if (!mounted) return;
       setState(() {
@@ -84,6 +92,34 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
     _password.dispose();
     _symptoms.dispose();
     super.dispose();
+  }
+
+  /// 認証済みセッションの利用可否確認。上位フローからの直接起動で使う。
+  Future<void> _resume() async {
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    final generation = _generation;
+    try {
+      await widget.api.requireReady();
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _ready = true;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _message = '利用状態を確認できません。同意・プロフィール登録の完了をご確認ください。';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
   }
 
   Future<void> _login() async {
@@ -196,7 +232,15 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
               children: [
                 const Text('症状を入力し、問診の下書きに保存します。診断・治療・予約は行いません。'),
                 const SizedBox(height: 24),
-                if (!_ready) ...[
+                if (!_ready && widget.startAuthenticated) ...[
+                  // 上位フローが認証済みのためログインフォームは出さない。
+                  const Text('利用状態を確認しています。'),
+                  if (!_busy && _message != null)
+                    TextButton(
+                      onPressed: _resume,
+                      child: const Text('確認をやり直す'),
+                    ),
+                ] else if (!_ready) ...[
                   const Text('登録・メール認証・同意・プロフィール登録を完了したアカウントでログインしてください。'),
                   TextField(
                     controller: _email,

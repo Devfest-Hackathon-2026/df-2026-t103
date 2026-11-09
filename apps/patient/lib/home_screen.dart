@@ -5,10 +5,13 @@ import 'package:flutter/material.dart';
 /// [onStartQuestionnaire] を明示的に指定した場合のみ「問診を始める」を操作可能にする。
 /// 未指定時は従来どおり全導線が未接続のプレビュー表示のままで、他の導線は指定しても未接続。
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key, this.onStartQuestionnaire});
+  const HomeScreen({super.key, this.onStartQuestionnaire, this.onSignOut});
 
   /// 「問診を始める」が押されたときに呼ばれる。未指定なら問診開始導線は無効のまま。
   final VoidCallback? onStartQuestionnaire;
+
+  /// 「ログアウト」が押されたときに呼ばれる。未指定なら導線は出さない。
+  final VoidCallback? onSignOut;
 
   @override
   Widget build(BuildContext context) {
@@ -26,7 +29,12 @@ class HomeScreen extends StatelessWidget {
                 children: [
                   Text('もしもし問診', style: theme.textTheme.headlineMedium),
                   const SizedBox(height: 16),
-                  Text('ホーム（プレビュー）', style: theme.textTheme.titleLarge),
+                  Text(
+                    // 実フローから接続されるときのみ「ホーム」表記にする
+                    // （onStartQuestionnaire だけ渡す架空デモがあるため onSignOut で判定）。
+                    onSignOut != null ? 'ホーム' : 'ホーム（プレビュー）',
+                    style: theme.textTheme.titleLarge,
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     startEnabled
@@ -58,6 +66,12 @@ class HomeScreen extends StatelessWidget {
                     icon: Icons.account_circle_outlined,
                     label: 'アカウント',
                   ),
+                  if (onSignOut != null)
+                    _HomeAction(
+                      icon: Icons.logout,
+                      label: 'ログアウト',
+                      onPressed: onSignOut,
+                    ),
                 ],
               ),
             ),

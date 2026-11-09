@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:patient/main.dart';
+import 'package:patient/welcome_screen.dart';
 
 void main() {
   testWidgets('サービスの説明と利用開始できない理由を表示する', (tester) async {

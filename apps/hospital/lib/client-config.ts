@@ -39,3 +39,37 @@ export function clientConfig() {
     authEmulatorUrl: process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL,
   });
 }
+
+/**
+ * Route Handler / Middleware などサーバ側から API を呼ぶときの baseUrl。
+ *
+ * NEXT_PUBLIC_API_BASE_URL はブラウザ到達側の URL。Compose の hospital
+ * コンテナ内では localhost がコンテナ自身を指し api サービスへ届かないため、
+ * サーバ側到達用に API_BASE_URL_SERVER（例 http://api:8080/v1）を明示する。
+ * 未設定時はブラウザ用の値を使う（ホスト直起動の dev では同一で問題ない）。
+ * emulator 時は localhost/127.0.0.1 に加えて Compose サービス名 api のみ許可し、
+ * 実環境では HTTPS を要求する fail-closed 方針は変更しない。
+ */
+export function apiBaseUrlForServer(): string {
+  const config = clientConfig();
+  const override = process.env.API_BASE_URL_SERVER;
+  if (!override) return config.apiBaseUrl;
+  const url = new URL(override);
+  if (
+    url.username || url.password || url.search || url.hash ||
+    url.pathname.replace(/\/$/, "") !== "/v1"
+  ) {
+    throw new Error("APIの接続先は/v1までのURLで指定してください。");
+  }
+  if (config.emulator) {
+    if (
+      url.protocol !== "http:" ||
+      !["localhost", "127.0.0.1", "api"].includes(url.hostname)
+    ) {
+      throw new Error("ローカルEmulatorの接続設定が不正です。");
+    }
+  } else if (url.protocol !== "https:") {
+    throw new Error("実環境のFirebase・App Check・HTTPS APIの設定が必要です。");
+  }
+  return override.replace(/\/$/, "");
+}

@@ -111,14 +111,26 @@ class PatientIntakeApi {
     }
   }
 
+  /// GET /v1/me のデコード済み本文。UID 検証は呼び出し側（スナップショット変換時）。
+  Future<Object?> meJson() async {
+    final owner = await identity();
+    _check(owner);
+    return _meJson(owner);
+  }
+
+  Future<Map<String, dynamic>> _meJson(IntakeIdentity owner) async {
+    final decoded = await _request(owner, 'GET', '/me');
+    _check(owner);
+    return decoded;
+  }
+
   Future<IntakeIdentity> requireReady() async {
     final owner = await identity();
     _check(owner);
     final me = patientAccessSnapshotFromMe(
-      await _request(owner, 'GET', '/me'),
+      await _meJson(owner),
       authenticatedUid: owner.uid,
     );
-    _check(owner);
     if (!canAccessPatientScreen(
       screenId: 'P-010',
       auth: PatientAuthState.authenticated,
@@ -127,6 +139,34 @@ class PatientIntakeApi {
       throw const IntakeApiException('ONBOARDING_REQUIRED');
     }
     return owner;
+  }
+
+  /// POST /v1/onboarding/consents（同意記録。Idempotency-Key 必須）。
+  /// [consents] は consentType -> {accepted, documentVersion}。
+  Future<void> recordOnboardingConsents({
+    required Map<String, Map<String, Object>> consents,
+    required String idempotencyKey,
+  }) async {
+    if (consents.isEmpty) throw const IntakeApiException('INVALID_INPUT');
+    final owner = await identity();
+    _check(owner);
+    await _request(
+      owner,
+      'POST',
+      '/onboarding/consents',
+      body: {'consents': consents, 'locale': 'ja-JP'},
+      key: idempotencyKey,
+    );
+    _check(owner);
+  }
+
+  /// PATCH /v1/me/profile（プロフィール更新。現行同意必須）。
+  Future<void> patchProfile(Map<String, Object> patch) async {
+    if (patch.isEmpty) throw const IntakeApiException('INVALID_INPUT');
+    final owner = await identity();
+    _check(owner);
+    await _request(owner, 'PATCH', '/me/profile', body: patch);
+    _check(owner);
   }
 
   /// Saves initial symptoms, then reads the actual saved record. This does not

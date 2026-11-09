@@ -153,11 +153,14 @@ void main() {
       Future<Map<String, dynamic>> intakeState() async {
         final id = transport.intakeId;
         expect(id, isNotNull);
-        final response = await transport.get(
-          Uri.parse('http://127.0.0.1:8080/v1/intakes/$id'),
-          headers: {'Authorization': 'Bearer $patientToken'},
+        final response = await tester.runAsync(
+          () => transport.get(
+            Uri.parse('http://127.0.0.1:8080/v1/intakes/$id'),
+            headers: {'Authorization': 'Bearer $patientToken'},
+          ),
         );
-        expect(response.statusCode, 200);
+        expect(response, isNotNull);
+        expect(response!.statusCode, 200);
         return jsonDecode(response.body) as Map<String, dynamic>;
       }
 

@@ -78,11 +78,6 @@ spec:
                 secretKeyRef:
                   name: INTERNAL_JOB_TOKEN
                   key: latest
-            - name: VERTEX_AI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: VERTEX_AI_API_KEY
-                  key: latest
   traffic:
     - percent: 100
       latestRevision: true

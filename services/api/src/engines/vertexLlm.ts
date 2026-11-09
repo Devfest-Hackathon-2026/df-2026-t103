@@ -1,3 +1,4 @@
+import { GoogleAuth } from "google-auth-library";
 import type {
   LlmAdapter,
   QuestionGenInput,
@@ -10,11 +11,21 @@ import {
 import { ApiError, ErrorCodes } from "../lib/errors.js";
 
 export interface VertexLlmConfig {
-  apiKey: string;
   model: string;
   location: string;
   projectId: string;
   timeoutMs: number;
+}
+
+/** Preserve only the HTTP status for internal diagnostics, never the response or URL. */
+class VertexHttpError extends ApiError {
+  constructor(readonly upstreamStatus: number) {
+    super(
+      502,
+      ErrorCodes.UPSTREAM_UNAVAILABLE,
+      "質問生成サービスがエラーを返しました。",
+    );
+  }
 }
 
 const SAFETY_INSTRUCTION = [
@@ -54,20 +65,31 @@ interface GenerateContentResponse {
 /**
  * Vertex AI (Gemini generateContent) アダプタ。
  * - responseSchema による構造化出力 + クライアント側の zod 再検証
- * - APIキーは Secret Manager → env 注入を想定（ログ・本文へ複製しない）
+ * - Cloud Run実行SAのADCから短命OAuthトークンを取得（ログ・本文へ複製しない）
  * - タイムアウト・HTTP/解析失敗は ApiError として投げ、呼出側が fallback する
  */
 export class VertexAiLlmAdapter implements LlmAdapter {
   readonly name = "vertex";
 
-  constructor(private readonly cfg: VertexLlmConfig) {}
+  private readonly accessToken: () => Promise<string | null>;
+
+  constructor(
+    private readonly cfg: VertexLlmConfig,
+    accessToken?: () => Promise<string | null>,
+  ) {
+    const auth = new GoogleAuth({
+      projectId: cfg.projectId,
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+    });
+    this.accessToken = accessToken ?? (async () => (await auth.getAccessToken()) ?? null);
+  }
 
   private get endpoint(): string {
-    const { location, projectId, model, apiKey } = this.cfg;
+    const { location, projectId, model } = this.cfg;
     return (
       `https://${location}-aiplatform.googleapis.com/v1/projects/` +
       `${projectId}/locations/${location}/publishers/google/models/` +
-      `${model}:generateContent?key=${encodeURIComponent(apiKey)}`
+      `${model}:generateContent`
     );
   }
 
@@ -84,28 +106,30 @@ export class VertexAiLlmAdapter implements LlmAdapter {
       },
     };
     let res: Response;
+    const signal = AbortSignal.timeout(this.cfg.timeoutMs);
     try {
+      // Token acquisition shares the request deadline; ADC errors may contain
+      // credentials or URLs and must never become a logged error cause.
+      const token = await withDeadline(this.accessToken(), signal);
+      if (!token) throw new Error("ADC returned no access token");
+      signal.throwIfAborted();
       res = await fetch(this.endpoint, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.cfg.timeoutMs),
+        signal,
       });
     } catch {
       throw new ApiError(
         502,
         ErrorCodes.UPSTREAM_UNAVAILABLE,
         "質問生成サービスに接続できません。",
-        // fetch の例外は URL（query の API key）や request context を含み得る。
+        // ADC/fetch の例外はトークン、URL、request context を含み得る。
         // 呼出側は ApiError 自体をログするため、cause はログへ流さない。
       );
     }
     if (!res.ok) {
-      throw new ApiError(
-        502,
-        ErrorCodes.UPSTREAM_UNAVAILABLE,
-        "質問生成サービスがエラーを返しました。",
-      );
+      throw new VertexHttpError(res.status);
     }
     const json = (await res.json()) as GenerateContentResponse;
     const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -139,5 +163,20 @@ export class VertexAiLlmAdapter implements LlmAdapter {
       questions: out.data.questions,
       modelVersion: `${this.cfg.model}/${this.cfg.location}`,
     };
+  }
+}
+
+/** Bound ADC lookup too, without retaining a timer after successful lookup. */
+async function withDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let abort: () => void = () => {};
+  const deadline = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    signal.removeEventListener("abort", abort);
   }
 }

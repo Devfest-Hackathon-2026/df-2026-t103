@@ -14,12 +14,11 @@
 | `SERVER_HMAC_SECRET` | 冪等キー・監査ハッシュ用の HMAC | **自動生成**（`openssl rand`） | `change-me-local-dev` |
 | `INTERNAL_JOB_TOKEN` | `/v1/internal/jobs/*` 呼出しトークン | **自動生成** | `dev-internal-job-token` |
 | `GOOGLE_PLACES_API_KEY` | 施設検索（Places API） | owner が実値を用意 | 空（未設定ならモック） |
-| `VERTEX_AI_API_KEY` | LLM（問診 AI） | owner が実値を用意 | 空（未設定なら固定質問 fallback） |
 
-> **命名ドリフトの注意**: `.secret.example` は `GEMINI_API_KEY` / `LLM_MODEL_ID` を挙げるが、
-> 実コード（`services/api/src/config.ts`）が読むのは `VERTEX_AI_API_KEY` / `VERTEX_AI_MODEL`。
-> 本番は**コードが読むキー名（`VERTEX_AI_API_KEY`）**で作成する。`.secret.example` の
-> キー名は別途そろえることを推奨（本 PR では変更しない）。
+Vertex AIはSecret/APIキーを使用しない。API実行SAのADCから短命OAuthトークンを取得する。
+必要権限は指定projectの`roles/aiplatform.user`で、Terraformの`api_vertex`が管理する。
+旧`VERTEX_AI_API_KEY`の箱は既存資源を削除しないため残すが、API/worker envと
+Accessorは除去する。既存versionの削除・無効化は別途利用先を確認して行う。
 
 ## 作成・バージョニング・IAM
 
@@ -32,7 +31,7 @@
 
 ```sh
 PROJECT_ID=project-7efcc4c4-6c86-490c-ba5 \
-GOOGLE_PLACES_API_KEY=... VERTEX_AI_API_KEY=... \
+GOOGLE_PLACES_API_KEY=... \
   ./infra/secret-manager/setup-secrets.sh
 # SERVER_HMAC_SECRET / INTERNAL_JOB_TOKEN は未指定なら自動生成される
 ```

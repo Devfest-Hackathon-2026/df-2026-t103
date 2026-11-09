@@ -405,6 +405,21 @@ void main() {
     expect(find.text('合成の質問q2'), findsNothing);
     expect(find.text('合成の質問q3'), findsOneWidget);
     expect(find.byKey(const ValueKey('保存済み回答の補足')), findsNothing);
+
+    // Simulate the API ending the replacement branch and verify the patient
+    // can answer the re-asked question and return to a fresh review summary.
+    backend.reviewAfterAnswer = false;
+    backend.finishAfterNextQuestion = true;
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+    expect(find.text('問診の内容を確認しました'), findsOneWidget);
+    expect(backend.statusOverride, 'review');
+    expect(
+      backend.answers.singleWhere(
+        (answer) => answer['questionId'] == 'q1',
+      )['freeText'],
+      '新しい補足',
+    );
   });
 
   testWidgets('free-text edit preserves every saved selected code', (

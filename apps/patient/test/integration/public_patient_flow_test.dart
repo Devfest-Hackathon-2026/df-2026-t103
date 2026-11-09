@@ -197,6 +197,24 @@ void main() {
           .whereType<Map<String, dynamic>>()
           .singleWhere((answer) => answer['freeText'] == answerFreeText);
       final answerId = savedAnswer['answerId'] as String;
+      final editedQuestion = savedQuestions
+          .whereType<Map<String, dynamic>>()
+          .singleWhere((question) => question['questionId'] == answerId);
+      final editedStepIndex = editedQuestion['stepIndex'] as int;
+      final downstreamQuestions = savedQuestions
+          .whereType<Map<String, dynamic>>()
+          .where(
+            (question) =>
+                (question['stepIndex'] as int) > editedStepIndex &&
+                (question['status'] == 'active' ||
+                    question['status'] == 'answered'),
+          )
+          .toList();
+      expect(
+        downstreamQuestions,
+        isNotEmpty,
+        reason: 'The free-text answer should exercise an early-question edit.',
+      );
       final selectedCodes = List<String>.from(
         savedAnswer['selectedCodes'] as List,
       );
@@ -219,23 +237,16 @@ void main() {
       await tap('編集内容を保存');
       final afterEdit = await getIntake();
       expect(afterEdit['revision'], previousRevision + 1);
-      expect(afterEdit['status'], 'review');
-      expect(afterEdit['questionCount'], questionCount);
+      expect(afterEdit['status'], 'questioning');
       final editedQuestions = afterEdit['questions'] as List;
-      expect(editedQuestions, hasLength(savedQuestions.length));
-      for (final question in savedQuestions.whereType<Map<String, dynamic>>()) {
-        final editedQuestion = editedQuestions
-            .whereType<Map<String, dynamic>>()
-            .singleWhere(
-              (item) => item['questionId'] == question['questionId'],
-            );
-        expect(
-          editedQuestion['questionRevision'],
-          question['questionRevision'],
-        );
-      }
+      final retainedQuestion = editedQuestions
+          .whereType<Map<String, dynamic>>()
+          .singleWhere((question) => question['questionId'] == answerId);
+      expect(
+        retainedQuestion['questionRevision'],
+        editedQuestion['questionRevision'],
+      );
       final editedAnswers = afterEdit['answers'] as List;
-      expect(editedAnswers, hasLength(savedAnswers.length));
       final updatedAnswer = editedAnswers
           .whereType<Map<String, dynamic>>()
           .singleWhere((answer) => answer['answerId'] == answerId);
@@ -246,6 +257,60 @@ void main() {
         updatedAnswer['questionRevision'],
         savedAnswer['questionRevision'],
       );
+      for (final question in downstreamQuestions) {
+        final invalidatedQuestion = editedQuestions
+            .whereType<Map<String, dynamic>>()
+            .singleWhere(
+              (item) => item['questionId'] == question['questionId'],
+            );
+        expect(
+          invalidatedQuestion['questionRevision'],
+          question['questionRevision'],
+        );
+        expect(invalidatedQuestion['status'], 'invalidated');
+        expect(
+          editedAnswers.whereType<Map<String, dynamic>>().any(
+            (answer) => answer['answerId'] == question['questionId'],
+          ),
+          isFalse,
+          reason: 'Invalidated branch answers must not remain in the intake.',
+        );
+      }
+      // Editing an early answer invalidates the old downstream branch. Follow
+      // the real patient UI/API path through replacement questions and back to
+      // review rather than assuming PATCH leaves the intake in review.
+      var returnedToReview = false;
+      for (var step = 0; step < 20; step++) {
+        if (find.text('問診の内容を確認しました').evaluate().isNotEmpty) {
+          returnedToReview = true;
+          break;
+        }
+        await waitFor(
+          find.byWidgetPredicate(
+            (w) => w is Text && (w.data == 'わからない' || w.data == '問診の内容を確認しました'),
+          ),
+        );
+        if (find.text('問診の内容を確認しました').evaluate().isNotEmpty) {
+          returnedToReview = true;
+          break;
+        }
+        await tap('わからない');
+      }
+      expect(returnedToReview, isTrue);
+      final restoredReview = await getIntake();
+      expect(restoredReview['status'], 'review');
+      expect(
+        restoredReview['revision'],
+        greaterThan(afterEdit['revision'] as int),
+      );
+      final restoredAnswer = (restoredReview['answers'] as List)
+          .whereType<Map<String, dynamic>>()
+          .singleWhere((answer) => answer['answerId'] == answerId);
+      expect(
+        restoredAnswer['questionRevision'],
+        savedAnswer['questionRevision'],
+      );
+      expect(restoredAnswer['freeText'], editedFreeText);
       await waitFor(find.text('問診の内容を確認しました'));
       await tap('この内容で問診票を確定');
       await waitFor(find.text('合成データ受入施設'));

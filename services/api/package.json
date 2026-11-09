@@ -13,7 +13,7 @@
     "start": "node dist/index.js",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/createSyntheticDemoAccounts.test.mjs scripts/enableSyntheticStaff.test.mjs",
     "test:emulator": "vitest run --config vitest.emulator.config.ts",
     "test:emulator:compose": "FIRESTORE_EMULATOR_HOST=localhost:8081 FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 vitest run --config vitest.emulator.config.ts"
   },

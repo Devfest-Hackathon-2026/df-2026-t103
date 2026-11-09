@@ -41,6 +41,19 @@ Analyticsの自動script loaderを抑止します。CSPを緩めません。
 公式参照: [iOS収集停止と優先順位](https://firebase.google.com/docs/analytics/ios/configure-data-collection)、
 [自動画面計測](https://firebase.google.com/docs/analytics/screenviews)。
 
+## FCMの送信直前検査
+
+[通知カタログ](../../services/api/src/domain/notifications.ts) を業務処理と
+[Admin SDKアダプタ](../../services/api/src/push.ts) で共有します。タイトル/本文だけでなく、
+`data.type` と文言の対応、dataキーが `type`/`refId` に限定されることも検査します。
+`refId` を指定する場合は空でない文字列が必要です。拒否したメッセージはSDKへ渡さず、
+固定の失敗分類を返します。アダプタは許可したキーだけで送信メッセージを再構築します。
+
+[アダプタ試験](../../services/api/test/push.test.ts) はSDK送信引数のシリアライズ結果と、
+余分な症状・UID・token等のdataがSDKへ到達しないことを確認します。実FCM送信・端末受信の
+証明ではありません。`refId` は既存仕様の不透明docIDを維持し、呼出元が生成済みIDを渡す
+責任は残ります。文字列がPHIでないことをこの検査だけで証明したとは扱いません。
+
 ## Sentry導入の評価結果
 
 現段階ではSentryを追加せず、NFR-11のCrashlytics/GA4について収集境界と検証を先に整える案です。

@@ -6,66 +6,19 @@ import {
   listActivePushDevices,
 } from "../repos/pushDevices.js";
 
-/**
- * 通知文言のカタログ（FR-O01/O05, 02 §10, ADR-011/0015）。
- * タイトル・本文はここに登録した一般文言のみ使用し、
- * 症状・病名・薬剤名・個人情報・ユーザー入力を一切含めない。
- * 文言を追加する場合は非PHIの一般表現のみとし、レビューで確認する。
- */
-export const NOTIFICATION_TEMPLATES = {
-  /** OCRの読み取りが完了し抽出候補の確認が可能になった通知。 */
-  OCR_EXTRACTION_READY: {
-    title: "お知らせ",
-    body: "画像の読み取りが完了しました。",
-  },
-  /** 問診票の確定が完了した通知。 */
-  QUESTIONNAIRE_READY: {
-    title: "お知らせ",
-    body: "問診票が作成されました。",
-  },
-} as const;
+import {
+  assertCatalogPayload,
+  buildNotificationPayload,
+  type NotificationTemplate,
+} from "../domain/notifications.js";
 
-export type NotificationTemplate = keyof typeof NOTIFICATION_TEMPLATES;
-
-export interface NotificationPayload {
-  title: string;
-  body: string;
-  data: Record<string, string>;
-}
-
-/**
- * テンプレートから通知ペイロードを構築する。
- * data は画面遷移用の非PHIキー（type=テンプレート名、refId=不透明ドキュメントID）
- * のみ。呼び出し元が自由文を注入する経路を持たない。
- */
-export function buildNotificationPayload(
-  template: NotificationTemplate,
-  refId?: string,
-): NotificationPayload {
-  const t = NOTIFICATION_TEMPLATES[template];
-  return {
-    title: t.title,
-    body: t.body,
-    data: {
-      type: template,
-      ...(refId !== undefined ? { refId } : {}),
-    },
-  };
-}
-
-/**
- * 送信直前の防御的検査: タイトル/本文がカタログ登録値のいずれかと
- * 完全一致することを確認する。テンプレート改竄・呼び出し側の誤用で
- * カタログ外文字列が混入した場合に送信を止める（PHI非含有の最終防衛線）。
- */
-export function assertCatalogPayload(payload: NotificationPayload): void {
-  const allowed = Object.values(NOTIFICATION_TEMPLATES).some(
-    (t) => t.title === payload.title && t.body === payload.body,
-  );
-  if (!allowed) {
-    throw new Error("notification payload is not in the approved catalog");
-  }
-}
+export {
+  assertCatalogPayload,
+  buildNotificationPayload,
+  NOTIFICATION_TEMPLATES,
+  type NotificationPayload,
+  type NotificationTemplate,
+} from "../domain/notifications.js";
 
 /**
  * 患者の有効デバイスへ通知を送る（ベストエフォート）。

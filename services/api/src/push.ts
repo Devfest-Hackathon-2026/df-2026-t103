@@ -1,3 +1,4 @@
+import { assertCatalogPayload } from "./domain/notifications.js";
 import type { Messaging } from "firebase-admin/messaging";
 import type {
   PushFailureCode,
@@ -48,10 +49,16 @@ export class AdminPushGateway implements PushGateway {
     data?: Record<string, string>;
   }): Promise<PushSendResult> {
     try {
+      // Protect future direct callers as well as notifyPatient.
+      const data = params.data ?? {};
+      assertCatalogPayload({ title: params.title, body: params.body, data });
       const messageId = await this.messaging.send({
         token: params.token,
         notification: { title: params.title, body: params.body },
-        ...(params.data ? { data: params.data } : {}),
+        data: {
+          type: data.type!,
+          ...(Object.hasOwn(data, "refId") ? { refId: data.refId! } : {}),
+        },
       });
       return { ok: true, messageId };
     } catch (err) {

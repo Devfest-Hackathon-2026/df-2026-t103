@@ -76,9 +76,9 @@ describe("buildNotificationPayload", () => {
 
 describe("assertCatalogPayload（PHI混入の最終防衛線）", () => {
   it("カタログ文言は受理する", () => {
-    for (const t of Object.values(NOTIFICATION_TEMPLATES)) {
+    for (const template of ["OCR_EXTRACTION_READY", "QUESTIONNAIRE_READY"] as const) {
       expect(() =>
-        assertCatalogPayload({ title: t.title, body: t.body, data: {} }),
+        assertCatalogPayload(buildNotificationPayload(template)),
       ).not.toThrow();
     }
   });

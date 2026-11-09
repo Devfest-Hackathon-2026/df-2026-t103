@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerEmail } from "../../src/services/registration.js";
 import { ApiError } from "../../src/lib/errors.js";
 import { DEV_LEGAL_DOCUMENTS } from "../../src/domain/legalDocuments.js";
@@ -17,6 +17,50 @@ const validBody = {
 };
 
 describe("registerEmail", () => {
+  it("失敗ログは固定stageと安全分類だけを記録し例外内容を漏らさない", async () => {
+    const deps = makeTestDeps();
+    await seedLegalDocuments(deps);
+    const logError = vi.spyOn(deps.logger, "error").mockImplementation(() => {});
+    const sensitiveMessage = "email password token body uid arbitrary-stack";
+    const failure = Object.assign(new Error(sensitiveMessage), {
+      code: "attacker-controlled-sensitive-code",
+    });
+    deps.fakeAuthAdmin.createUser = async () => {
+      throw failure;
+    };
+
+    await expect(
+      registerEmail(deps, {
+        body: validBody,
+        idempotencyKey: "diagnostic-key",
+        requestId: "safe-request-id",
+      }),
+    ).rejects.toMatchObject({ statusCode: 503 });
+
+    expect(logError).toHaveBeenCalledOnce();
+    const logged = JSON.stringify(logError.mock.calls[0]);
+    expect(logged).toContain("safe-request-id");
+    expect(logged).toContain("auth_create");
+    expect(logged).toContain("unknown");
+    expect(logged).not.toContain(sensitiveMessage);
+    expect(logged).not.toContain("attacker-controlled-sensitive-code");
+    expect(logged).not.toContain(validBody.email);
+    expect(logged).not.toContain(validBody.password);
+
+    const operation = (await deps.db.collection("registrationOperations").get()).docs[0]!.data();
+    expect(operation.lastErrorClass).toBe("unknown");
+    expect(logged).not.toContain(operation.uid);
+    const audit = (await deps.db.collection("auditEvents").get()).docs
+      .map((doc) => JSON.stringify(doc.data())).join("\n");
+    expect(audit).toContain('"stage":"auth_create"');
+    expect(audit).toContain('"errorClass":"unknown"');
+    expect(audit).not.toContain(sensitiveMessage);
+    expect(audit).not.toContain("attacker-controlled-sensitive-code");
+    expect(audit).not.toContain(validBody.email);
+    expect(audit).not.toContain(validBody.password);
+    expect(audit).not.toContain(operation.uid);
+  });
+
   it("登録成功: account+consents+台帳が作成され Auth が有効化される", async () => {
     const deps = makeTestDeps();
     await seedLegalDocuments(deps);

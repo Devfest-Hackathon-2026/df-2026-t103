@@ -52,11 +52,52 @@ const ONBOARDING_STATES = new Set([
   "completed",
 ]);
 
-function errorClass(err: unknown): string {
-  if (err && typeof err === "object" && "code" in err) {
-    return String((err as { code: unknown }).code);
+type RegistrationFailureStage =
+  | "legal_document_load"
+  | "auth_create"
+  | "operation_checkpoint"
+  | "account_consent_commit"
+  | "auth_enable";
+
+type RegistrationErrorClass =
+  | "auth_conflict"
+  | "auth_unavailable"
+  | "firestore_unavailable"
+  | "upstream_unavailable"
+  | "unknown";
+
+function errorClass(err: unknown): RegistrationErrorClass {
+  const code =
+    err && typeof err === "object" && "code" in err
+      ? (err as { code: unknown }).code
+      : undefined;
+  if (code === "auth/email-already-exists" || code === "auth/uid-already-exists") {
+    return "auth_conflict";
+  }
+  if (code === "auth/internal-error" || code === "auth/network-request-failed") {
+    return "auth_unavailable";
+  }
+  if (code === "firestore/unavailable" || code === "unavailable") {
+    return "firestore_unavailable";
+  }
+  if (code === ErrorCodes.UPSTREAM_UNAVAILABLE) {
+    return "upstream_unavailable";
   }
   return "unknown";
+}
+
+function logRegistrationFailure(
+  deps: Deps,
+  params: { requestId: string },
+  stage: RegistrationFailureStage,
+  err: unknown,
+): RegistrationErrorClass {
+  const classification = errorClass(err);
+  deps.logger.error(
+    { requestId: params.requestId, stage, errorClass: classification },
+    "registration flow failed",
+  );
+  return classification;
 }
 
 function isAuthError(err: unknown, code: string): boolean {
@@ -165,6 +206,7 @@ async function verifyEnabledOperation(
   operation: RegistrationOperationDoc,
   operationHash: string,
   reqHash: string,
+  requestId: string,
 ): Promise<"verified" | "missing" | "mismatch" | "invalid_state"> {
   try {
     return await deps.db.runTransaction(async (tx) => {
@@ -190,6 +232,7 @@ async function verifyEnabledOperation(
         : "invalid_state";
     });
   } catch (cause) {
+    logRegistrationFailure(deps, { requestId }, "operation_checkpoint", cause);
     throw new ApiError(
       503,
       ErrorCodes.UPSTREAM_UNAVAILABLE,
@@ -260,6 +303,7 @@ async function assertEnabledOperation(
     operation,
     operationHash,
     reqHash,
+    requestId,
   );
   if (verification === "verified") return;
 
@@ -343,6 +387,7 @@ export async function registerEmail(
   try {
     legalDocs = await getLegalDocuments(deps.db);
   } catch (err) {
+    logRegistrationFailure(deps, params, "legal_document_load", err);
     throw new ApiError(
       503,
       ErrorCodes.UPSTREAM_UNAVAILABLE,
@@ -374,9 +419,11 @@ export async function registerEmail(
     );
   }
 
+  let failureStage: RegistrationFailureStage = "auth_create";
   try {
     // ---- Admin SDK createUser（disabled=true） ----
     if (operation.status === "reserved" || operation.status === "failed") {
+      failureStage = "auth_create";
       try {
         await deps.authAdmin.createUser({
           uid: operation.uid,
@@ -400,6 +447,7 @@ export async function registerEmail(
         // uid-already-exists: 前回試行で作成済み（UIDはサーバ生成の乱数）。続行する。
       }
       operation = { ...operation, status: "auth_created" };
+      failureStage = "operation_checkpoint";
       await saveOperation(deps, operation, { status: "auth_created" });
     }
 
@@ -410,6 +458,7 @@ export async function registerEmail(
     // tx内ではaccount+同意書の実在でもコミット済みかを判定する
     // （本 uid 由来のaccount/同意書はこの登録経路だけが作る）。
     if (operation.status === "auth_created" || operation.status === "reserved") {
+      failureStage = "account_consent_commit";
       const commitOutcome = await deps.db.runTransaction(async (tx) => {
         const opRef = registrationOperationRef(deps.db, operationHash);
         const accountRef = deps.db.doc(`accounts/${operation!.uid}`);
@@ -511,6 +560,7 @@ export async function registerEmail(
 
     // ---- Auth 有効化前のcheckpoint再確認 ----
     if (operation.status === "consents_committed") {
+      failureStage = "operation_checkpoint";
       const checkpoint = await verifyCommittedCheckpoint(
         deps,
         operation,
@@ -534,8 +584,10 @@ export async function registerEmail(
           "Auth有効化前に登録台帳とaccountの所有状態を確認できません。サポートへお問い合わせください。",
         );
       } else {
+        failureStage = "auth_enable";
         await deps.authAdmin.updateUser(operation.uid, { disabled: false });
         operation = { ...operation, status: "enabled" };
+        failureStage = "operation_checkpoint";
         const saveResult = await saveOperation(deps, operation, {
           status: "enabled",
         });
@@ -557,14 +609,21 @@ export async function registerEmail(
       }
     }
   } catch (err) {
-    if (err instanceof ApiError) throw err;
-    deps.logger.error(
-      { err, operationHash: operationHash.slice(0, 16), status: operation.status },
-      "registration flow failed",
+    if (err instanceof ApiError) {
+      if (err.statusCode === 503) {
+        logRegistrationFailure(deps, params, failureStage, err);
+      }
+      throw err;
+    }
+    const classification = logRegistrationFailure(
+      deps,
+      params,
+      failureStage,
+      err,
     );
     await saveOperation(deps, operation, {
       status: "failed",
-      lastErrorClass: errorClass(err),
+      lastErrorClass: classification,
     }).catch(() => undefined);
     await audit(deps, {
       actorType: "service",
@@ -573,7 +632,7 @@ export async function registerEmail(
       requestId: params.requestId,
       resourceType: "registrationOperation",
       resourceIdHash: operationHash,
-      details: { errorClass: errorClass(err) },
+      details: { stage: failureStage, errorClass: classification },
     });
     throw new ApiError(
       503,

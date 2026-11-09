@@ -66,6 +66,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   final _symptom = TextEditingController(),
       _facilityId = TextEditingController();
   final _answerFreeText = TextEditingController();
+  // チャットの最新の質問を画面下へスクロールするためのコントローラ。
+  final _scroll = ScrollController();
   late final StreamSubscription<void> _subscription;
   final _profileFields = <String, TextEditingController>{
     for (final key in [
@@ -195,7 +197,17 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     ]) {
       c.dispose();
     }
+    _scroll.dispose();
     super.dispose();
+  }
+
+  /// チャットの最新メッセージが見えるよう最下部へスクロールする（アニメなし）。
+  void _scrollToLatest() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      }
+    });
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -532,6 +544,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       setState(() {
         _step = 'question';
       });
+      _scrollToLatest();
     }
   }
 
@@ -1249,6 +1262,91 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       ),
     ),
   );
+
+  /// チャットの吹き出し。アシスタント（質問）は左、患者（回答）は右に寄せる。
+  /// 本文テキストは患者テーマ（20sp）を継承し、拡大・Semantics に配慮する。
+  Widget _chatBubble(
+    String text, {
+    required bool fromUser,
+    bool emphasis = false,
+    bool header = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final bubble = Container(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.all(14),
+      constraints: const BoxConstraints(maxWidth: 520),
+      decoration: BoxDecoration(
+        color: fromUser ? scheme.primaryContainer : scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        text,
+        style: emphasis ? const TextStyle(fontWeight: FontWeight.bold) : null,
+      ),
+    );
+    return Align(
+      alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: header ? Semantics(header: true, child: bubble) : bubble,
+    );
+  }
+
+  /// 保存済みの症状・回答から会話トランスクリプトを組み立てる（サーバ権威の
+  /// `_intake` 由来）。アシスタントの質問 → 患者の回答 の順で吹き出しを並べる。
+  List<Widget> _chatTranscript() {
+    final widgets = <Widget>[
+      _chatBubble('気になる症状や、医療機関に伝えたいことを教えてください。', fromUser: false),
+    ];
+    final symptom = _intake?['initialSymptomText'];
+    if (symptom is String && symptom.isNotEmpty) {
+      widgets.add(_chatBubble(symptom, fromUser: true));
+    }
+    final answers = _intake?['answers'];
+    final questions = _intake?['questions'];
+    if (answers is List && questions is List) {
+      final ordered = answers.whereType<Map<String, dynamic>>().toList()
+        ..sort(
+          (a, b) => '${a['answeredAt']}'.compareTo('${b['answeredAt']}'),
+        );
+      for (final raw in ordered) {
+        // 現在表示中の質問はライブの吹き出しで出すため、履歴からは除外する。
+        if (raw['questionId'] == _question?['questionId']) continue;
+        final match = questions.whereType<Map<String, dynamic>>().where(
+          (q) =>
+              q['questionId'] == raw['questionId'] &&
+              q['questionRevision'] == raw['questionRevision'],
+        );
+        if (match.length != 1) continue;
+        final q = match.single;
+        widgets.add(_chatBubble('${q['questionText'] ?? ''}', fromUser: false));
+        final options = q['options'];
+        final selected = raw['selectedCodes'];
+        final labels = options is List && selected is List
+            ? options
+                  .whereType<Map>()
+                  .where((o) => selected.contains(o['code']))
+                  .map((o) => '${o['label']}')
+                  .join('、')
+            : '';
+        final answerText = switch (raw['answerState']) {
+          'unknown' => 'わからない',
+          'skipped' => '答えたくない',
+          _ => labels.isEmpty ? '未回答' : labels,
+        };
+        final free = raw['freeText'];
+        widgets.add(
+          _chatBubble(
+            free is String && free.isNotEmpty
+                ? '$answerText\n$free'
+                : answerText,
+            fromUser: true,
+          ),
+        );
+      }
+    }
+    return widgets;
+  }
+
   List<Widget> _summaryWidgets() {
     final summary = _summary;
     if (summary == null) return [];
@@ -1613,19 +1711,17 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       _button(_createKey == null ? '保存して質問へ進む' : '保存状態を再確認', _saveSymptoms),
     ],
     'question' => [
-      Semantics(
-        header: true,
-        child: Text(
-          '質問 ${(_question?['stepIndex'] as int? ?? 0) + 1}',
-          style: const TextStyle(color: Colors.teal),
-        ),
-      ),
-      const SizedBox(height: 12),
-      Text(
+      // 会話トランスクリプト（これまでの症状・質問・回答）をチャット表示。
+      ..._chatTranscript(),
+      // 現在の質問をアシスタントの最新の吹き出しとして表示。
+      _chatBubble(
         '${_question?['questionText'] ?? ''}',
-        style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+        fromUser: false,
+        emphasis: true,
+        header: true,
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 8),
+      // 回答コンポーザ（選択肢・自由記述・わからない・答えたくない）。
       ...((_question?['options'] as List?) ?? []).whereType<Map>().map(
         (o) => _button(
           '${o['label']}',
@@ -1817,6 +1913,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     ),
     body: SafeArea(
       child: SingleChildScrollView(
+        controller: _scroll,
         padding: const EdgeInsets.all(24),
         child: Center(
           child: ConstrainedBox(

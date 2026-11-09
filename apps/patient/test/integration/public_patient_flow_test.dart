@@ -414,10 +414,15 @@ void main() {
           final optionText =
               tester.widget<FilledButton>(optionButton).child! as Text;
           selectedOptionLabel = optionText.data!;
-          await tap(selectedOptionLabel);
+          // チャット化で過去の回答が吹き出しとして残るため、回答コンポーザの
+          // ボタン（ツリー末尾）を明示して過去バブルとの一致曖昧さを避ける。
+          await tap(
+            selectedOptionLabel,
+            finder: find.text(selectedOptionLabel).last,
+          );
           submittedFreeText = true;
         } else {
-          await tap('わからない');
+          await tap('わからない', finder: find.text('わからない').last);
         }
       }
       expect(submittedFreeText, isTrue);
@@ -581,7 +586,9 @@ void main() {
           returnedToReview = true;
           break;
         }
-        await tap('わからない');
+        // チャット履歴に過去の「わからない」が残るため、回答コンポーザのボタン
+        // （ツリー末尾）を明示する。
+        await tap('わからない', finder: find.text('わからない').last);
       }
       expect(returnedToReview, isTrue);
       _flowMarker('requestion');

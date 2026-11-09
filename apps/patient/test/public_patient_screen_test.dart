@@ -335,6 +335,26 @@ void main() {
     },
   );
 
+  testWidgets('チャット: 症状と過去のQ&Aが会話として積み上がる', (tester) async {
+    final backend = _IntakeBackend();
+    // 実APIの intake GET は保存済み症状と既出の全質問を返す。テストでも再現する。
+    backend.intakeOverride = {'initialSymptomText': '合成症状'};
+    backend.questions.addAll([
+      {..._question('q1', 0), 'status': 'active'},
+      {..._question('q2', 1), 'status': 'active'},
+    ]);
+    await _openQuestion(tester, backend); // 症状「合成症状」保存→q1表示
+    // q1 に回答すると次の質問 q2 がライブ表示になる。
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+    expect(find.text('合成の質問q2'), findsOneWidget);
+    // 会話トランスクリプトに、入力した症状・回答済みの質問q1・その回答が残る。
+    expect(find.text('合成症状'), findsOneWidget);
+    expect(find.text('合成の質問q1'), findsOneWidget);
+    // q1 の回答「はい」の吹き出しと、q2 の選択肢ボタン「はい」で複数一致する。
+    expect(find.text('はい'), findsWidgets);
+  });
+
   testWidgets('review redisplays the saved answer and offers an edit action', (
     tester,
   ) async {

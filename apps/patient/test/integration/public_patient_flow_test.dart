@@ -230,8 +230,7 @@ void main() {
       expect(
         freeTextSections,
         hasLength(1),
-        reason:
-            'The selected answer and free text must be in one answered topic section.',
+        reason: 'The selected answer and free text must be in one answered topic section.',
       );
       final answerSection = freeTextSections.single.value as Map;
       expect(answerSection['value'], '$selectedOptionLabel　$answerFreeText');

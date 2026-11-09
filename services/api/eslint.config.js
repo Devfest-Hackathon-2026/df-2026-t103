@@ -22,7 +22,7 @@ export default tseslint.config(
     // runtime, so expose its globals to the linter.
     files: ["scripts/**/*.mjs"],
     languageOptions: {
-      globals: { process: "readonly", console: "readonly" },
+      globals: { Buffer: "readonly", process: "readonly", console: "readonly" },
     },
   },
 );

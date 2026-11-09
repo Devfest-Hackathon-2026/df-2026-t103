@@ -102,12 +102,13 @@ export class VertexAiLlmAdapter implements LlmAdapter {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(this.cfg.timeoutMs),
       });
-    } catch (err) {
+    } catch {
       throw new ApiError(
         502,
         ErrorCodes.UPSTREAM_UNAVAILABLE,
         "質問生成サービスに接続できません。",
-        { cause: err },
+        // fetch の例外は URL（query の API key）や request context を含み得る。
+        // 呼出側は ApiError 自体をログするため、cause はログへ流さない。
       );
     }
     if (!res.ok) {

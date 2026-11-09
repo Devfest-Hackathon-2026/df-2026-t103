@@ -8,7 +8,7 @@ cd "$ROOT"
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 FIREBASE_BIN="${FIREBASE_BIN:-npx --yes firebase-tools@15.35.0}"
 PROJECT_ID=demo-mmr-dev
-RUN_DIR="$(mktemp -d /tmp/opencode/public-registration-e2e.XXXXXX)"
+RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/public-registration-e2e.XXXXXX")"
 EMU_PID=""
 API_PID=""
 KEEP_RUN_DIR="${KEEP_RUN_DIR:-0}"

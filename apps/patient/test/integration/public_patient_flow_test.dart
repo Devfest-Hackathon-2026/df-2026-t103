@@ -9,6 +9,9 @@ import 'package:patient/patient_theme.dart';
 import 'package:patient/public_patient_api.dart';
 import 'package:patient/public_patient_screen.dart';
 
+// ignore: avoid_print -- consumed only by the fail-closed CI partial parser.
+void _flowMarker(String marker) => print(marker);
+
 class _LiveBinding extends AutomatedTestWidgetsFlutterBinding {
   @override
   bool get overrideHttpClient => false;
@@ -228,6 +231,7 @@ void main() {
         matching: find.text('回答を編集'),
       );
       await tester.ensureVisible(editButton);
+      _flowMarker('edit-open-start');
       await tap('回答を編集');
       await tester.pump();
       await tester.enterText(
@@ -235,6 +239,7 @@ void main() {
         editedFreeText,
       );
       await tap('編集内容を保存');
+      _flowMarker('edit-save-start');
       final afterEdit = await getIntake();
       expect(afterEdit['revision'], previousRevision + 1);
       expect(afterEdit['status'], 'questioning');
@@ -297,6 +302,7 @@ void main() {
         await tap('わからない');
       }
       expect(returnedToReview, isTrue);
+      _flowMarker('requestion');
       final restoredReview = await getIntake();
       expect(restoredReview['status'], 'review');
       expect(
@@ -311,12 +317,14 @@ void main() {
         savedAnswer['questionRevision'],
       );
       expect(restoredAnswer['freeText'], editedFreeText);
+      _flowMarker('review');
       await waitFor(find.text('問診の内容を確認しました'));
       await tap('この内容で問診票を確定');
       await waitFor(find.text('合成データ受入施設'));
       await tap('「合成データ受入施設」へ、この問診票と選択した情報を送信することに同意します');
       await tap('同意した施設へ送信');
       await waitFor(find.text('施設の受信箱へ届きました'));
+      _flowMarker('hospital');
       final staffToken = await tester.runAsync(
         () => login(
           'synthetic-public-staff@example.test',

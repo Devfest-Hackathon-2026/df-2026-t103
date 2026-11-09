@@ -114,6 +114,10 @@ class SummarizerTest(unittest.TestCase):
             {"type": "testDone", "result": "SECRET_RESULT", "skipped": False},
             {"type": "done", "success": True, "error": "SECRET_ERROR"},
             {"type": "unknown-secret-kind", "secret": "SECRET"},
+            {"type": "print", "message": "edit-open-start"},
+            {"type": "print", "message": "edit-open SECRET_NAME"},
+            {"type": "print", "message": "SECRET_NAME", "error": "SECRET_ERROR"},
+            {"type": "print", "message": {"marker": "review"}},
         ]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "machine.jsonl"
@@ -124,8 +128,10 @@ class SummarizerTest(unittest.TestCase):
         diagnostic = output.getvalue()
         self.assertIn("testStart=1", diagnostic)
         self.assertIn("success=1 failure=0 error=0 skip=1", diagnostic)
-        self.assertIn("completed=yes", diagnostic)
-        for secret in ("SECRET_NAME", "SECRET_URL", "SECRET_ERROR", "SECRET_RESULT", "unknown-secret-kind"):
+        self.assertIn("reporter_done_success_seen=unknown", diagnostic)
+        self.assertIn("edit-open-start=1", diagnostic)
+        self.assertIn("review=0", diagnostic)
+        for secret in ("SECRET_NAME", "SECRET_URL", "SECRET_ERROR", "SECRET_RESULT", "unknown-secret-kind", "edit-open SECRET_NAME"):
             self.assertNotIn(secret, diagnostic)
 
     def test_partial_diagnostic_marks_truncated_output_incomplete(self):
@@ -135,7 +141,66 @@ class SummarizerTest(unittest.TestCase):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 diagnose_partial(path)
-        self.assertIn("completed=no", output.getvalue())
+        self.assertIn("reporter_done_success_seen=unknown", output.getvalue())
+
+    def test_partial_diagnostic_requires_valid_terminal_done(self):
+        invalid_reports = (
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\nnot-json\n',
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n{"type":"unknown"}\n',
+            '{"type":"start"}\n{"type":"done","success":true}\n',
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n{"type":"done","success":true}\n',
+        )
+        for contents in invalid_reports:
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "machine.jsonl"
+                path.write_text(contents, encoding="utf-8")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    diagnose_partial(path)
+                self.assertIn("reporter_done_success_seen=unknown", output.getvalue())
+                self.assertNotIn("not-json", output.getvalue())
+
+    def test_partial_diagnostic_reports_only_observed_done_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "machine.jsonl"
+            path.write_text(
+                '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n',
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                diagnose_partial(path)
+        self.assertIn("reporter_done_success_seen=yes", output.getvalue())
+        self.assertNotIn("completed=", output.getvalue())
+        self.assertIn("testStart=0", output.getvalue())
+        self.assertIn("testDone=0", output.getvalue())
+
+    def test_partial_diagnostic_reports_no_success_done_when_absent_or_false(self):
+        for contents in (
+            '{"type":"start"}\n',
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":false}\n',
+        ):
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "machine.jsonl"
+                path.write_text(contents, encoding="utf-8")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    diagnose_partial(path)
+                self.assertIn("reporter_done_success_seen=no", output.getvalue())
+
+    def test_partial_diagnostic_marks_malformed_done_unknown_without_leaking_secret(self):
+        for contents in (
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":"SECRET"}\n',
+            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n{"type":"print","message":"SECRET_AFTER_DONE"}\n',
+        ):
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "machine.jsonl"
+                path.write_text(contents, encoding="utf-8")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    diagnose_partial(path)
+                self.assertIn("reporter_done_success_seen=unknown", output.getvalue())
+                self.assertNotIn("SECRET", output.getvalue())
 
     def test_partial_diagnostic_ignores_unhashable_event_values(self):
         events = [
@@ -149,7 +214,7 @@ class SummarizerTest(unittest.TestCase):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 diagnose_partial(path)
-        self.assertIn("diagnostic completed=no", output.getvalue())
+        self.assertIn("diagnostic reporter_done_success_seen=unknown", output.getvalue())
         self.assertNotIn("not hashable", output.getvalue())
 
     def test_diagnostic_exception_is_replaced_with_fixed_message(self):
@@ -168,7 +233,7 @@ class SummarizerTest(unittest.TestCase):
         result = subprocess.run(["bash", "-c", runner], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 37)
         self.assertEqual(result.stderr, "")
-        self.assertIn("diagnostic completed=no", result.stdout)
+        self.assertIn("diagnostic reporter_done_success_seen=no", result.stdout)
 
 
 if __name__ == "__main__":

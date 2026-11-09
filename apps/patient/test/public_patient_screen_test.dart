@@ -15,6 +15,7 @@ Map<String, dynamic> _question(String id, int index) => {
   'questionText': '合成の質問$id',
   'options': [
     {'code': 'YES', 'label': 'はい'},
+    {'code': 'NO', 'label': 'いいえ'},
   ],
 };
 
@@ -29,6 +30,18 @@ class _IntakeBackend {
   bool rejectAnswer = false;
   Map<String, dynamic>? answerResponseOverride;
   bool failNextIntakeGet = false;
+  bool finishAfterNextQuestion = false;
+  bool rejectAnswerPatch = false;
+  int? answerPatchRejectStatus;
+  bool concurrentIdenticalAnswerPatch = false;
+  bool loseAnswerPatchResponse = false;
+  String? statusOverride;
+  bool reviewAfterAnswer = false;
+  List<String>? selectedCodesAfterAnswer;
+  final questions = <Map<String, dynamic>>[];
+  final invalidatedQuestions = <String>{};
+  final answerPatches = <Map<String, dynamic>>[];
+  final requestPaths = <String>[];
   Object? intakeAnswersOverride;
   Map<String, dynamic> intakeOverride = {};
   Object sessionEpoch = Object();
@@ -38,6 +51,8 @@ class _IntakeBackend {
   Completer<void>? nextQuestionGate;
   int answerPosts = 0;
   int answerWrites = 0;
+  bool switchSessionOnPatch = false;
+  void Function()? onSessionSwitch;
   final answerKeys = <String?>[];
   final answerBodies = <Map<String, dynamic>>[];
   final idempotentAnswers = <String, Map<String, dynamic>>{};
@@ -51,6 +66,7 @@ class _IntakeBackend {
 
   http.Client client() => MockClient((request) async {
     final path = request.url.path;
+    requestPaths.add('${request.method} $path');
     if (path == '/v1/me') {
       return json({
         'accountStatus': 'active',
@@ -73,28 +89,45 @@ class _IntakeBackend {
         return json({'error': 'synthetic read failure'}, 503);
       }
       await intakeGetGate?.future;
-      final questionId = nextQuestion == 1 ? 'q1' : 'q2';
+      final questionId = 'q$nextQuestion';
       final current = _question(questionId, nextQuestion - 1)
         ..['status'] = answers.any((a) => a['questionId'] == questionId)
             ? 'answered'
             : 'active';
+      final allQuestions = questions.isEmpty ? [current] : questions;
       return json({
         'intakeId': 'intake-1',
-        'status': symptomsSaved ? 'questioning' : 'draft',
+        'status': statusOverride ?? (symptomsSaved ? 'questioning' : 'draft'),
         'revision': revision,
         'currentQuestionId': symptomsSaved ? questionId : null,
-        'questions': symptomsSaved ? [current] : <dynamic>[],
+        'questions': symptomsSaved ? allQuestions : <dynamic>[],
         'answers': intakeAnswersOverride ?? answers,
         ...intakeOverride,
       });
     }
     if (path == '/v1/intakes/intake-1/next-question') {
       await nextQuestionGate?.future;
+      if (finishAfterNextQuestion) {
+        return json({
+          'intakeId': 'intake-1',
+          'intakeRevision': revision,
+          'question': null,
+        });
+      }
+      if (invalidatedQuestions.isNotEmpty && nextQuestion < 2) {
+        nextQuestion = 2;
+      }
       nextQuestion++;
+      final generated = _question('q$nextQuestion', nextQuestion - 1)
+        ..['status'] = 'active';
+      if (invalidatedQuestions.isNotEmpty) {
+        questions.add(generated);
+        revision++;
+      }
       return json({
         'intakeId': 'intake-1',
         'intakeRevision': revision,
-        'question': _question('q$nextQuestion', nextQuestion - 1),
+        'question': generated,
       });
     }
     if (path == '/v1/intakes/intake-1/answers') {
@@ -123,12 +156,20 @@ class _IntakeBackend {
         answers.add({
           'answerId': body['questionId'],
           ...body,
+          if (selectedCodesAfterAnswer != null)
+            'selectedCodes': selectedCodesAfterAnswer,
           'stepIndex': 0,
           'freeText': body['freeText'],
           'answeredAt': 'now',
           'updatedAt': 'now',
         });
+        for (final question in questions.where(
+          (q) => q['questionId'] == body['questionId'],
+        )) {
+          question['status'] = 'answered';
+        }
         revision++;
+        if (reviewAfterAnswer) statusOverride = 'review';
         answerWrites++;
       }
       if (loseFirstAnswerResponse) {
@@ -144,6 +185,75 @@ class _IntakeBackend {
         }, lostAnswerResponseStatus);
       }
       return json(answerResponseOverride ?? replay ?? idempotentAnswers[key]!);
+    }
+    if (path == '/v1/intakes/intake-1/answers/q1' &&
+        request.method == 'PATCH') {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      answerPatches.add(body);
+      final currentQuestion = questions.where(
+        (item) => item['questionId'] == 'q1',
+      );
+      if (currentQuestion.length == 1 &&
+          body['questionRevision'] !=
+              currentQuestion.single['questionRevision']) {
+        return json({
+          'error': {'code': 'QUESTION_REVISION_CONFLICT'},
+        }, 409);
+      }
+      if (answerPatchRejectStatus != null) {
+        return json({
+          'error': {'code': 'SYNTHETIC_REJECTION'},
+        }, answerPatchRejectStatus!);
+      }
+      if (rejectAnswerPatch || body['expectedIntakeRevision'] != revision) {
+        if (concurrentIdenticalAnswerPatch) {
+          concurrentIdenticalAnswerPatch = false;
+          final answer = answers.singleWhere(
+            (item) => item['questionId'] == 'q1',
+          );
+          answer['selectedCodes'] = body['selectedCodes'];
+          answer['freeText'] = body['freeText'];
+          answer['answerState'] = body['answerState'];
+          revision++;
+        }
+        return json({
+          'error': {'code': 'REVISION_CONFLICT'},
+        }, 409);
+      }
+      final answer = answers.singleWhere((item) => item['questionId'] == 'q1');
+      for (final key in ['selectedCodes', 'freeText', 'answerState']) {
+        if (body.containsKey(key)) answer[key] = body[key];
+      }
+      for (final question in questions.where(
+        (q) => (q['stepIndex'] as int) > 0,
+      )) {
+        question['status'] = 'invalidated';
+        invalidatedQuestions.add(question['questionId'] as String);
+        answers.removeWhere((a) => a['questionId'] == question['questionId']);
+      }
+      if (invalidatedQuestions.isNotEmpty) statusOverride = 'questioning';
+      revision++;
+      if (switchSessionOnPatch) {
+        sessionEpoch = Object();
+        onSessionSwitch?.call();
+      }
+      if (loseAnswerPatchResponse) {
+        loseAnswerPatchResponse = false;
+        return json({
+          'error': {'code': 'UPSTREAM_UNAVAILABLE'},
+        }, 503);
+      }
+      return json({'answerId': 'q1', 'intakeRevision': revision});
+    }
+    if (path == '/v1/intakes/intake-1/summary') {
+      revision++;
+      statusOverride = 'review';
+      return json({
+        'summary': {
+          'chiefComplaint': {'value': '合成症状'},
+        },
+        'intakeRevision': revision,
+      });
     }
     fail('Unexpected request: ${request.method} $path');
   });
@@ -224,6 +334,365 @@ void main() {
       );
     },
   );
+
+  testWidgets('review redisplays the saved answer and offers an edit action', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend();
+    backend.questions.add({..._question('q1', 0), 'status': 'active'});
+    await _openQuestion(tester, backend);
+    await tester.enterText(find.byKey(const ValueKey('回答（任意）')), '保存済み補足');
+    backend.reviewAfterAnswer = true;
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+
+    expect(backend.requestPaths, contains('POST /v1/intakes/intake-1/answers'));
+    expect(backend.answers, hasLength(1));
+    expect(find.text('保存済み補足'), findsOneWidget);
+    expect(find.text('保存済みの回答'), findsOneWidget);
+    expect(find.text('はい'), findsWidgets);
+    expect(find.text('回答を編集'), findsOneWidget);
+  });
+
+  testWidgets('edits a saved answer with revision and confirms it by GET', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend();
+    backend.questions.addAll([
+      {..._question('q1', 0), 'status': 'active'},
+      {..._question('q2', 1), 'status': 'active'},
+    ]);
+    await _openQuestion(tester, backend);
+    await tester.enterText(find.byKey(const ValueKey('回答（任意）')), '旧い補足');
+    backend.reviewAfterAnswer = true;
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('回答を編集').first);
+    await tester.tap(find.text('回答を編集').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('保存済み回答の補足')), findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('保存済み回答の補足')), '新しい補足');
+    await tester.tap(find.text('いいえ'));
+    await tester.pump();
+    await tester.ensureVisible(find.text('編集内容を保存'));
+    await tester.tap(find.text('編集内容を保存'));
+    await tester.pumpAndSettle();
+
+    expect(backend.answerPatches, hasLength(1));
+    expect(backend.answerPatches.single, {
+      'questionRevision': 1,
+      'selectedCodes': ['NO'],
+      'freeText': '新しい補足',
+      'answerState': 'answered',
+      'expectedIntakeRevision': 4,
+    });
+    // PATCH increments once; re-asking the invalidated downstream question
+    // increments the intake revision again.
+    expect(backend.revision, 6);
+    expect(backend.invalidatedQuestions, contains('q2'));
+    final patchIndex = backend.requestPaths.indexOf(
+      'PATCH /v1/intakes/intake-1/answers/q1',
+    );
+    expect(patchIndex, greaterThanOrEqualTo(0));
+    expect(backend.requestPaths[patchIndex + 1], 'GET /v1/intakes/intake-1');
+    expect(
+      backend.answers.singleWhere(
+        (answer) => answer['questionId'] == 'q1',
+      )['freeText'],
+      '新しい補足',
+    );
+    expect(find.text('合成の質問q2'), findsNothing);
+    expect(find.text('合成の質問q3'), findsOneWidget);
+    expect(find.byKey(const ValueKey('保存済み回答の補足')), findsNothing);
+
+    // Simulate the API ending the replacement branch and verify the patient
+    // can answer the re-asked question and return to a fresh review summary.
+    backend.reviewAfterAnswer = false;
+    backend.finishAfterNextQuestion = true;
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+    expect(find.text('問診の内容を確認しました'), findsOneWidget);
+    expect(backend.statusOverride, 'review');
+    expect(
+      backend.answers.singleWhere(
+        (answer) => answer['questionId'] == 'q1',
+      )['freeText'],
+      '新しい補足',
+    );
+  });
+
+  testWidgets('free-text edit preserves every saved selected code', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend();
+    backend.questions.add({..._question('q1', 0), 'status': 'active'});
+    backend.selectedCodesAfterAnswer = ['YES', 'NO'];
+    await _openQuestion(tester, backend);
+    backend.reviewAfterAnswer = true;
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('回答を編集'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('保存済み回答の補足')), '自由文だけ変更');
+    await tester.ensureVisible(find.text('編集内容を保存'));
+    await tester.tap(find.text('編集内容を保存'));
+    await tester.pumpAndSettle();
+
+    expect(backend.answerPatches.single['selectedCodes'], ['YES', 'NO']);
+    expect(backend.answers.single['selectedCodes'], ['YES', 'NO']);
+    expect(backend.answers.single['freeText'], '自由文だけ変更');
+    expect(find.text('保存済み回答の補足'), findsNothing);
+    expect(find.text('編集内容を保存'), findsNothing);
+  });
+
+  testWidgets(
+    'changing to unknown requires confirmation before discarding free text',
+    (tester) async {
+      final backend = _IntakeBackend();
+      backend.questions.add({..._question('q1', 0), 'status': 'active'});
+      await _openQuestion(tester, backend);
+      await tester.enterText(find.byKey(const ValueKey('回答（任意）')), '補足を保持');
+      backend.reviewAfterAnswer = true;
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('回答を編集'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('保存済み回答の補足')), '編集した補足');
+
+      await tester.tap(find.text('わからない').last);
+      await tester.pumpAndSettle();
+      expect(find.text('補足を削除しますか？'), findsOneWidget);
+      await tester.tap(find.text('戻る'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('保存済み回答の補足')), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('保存済み回答の補足')))
+            .controller!
+            .text,
+        '編集した補足',
+      );
+
+      await tester.tap(find.text('わからない').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('補足を削除して変更'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('保存済み回答の補足')))
+            .controller!
+            .text,
+        isEmpty,
+      );
+      await tester.ensureVisible(find.text('編集内容を保存'));
+      await tester.tap(find.text('編集内容を保存'));
+      await tester.pumpAndSettle();
+      expect(backend.answerPatches.single['answerState'], 'unknown');
+      expect(backend.answerPatches.single['freeText'], isNull);
+    },
+  );
+
+  testWidgets(
+    'unknown PATCH result and failed reconciliation keep edits and offer GET-only retry',
+    (tester) async {
+      final backend = _IntakeBackend()..loseAnswerPatchResponse = true;
+      backend.questions.add({..._question('q1', 0), 'status': 'active'});
+      await _openQuestion(tester, backend);
+      backend.reviewAfterAnswer = true;
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('回答を編集'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('保存済み回答の補足')), '結果照合待ち');
+      backend.failNextIntakeGet = true;
+      await tester.ensureVisible(find.text('編集内容を保存'));
+      await tester.tap(find.text('編集内容を保存'));
+      await tester.pumpAndSettle();
+
+      expect(backend.answerPatches, hasLength(1));
+      expect(backend.requestPaths.last, 'GET /v1/intakes/intake-1');
+      expect(find.byKey(const ValueKey('保存済み回答の補足')), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('保存済み回答の補足')))
+            .controller!
+            .text,
+        '結果照合待ち',
+      );
+      expect(find.text('保存状態を再取得'), findsOneWidget);
+      expect(find.text('保存済みの回答'), findsOneWidget);
+
+      await tester.tap(find.text('保存状態を再取得'));
+      await tester.pumpAndSettle();
+      expect(backend.answerPatches, hasLength(1));
+      expect(
+        backend.requestPaths.where((path) => path.startsWith('PATCH ')),
+        hasLength(1),
+      );
+      expect(find.text('保存状態を再取得'), findsNothing);
+      expect(find.byKey(const ValueKey('保存済み回答の補足')), findsOneWidget);
+      expect(find.text('結果照合待ち'), findsWidgets);
+      expect(find.textContaining('現在の保存内容を確認し'), findsOneWidget);
+    },
+  );
+
+  testWidgets('does not claim a saved-answer edit after a revision conflict', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend()..rejectAnswerPatch = true;
+    backend.questions.add({..._question('q1', 0), 'status': 'active'});
+    await _openQuestion(tester, backend);
+    backend.reviewAfterAnswer = true;
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('回答を編集'));
+    await tester.tap(find.text('回答を編集'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('いいえ'));
+    await tester.pump();
+    await tester.ensureVisible(find.text('編集内容を保存'));
+    await tester.tap(find.text('編集内容を保存'));
+    await tester.pumpAndSettle();
+
+    expect(backend.answerPatches, hasLength(1));
+    expect(backend.revision, 4);
+    expect(find.text('保存済み補足'), findsNothing);
+    expect(find.byKey(const ValueKey('保存済み回答の補足')), findsOneWidget);
+    expect(find.textContaining('競合により拒否'), findsOneWidget);
+  });
+
+  testWidgets(
+    'shows latest question after a revision and blocks stale answer edits',
+    (tester) async {
+      final backend = _IntakeBackend();
+      backend.questions.add({..._question('q1', 0), 'status': 'active'});
+      await _openQuestion(tester, backend);
+      backend.reviewAfterAnswer = true;
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('回答を編集'));
+      await tester.pumpAndSettle();
+
+      backend.questions.single
+        ..['questionRevision'] = 2
+        ..['questionText'] = '更新後の質問q1';
+      backend.loseAnswerPatchResponse = true;
+      await tester.ensureVisible(find.text('編集内容を保存'));
+      await tester.tap(find.text('編集内容を保存'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('更新後の質問q1'), findsOneWidget);
+      expect(find.text('合成の質問q1'), findsNothing);
+      expect(
+        find.text('質問が更新されました。古い回答を送信せず、編集を取り消して最新内容を確認してください。'),
+        findsOneWidget,
+      );
+      expect(backend.answerPatches.single['questionRevision'], 1);
+      final saveButton = tester.widget<FilledButton>(
+        find.ancestor(
+          of: find.text('編集内容を保存'),
+          matching: find.byType(FilledButton),
+        ),
+      );
+      expect(saveButton.onPressed, isNull);
+    },
+  );
+
+  for (final status in [400, 401, 403, 404, 412]) {
+    testWidgets('explicit PATCH $status rejection retains editable draft', (
+      tester,
+    ) async {
+      final backend = _IntakeBackend()..answerPatchRejectStatus = status;
+      backend.questions.add({..._question('q1', 0), 'status': 'active'});
+      await _openQuestion(tester, backend);
+      backend.reviewAfterAnswer = true;
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('回答を編集'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('保存済み回答の補足')), '保持する草稿');
+      await tester.ensureVisible(find.text('編集内容を保存'));
+      await tester.tap(find.text('編集内容を保存'));
+      await tester.pumpAndSettle();
+
+      expect(backend.answerPatches, hasLength(1));
+      expect(
+        backend.requestPaths.last,
+        'PATCH /v1/intakes/intake-1/answers/q1',
+      );
+      expect(find.text('保存状態を再取得'), findsNothing);
+      expect(find.text('編集内容を保存'), findsOneWidget);
+      expect(find.textContaining('保存操作の成否は確認できませんでした'), findsNothing);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('保存済み回答の補足')))
+            .controller!
+            .text,
+        '保持する草稿',
+      );
+    });
+  }
+
+  testWidgets(
+    '409 stays rejected even if another write created matching values',
+    (tester) async {
+      final backend = _IntakeBackend()
+        ..rejectAnswerPatch = true
+        ..concurrentIdenticalAnswerPatch = true;
+      backend.questions.add({..._question('q1', 0), 'status': 'active'});
+      await _openQuestion(tester, backend);
+      backend.reviewAfterAnswer = true;
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('回答を編集'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('いいえ'));
+      await tester.pump();
+      await tester.ensureVisible(find.text('編集内容を保存'));
+      await tester.tap(find.text('編集内容を保存'));
+      await tester.pumpAndSettle();
+
+      expect(backend.revision, 5);
+      expect(backend.answerPatches, hasLength(1));
+      expect(find.byKey(const ValueKey('保存済み回答の補足')), findsOneWidget);
+      expect(find.text('保存状態を再取得'), findsNothing);
+      expect(find.text('編集内容を保存'), findsOneWidget);
+      expect(find.text('合成の質問q1'), findsOneWidget);
+      expect(
+        backend.requestPaths.where((path) => path.startsWith('PATCH ')),
+        hasLength(1),
+      );
+    },
+  );
+
+  testWidgets('session change clears saved-answer edit state', (tester) async {
+    final backend = _IntakeBackend()..switchSessionOnPatch = true;
+    backend.questions.add({..._question('q1', 0), 'status': 'active'});
+    final changes = StreamController<void>();
+    addTearDown(changes.close);
+    backend.onSessionSwitch = () => changes.add(null);
+    await _openQuestion(tester, backend, changes: changes.stream);
+    backend.reviewAfterAnswer = true;
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('回答を編集'));
+    await tester.tap(find.text('回答を編集'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('いいえ'));
+    await tester.pump();
+    await tester.ensureVisible(find.text('編集内容を保存'));
+    await tester.tap(find.text('編集内容を保存'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('保存済みの回答'), findsNothing);
+    expect(find.byKey(const ValueKey('保存済み回答の補足')), findsNothing);
+    expect(
+      find.text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
+      findsOneWidget,
+    );
+  });
 
   for (final status in [409, 503]) {
     testWidgets('retries same answer after uncertain HTTP $status', (

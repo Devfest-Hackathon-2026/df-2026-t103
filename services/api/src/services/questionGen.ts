@@ -87,8 +87,10 @@ export async function generateNextQuestion(
     }),
   );
 
-  // AI経路（本番承認フラグが立っている場合のみ）
-  if (intake.aiEnabledForThisIntake) {
+  // 問診単位の承認に加え、実行時の全体停止フラグを毎回確認する。
+  // intake側の承認は保持し、停止解除後は元の方針に戻る。
+  const aiAllowed = deps.config.aiIntakeEnabled && intake.aiEnabledForThisIntake;
+  if (aiAllowed) {
     const input: QuestionGenInput = {
       symptomText: intake.initialSymptomText ?? "",
       bodyLocations: intake.bodyLocations,

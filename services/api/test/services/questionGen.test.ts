@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeTestDeps, type TestDeps } from "../helpers/deps.js";
+import { makeTestConfig, makeTestDeps, type TestDeps } from "../helpers/deps.js";
 import { generateNextQuestion } from "../../src/services/questionGen.js";
 import {
   createIntake,
@@ -50,6 +50,71 @@ describe("questionGen (#10)", () => {
     expect(q?.topic).toBe("onset_timing");
     expect(q?.options.some((o) => o.code === "UNKNOWN")).toBe(true);
     expect(deps.fakeLlm.calls).toHaveLength(0);
+  });
+
+  it("全体設定が無効なら既存のAI承認問診もLLMを呼ばずfallbackする", async () => {
+    const deps = makeTestDeps({ aiIntakeEnabled: false });
+    const { intakeId, doc } = await intakeAt(deps);
+    const q = await generateNextQuestion(deps, {
+      intakeId,
+      intake: { ...doc, aiEnabledForThisIntake: true },
+    });
+    expect(q?.generatedBy).toBe("fallback");
+    expect(q?.topic).toBe("onset_timing");
+    expect(deps.fakeLlm.calls).toHaveLength(0);
+  });
+
+  it("全体AI有効でも問診単位で未承認ならLLMを呼ばない", async () => {
+    const deps = makeTestDeps({ aiIntakeEnabled: true });
+    const { intakeId, doc } = await intakeAt(deps);
+    await deps.memDb.doc(`intakes/${intakeId}`).update({
+      aiEnabledForThisIntake: false,
+    });
+
+    const q = await generateNextQuestion(deps, {
+      intakeId,
+      intake: { ...doc, aiEnabledForThisIntake: false },
+    });
+
+    expect(q?.generatedBy).toBe("fixed_template");
+    expect(deps.fakeLlm.calls).toHaveLength(0);
+  });
+
+  it("新規問診の承認を保持し、停止中はfallback・再有効化後はLLMを使う", async () => {
+    const deps = makeTestDeps({ aiIntakeEnabled: true });
+    const { intakeId, doc } = await intakeAt(deps);
+    expect(doc.aiEnabledForThisIntake).toBe(true);
+
+    deps.config = makeTestConfig({ aiIntakeEnabled: false });
+    const stopped = await generateNextQuestion(deps, { intakeId, intake: doc });
+    expect(stopped?.generatedBy).toBe("fallback");
+    expect(deps.fakeLlm.calls).toHaveLength(0);
+    expect(
+      (await deps.memDb.doc(`intakes/${intakeId}`).get()).data()
+        ?.aiEnabledForThisIntake,
+    ).toBe(true);
+
+    deps.config = makeTestConfig({ aiIntakeEnabled: true });
+    deps.fakeLlm.result = {
+      questions: [
+        {
+          questionText: "痛みの性質を教えてください",
+          topic: "pain_quality",
+          options: [
+            { code: "YES", label: "はい" },
+            { code: "NO", label: "いいえ" },
+          ],
+        },
+      ],
+      modelVersion: "fake-v1",
+    };
+    const resumed = await generateNextQuestion(deps, { intakeId, intake: doc });
+    expect(resumed?.generatedBy).toBe("llm");
+    expect(deps.fakeLlm.calls).toHaveLength(1);
+    expect(
+      (await deps.memDb.doc(`intakes/${intakeId}`).get()).data()
+        ?.aiEnabledForThisIntake,
+    ).toBe(true);
   });
 
   it("AI承認済みは LLM 経路を使い generatedBy=llm", async () => {

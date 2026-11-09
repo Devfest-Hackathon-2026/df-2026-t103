@@ -11,43 +11,123 @@ DEMO_SKIP_SUITE = "test/integration/demo_email_registration_test.dart"
 FLUTTER_EVENTS = {"test.startedProcess"}
 DIAGNOSTIC_EVENTS = ("start", "suite", "testStart", "testDone", "allSuites", "done", "error", "group", "print", "debug", "test.startedProcess")
 DIAGNOSTIC_RESULTS = ("success", "failure", "error", "skip")
+FLOW_MARKERS = (
+    "edit-open-start",
+    "edit-open-tap-returned",
+    "edit-field-found",
+    "edit-input-returned",
+    "edit-save-start",
+    "edit-save-tap-returned",
+    "edit-after-get-start",
+    "edit-after-get-completed",
+    "edit-patch-observation-check-start",
+    "edit-patch-observation-check-completed",
+    "edit-next-question-observation-check-start",
+    "edit-next-question-observation-check-completed",
+    "edit-status-check-start",
+    "edit-status-check-completed",
+    "edit-answer-check-start",
+    "edit-answer-check-completed",
+    "edit-question-invalidation-check-start",
+    "edit-question-invalidation-check-completed",
+    "requestion",
+    "review",
+    "review-confirmation-wait-start",
+    "review-confirmation-wait-completed",
+    "review-confirmation-tap-start",
+    "review-confirmation-tap-returned",
+    "review-finalize-tap-start",
+    "review-finalize-tap-returned",
+    "hospital-facility-wait-start",
+    "hospital-facility-wait-completed",
+    "hospital-consent-tap-start",
+    "hospital-consent-tap-returned",
+    "hospital-send-tap-start",
+    "hospital-send-tap-returned",
+    "hospital-receipt-wait-start",
+    "hospital-receipt-wait-completed",
+    "hospital",
+)
 
 
 def diagnose_partial(path):
     """Print only allowlisted event/result counts; never echo event contents."""
     events = defaultdict(int)
     results = defaultdict(int)
-    completed = False
+    markers = defaultdict(int)
+    completion_known = True
+    done_success_seen = None
+    saw_start = False
+    saw_all_suites = False
+    saw_done = False
     try:
         with open(path, encoding="utf-8") as stream:
             for line in stream:
                 try:
                     event = json.loads(line)
                 except (json.JSONDecodeError, UnicodeError):
+                    completion_known = False
                     continue
                 if isinstance(event, list) and len(event) == 1 and isinstance(event[0], dict):
                     kind = event[0].get("event")
                     if isinstance(kind, str) and kind in FLUTTER_EVENTS:
                         events[kind] += 1
+                    else:
+                        completion_known = False
                     continue
                 if not isinstance(event, dict):
+                    completion_known = False
                     continue
                 kind = event.get("type")
                 if not isinstance(kind, str) or kind not in DIAGNOSTIC_EVENTS:
+                    completion_known = False
                     continue
+                if saw_done:
+                    completion_known = False
                 events[kind] += 1
                 if kind == "testDone":
                     result = event.get("result")
+                    if type(event.get("testID")) is not int or result not in ("success", "failure", "error") or type(event.get("skipped")) is not bool:
+                        completion_known = False
                     if result in ("success", "failure", "error"):
                         result = "skip" if event.get("skipped") is True else result
                         results[result] += 1
-                if kind == "done" and event.get("success") is True:
-                    completed = True
+                elif kind == "testStart":
+                    test = event.get("test")
+                    if not isinstance(test, dict) or type(test.get("id")) is not int or type(test.get("suiteID")) is not int:
+                        completion_known = False
+                elif kind == "suite":
+                    suite = event.get("suite")
+                    if not isinstance(suite, dict) or type(suite.get("id")) is not int or not isinstance(suite.get("path"), str):
+                        completion_known = False
+                if kind == "print" and event.get("message") in FLOW_MARKERS:
+                    markers[event["message"]] += 1
+                if kind == "start":
+                    if saw_start:
+                        completion_known = False
+                    saw_start = True
+                elif kind == "allSuites":
+                    if saw_all_suites or type(event.get("count")) is not int or event["count"] < 1:
+                        completion_known = False
+                    saw_all_suites = True
+                elif kind == "done":
+                    saw_done = True
+                    if type(event.get("success")) is not bool:
+                        completion_known = False
+                    else:
+                        done_success_seen = event["success"]
+                    if not saw_start or not saw_all_suites:
+                        completion_known = False
     except (OSError, UnicodeError):
         pass
     print("diagnostic events " + " ".join(f"{kind}={events[kind]}" for kind in DIAGNOSTIC_EVENTS))
     print("diagnostic results " + " ".join(f"{result}={results[result]}" for result in DIAGNOSTIC_RESULTS))
-    print(f"diagnostic completed={'yes' if completed else 'no'}")
+    if not completion_known or not saw_done or type(done_success_seen) is not bool:
+        done_success = "unknown"
+    else:
+        done_success = "yes" if done_success_seen else "no"
+    print(f"diagnostic reporter_done_success_seen={done_success}")
+    print("diagnostic flow " + " ".join(f"{marker}={markers[marker]}" for marker in FLOW_MARKERS))
 
 
 def run_partial_diagnostic(path):

@@ -594,12 +594,15 @@ void main() {
       expect(restoredAnswer['freeText'], editedFreeText);
       _flowMarker('review');
       final reviewConfirmation = find.text('問診の内容を確認しました');
-      final finalizeButton = find.widgetWithText(ElevatedButton, 'この内容で問診票を確定');
+      final finalizeButton = find.widgetWithText(
+        FilledButton,
+        'この内容で問診票を確定',
+      );
       _flowMarker('review-confirmation-wait-start');
       await waitFor(reviewConfirmation);
       _flowMarker('review-confirmation-wait-completed');
       expect(
-        tester.widget<ElevatedButton>(finalizeButton).onPressed,
+        tester.widget<FilledButton>(finalizeButton).onPressed,
         isNull,
         reason: 'Re-entering review requires a fresh confirmation.',
       );
@@ -607,7 +610,7 @@ void main() {
       await tap('問診の内容を確認しました', finder: reviewConfirmation);
       _flowMarker('review-confirmation-tap-returned');
       expect(
-        tester.widget<ElevatedButton>(finalizeButton).onPressed,
+        tester.widget<FilledButton>(finalizeButton).onPressed,
         isNotNull,
       );
       _flowMarker('review-finalize-tap-start');

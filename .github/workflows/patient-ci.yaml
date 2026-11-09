@@ -110,3 +110,46 @@ jobs:
           # GitHub-hosted job VMs are dedicated and freshly provisioned.
           E2E_DISPOSABLE_RUNNER: '1'
         run: bash apps/patient/tool/run_intake_e2e.sh
+
+  patient-browser-integration:
+    name: patient / browser CORS + Dart API (emulators)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: Verify Firefox and Xvfb are available on the hosted runner
+        run: |
+          command -v firefox
+          firefox --version
+          command -v Xvfb
+
+      - name: Install API dependencies
+        run: npm --prefix services/api ci
+
+      - name: Test browser runner timeout and cleanup failure paths
+        run: python3 -m unittest discover -s apps/patient/tool -p 'test_run_browser_integration.py' -v
+
+      - name: Run isolated real-browser integration checks
+        env:
+          FIREBASE_BIN: npx -y firebase-tools@15.35.0
+          FLUTTER_BIN: flutter
+          FIREFOX_BIN: firefox
+        run: python3 apps/patient/tool/run_browser_integration.py

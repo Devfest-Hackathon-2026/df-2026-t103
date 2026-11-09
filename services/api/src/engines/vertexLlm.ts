@@ -17,6 +17,17 @@ export interface VertexLlmConfig {
   timeoutMs: number;
 }
 
+/** Preserve only the HTTP status for internal diagnostics, never the response or URL. */
+class VertexHttpError extends ApiError {
+  constructor(readonly upstreamStatus: number) {
+    super(
+      502,
+      ErrorCodes.UPSTREAM_UNAVAILABLE,
+      "質問生成サービスがエラーを返しました。",
+    );
+  }
+}
+
 const SAFETY_INSTRUCTION = [
   "あなたは医療機関への問診を支援する質問生成器です。次の制約を厳守してください。",
   "- 病名の診断・推定、リスクの数値化、薬の処方・中止・変更の助言、受診要否の判定、緊急性の判定を含めない",
@@ -100,11 +111,7 @@ export class VertexAiLlmAdapter implements LlmAdapter {
       );
     }
     if (!res.ok) {
-      throw new ApiError(
-        502,
-        ErrorCodes.UPSTREAM_UNAVAILABLE,
-        "質問生成サービスがエラーを返しました。",
-      );
+      throw new VertexHttpError(res.status);
     }
     const json = (await res.json()) as GenerateContentResponse;
     const text = json.candidates?.[0]?.content?.parts?.[0]?.text;

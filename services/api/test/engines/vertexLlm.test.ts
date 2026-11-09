@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import Fastify from "fastify";
 import type { QuestionGenInput } from "../../src/deps.js";
-import { ErrorCodes, ApiError } from "../../src/lib/errors.js";
+import { ErrorCodes, ApiError, sendError } from "../../src/lib/errors.js";
 import { VertexAiLlmAdapter } from "../../src/engines/vertexLlm.js";
 
 const input: QuestionGenInput = {
@@ -84,17 +85,49 @@ describe("VertexAiLlmAdapter (synthetic fetch only)", () => {
     ]);
   });
 
-  it("HTTP failureを安全なUPSTREAM_UNAVAILABLEへ変換する", async () => {
+  it.each([400, 401, 403, 404, 429, 503])("HTTP %iを安全なUPSTREAM_UNAVAILABLEへ変換し診断用statusを保持する", async (status) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>().mockResolvedValue(new Response("synthetic failure", { status: 503 })),
+      vi.fn<typeof fetch>().mockResolvedValue(new Response("synthetic failure", { status })),
     );
 
     await expect(adapter().generateQuestions(input)).rejects.toMatchObject({
       statusCode: 502,
       code: ErrorCodes.UPSTREAM_UNAVAILABLE,
       message: "質問生成サービスがエラーを返しました。",
+      upstreamStatus: status,
     });
+  });
+
+  it("内部ログには上流statusだけを残し、応答本文・キー・URLを含めない", async () => {
+    const marker = "SYNTHETIC_PRIVATE_UPSTREAM_BODY";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(new Response(marker, { status: 403 })),
+    );
+    const error = await adapter().generateQuestions(input).catch((caught: unknown) => caught);
+    const lines: string[] = [];
+    const app = Fastify({ logger: { stream: { write(line: string) { lines.push(line); } } } });
+    app.setErrorHandler((err, request, reply) => sendError(request, reply, err));
+    app.get("/", async () => { throw error; });
+    try {
+      app.log.warn({ err: error }, "llm question generation failed; fallback");
+      const output = lines.join("");
+      const record = JSON.parse(output) as { err: { upstreamStatus: number; statusCode: number } };
+      expect(record.err.upstreamStatus).toBe(403);
+      expect(record.err.statusCode).toBe(502);
+      expect(output).not.toContain(marker);
+      expect(output).not.toContain("not-a-real-key-for-tests");
+      expect(output).not.toContain("aiplatform.googleapis.com");
+      expect(output).not.toContain(input.symptomText);
+      const response = await app.inject({ method: "GET", url: "/" });
+      expect(response.statusCode).toBe(502);
+      expect(response.json().error.code).toBe(ErrorCodes.UPSTREAM_UNAVAILABLE);
+      expect(response.body).not.toContain("upstreamStatus");
+      expect(response.body).not.toContain(marker);
+    } finally {
+      await app.close();
+    }
   });
 
   it("モデル応答が不正JSONなら内容をエラーへ含めず拒否する", async () => {

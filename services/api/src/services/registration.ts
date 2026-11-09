@@ -387,7 +387,13 @@ export async function registerEmail(
         });
       } catch (err) {
         if (isAuthError(err, "auth/email-already-exists")) {
-          await reconcileEmailConflict(deps, operation, body, params, operationHash);
+          operation = await reconcileEmailConflict(
+            deps,
+            operation,
+            body,
+            params,
+            operationHash,
+          );
         } else if (!isAuthError(err, "auth/uid-already-exists")) {
           throw err;
         }
@@ -655,7 +661,8 @@ function buildVersionSet(
 /**
  * email-already-exists の突き合わせ。
  * - 保持者が本操作のUIDなら前回作成済み → 続行
- * - 保持者が別操作の disabled Auth ユーザーなら、account の有無だけで削除せず409
+ * - 保持者が別操作由来の disabled 孤児Authなら、そのuidを作成した操作台帳の
+ *   requestHash が一致する場合のみ引き継いで再開（REGISTRATION_REPAIRED）
  * - 上記以外は既存メール → 409
  */
 async function reconcileEmailConflict(
@@ -664,7 +671,7 @@ async function reconcileEmailConflict(
   body: RegisterBody,
   params: { requestId: string },
   operationHash: string,
-): Promise<void> {
+): Promise<RegistrationOperationDoc> {
   const existing = await deps.authAdmin
     .getUserByEmail(body.email)
     .catch((err) => {
@@ -673,7 +680,22 @@ async function reconcileEmailConflict(
       throw err;
     });
   if (existing && existing.uid === operation.uid) {
-    return;
+    return operation;
+  }
+  if (
+    existing?.disabled === true &&
+    (await tryAdoptOrphanedAuth(deps, operation, existing.uid, operationHash))
+  ) {
+    await audit(deps, {
+      actorType: "service",
+      action: AUDIT_ACTIONS.REGISTRATION_REPAIRED,
+      outcome: "adopted",
+      requestId: params.requestId,
+      resourceType: "registrationOperation",
+      resourceIdHash: operationHash,
+      details: { adoptedUidHash: auditUidHash(deps, existing.uid) },
+    });
+    return { ...operation, uid: existing.uid };
   }
   await audit(deps, {
     actorType: "service",
@@ -687,6 +709,96 @@ async function reconcileEmailConflict(
     ErrorCodes.REGISTRATION_CONFLICT,
     "このメールアドレスでは登録できません。",
   );
+}
+
+/**
+ * disabled 孤児Authの引き継ぎ判定（#208）。
+ * 孤児を作成した操作台帳が存在し、その requestHash が今回の本文
+ * （パスワードを含む）と一致する場合のみ、本操作の uid を孤児側へ付け替える。
+ * 同一内容の再試行＝同一人物の未完登録として救済する。
+ * account がまだコミットされていない進行中の孤児・所有台帳なし・
+ * 異なる内容・有効化済み・account が既に active 系の場合は引き継がず
+ * 409とし、他人の未完登録の乗っ取りを防ぐ。
+ */
+async function tryAdoptOrphanedAuth(
+  deps: Deps,
+  operation: RegistrationOperationDoc,
+  orphanUid: string,
+  operationHash: string,
+): Promise<boolean> {
+  const owners = await deps.db
+    .collection("registrationOperations")
+    .where("uid", "==", orphanUid)
+    .get();
+  const owner = owners.docs
+    .map((d) => ({ ref: d.ref, op: d.data() as RegistrationOperationDoc }))
+    .find(
+      ({ op }) =>
+        op.requestHash === operation.requestHash && op.status !== "enabled",
+    );
+  if (!owner) {
+    return false;
+  }
+
+  return deps.db.runTransaction(async (tx) => {
+    const opRef = registrationOperationRef(deps.db, operationHash);
+    const opSnap = await tx.get(opRef);
+    if (!opSnap.exists) return false;
+    const current = opSnap.data() as RegistrationOperationDoc;
+    if (
+      current.operationHash !== operationHash ||
+      current.requestHash !== operation.requestHash ||
+      current.uid !== operation.uid
+    ) {
+      return false;
+    }
+
+    // 所有台帳をtx内で再読し、直前の有効化との競合を防ぐ
+    const ownerSnap = await tx.get(owner.ref);
+    const ownerCurrent = ownerSnap.exists
+      ? (ownerSnap.data() as RegistrationOperationDoc)
+      : undefined;
+    if (
+      !ownerCurrent ||
+      ownerCurrent.requestHash !== operation.requestHash ||
+      ownerCurrent.status === "enabled"
+    ) {
+      return false;
+    }
+
+    const accountSnap = await tx.get(deps.db.doc(`accounts/${orphanUid}`));
+    // account 未コミットの進行中の孤児は横取りしない。コミット済みで
+    // onboarding_pending（未完登録）のものだけ引き継ぐ。
+    if (!accountSnap.exists) return false;
+    const account = accountSnap.data();
+    if (
+      !isConsistentRegistrationAccount(account, orphanUid) ||
+      account!.accountStatus !== "onboarding_pending"
+    ) {
+      return false;
+    }
+    // accountだけ残り同意書が欠落する状態は未完コミットとして扱わない
+    const consentsSnap = await tx.get(
+      deps.db
+        .collection("legalConsents")
+        .where("subjectUid", "==", orphanUid),
+    );
+    if (consentsSnap.empty) return false;
+
+    // 引き継ぎ先のuidでは account+同意書がコミット済みなので、台帳も
+    // consents_committed へ進める（saveOperation の checkpoint 保護で
+    // auth_created へは退行しない）。以後は通常の有効化フローが引き継ぐ。
+    tx.set(
+      opRef,
+      {
+        uid: orphanUid,
+        status: "consents_committed",
+        updatedAt: FieldValue.serverTimestamp(),
+      } as DocumentData,
+      { merge: true },
+    );
+    return true;
+  });
 }
 
 async function reserveOperation(

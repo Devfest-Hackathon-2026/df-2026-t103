@@ -238,6 +238,73 @@ describe("intake routes (#11, API-009〜016)", () => {
     expect(stale.statusCode).toBe(409);
   });
 
+  it("POST /answers remains authenticated and rejects a malformed optional key", async () => {
+    const { app } = await setup();
+    const unauthenticated = await app.inject({
+      method: "POST",
+      url: "/v1/intakes/intake-id/answers",
+      payload: {},
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const q = await nextQuestion(app, intakeId, rev);
+    const invalidKey = await app.inject({
+      method: "POST",
+      url: `/v1/intakes/${intakeId}/answers`,
+      headers: { ...authHeader(UID), ...idem("invalid key") },
+      payload: {
+        questionId: q.questionId,
+        questionRevision: 1,
+        selectedCodes: ["LT_WEEK"],
+        answerState: "answered",
+        expectedIntakeRevision: q.revision,
+      },
+    });
+    expect(invalidKey.statusCode).toBe(400);
+  });
+
+  it("POST /answers replays an answer when a valid optional key is supplied", async () => {
+    const { app } = await setup();
+    const { intakeId } = await createIntake(app);
+    const rev = await toQuestioning(app, intakeId);
+    const q = await nextQuestion(app, intakeId, rev);
+    const request = {
+      method: "POST" as const,
+      url: `/v1/intakes/${intakeId}/answers`,
+      headers: { ...authHeader(UID), ...idem("answer-route-replay-key") },
+      payload: {
+        questionId: q.questionId,
+        questionRevision: 1,
+        selectedCodes: ["LT_WEEK"],
+        answerState: "answered" as const,
+        expectedIntakeRevision: q.revision,
+      },
+    };
+    const first = await app.inject(request);
+    const replay = await app.inject(request);
+    expect(first.statusCode).toBe(200);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(first.json());
+  });
+
+  it("OpenAPI declares POST /answers Idempotency-Key as optional", async () => {
+    const { app } = await setup();
+    await app.ready();
+    const response = await app.inject({ method: "GET", url: "/docs/json" });
+    expect(response.statusCode).toBe(200);
+    const spec = response.json() as {
+      paths: Record<string, { post?: { parameters?: Array<{ name: string; in: string; required?: boolean }> } }>;
+    };
+    const params = spec.paths["/v1/intakes/{intakeId}/answers"]?.post?.parameters ?? [];
+    expect(params.find(({ name }) => name === "idempotency-key")).toMatchObject({
+      in: "header",
+      required: false,
+    });
+    await app.close();
+  });
+
   it("PATCH /answers/{id} edits answer (FR-I08)", async () => {
     const { app } = await setup();
     const { intakeId } = await createIntake(app);

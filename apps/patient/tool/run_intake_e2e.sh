@@ -251,4 +251,18 @@ for test_file in "${test_files[@]}"; do
     exit "$status"
   fi
 done
+echo "==> running public patient flow against the isolated synthetic pending facility"
+if run_timed 120 "$FLUTTER_BIN" test test/integration/public_patient_flow_test.dart \
+  --no-pub \
+  --dart-define=RUN_INTAKE_UI_INTEGRATION=true \
+  --dart-define=RUN_SYNTHETIC_PENDING_E2E=true \
+  --plain-name 'public UI → real API → hospital receipt → logout' \
+  --machine >"$RUN_DIR/synthetic-pending.jsonl" 2>/dev/null; then
+  python3 tool/summarize_flutter_machine.py "$RUN_DIR/synthetic-pending.jsonl"
+else
+  status=$?
+  echo "==> synthetic pending Flutter test failed (exit $status); output suppressed" >&2
+  python3 tool/summarize_flutter_machine.py "$RUN_DIR/synthetic-pending.jsonl" --diagnostic-partial >&2 || true
+  exit "$status"
+fi
 echo "==> all selected Flutter integration tests passed, including answer recovery"

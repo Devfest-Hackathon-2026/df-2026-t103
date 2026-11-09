@@ -39,4 +39,4 @@ Terraformを適用するときは `cors_origins` に既存originと患者公開o
 
 合成データだけでログイン→問診→質問回答→レビュー→確定→施設確認→明示同意付き送信→病院受信→ログアウトを確認します。実ブラウザでAuthとApp Checkの実トークン取得・CSP違反・API CORS・レスポンスヘッダも確認してください。トークンや入力内容をログに残さないでください。
 
-ローカルの実API・Firebase Emulatorを使う試験は `apps/patient/tool/run_intake_e2e.sh` です。これは実クラウドのApp Check受入を代用しません。iOSの署名・配布手順は [IOS_DISTRIBUTION.md](IOS_DISTRIBUTION.md) を参照してください。
+実API・Firebase Emulatorを使う試験は `apps/patient/tool/run_intake_e2e.sh` です。実クラウドのApp Check受入を代用しません。このスクリプトは固定ポート（8080、8081、9000、9099、9199）を使って起動・停止するため、既存の共有ローカル環境と互換ではありません。専用かつ他プロセスから隔離された使い捨て環境でのみ実行してください。`E2E_DISPOSABLE_RUNNER=1` は操作者の自己申告にすぎず、隔離を強制・検証しません。ポート事前確認にもTOCTOU競合があり、同じポートを他プロセスが使わない保証にはなりません。iOSの署名・配布手順は [IOS_DISTRIBUTION.md](IOS_DISTRIBUTION.md) を参照してください。

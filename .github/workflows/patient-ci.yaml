@@ -68,7 +68,9 @@ jobs:
   patient-e2e:
     name: patient / intake E2E (emulator)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Script-level bounds: build 5m + startup waits 4m + seeding 2m + Flutter
+    # 10m + bounded cleanup 20s = <22m, leaving >13m for CI setup/teardown.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -95,9 +97,13 @@ jobs:
         run: npm ci
 
       # Stands up the emulators + real API and runs the gated Flutter intake E2E
-      # (E2E-001 / 001B / 002). firebase-tools is pinned to match the api job.
+      # (E2E-001 / 001B / 002, including answer recovery after response loss).
+      # firebase-tools is pinned to match the api job.
       - name: Run patient intake E2E
         env:
           FIREBASE_BIN: npx -y firebase-tools@15.35.0
           FLUTTER_BIN: flutter
+          # Opt-in assertion only; this does not itself isolate ports/processes.
+          # GitHub-hosted job VMs are dedicated and freshly provisioned.
+          E2E_DISPOSABLE_RUNNER: '1'
         run: bash apps/patient/tool/run_intake_e2e.sh

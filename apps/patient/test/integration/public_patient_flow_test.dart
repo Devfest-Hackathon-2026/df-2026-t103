@@ -439,13 +439,22 @@ void main() {
       _flowMarker('edit-save-start');
       await tap('編集内容を保存');
       _flowMarker('edit-save-tap-returned');
+      _flowMarker('edit-after-get-start');
       final afterEdit = await getIntake();
+      _flowMarker('edit-after-get-completed');
+      _flowMarker('edit-patch-observation-check-start');
       expect(client.patchRevisions, hasLength(1));
       expect(client.patchRevisions.single, previousRevision + 1);
+      _flowMarker('edit-patch-observation-check-completed');
+      _flowMarker('edit-next-question-observation-check-start');
       expect(client.nextQuestionRevisions, hasLength(1));
       expect(client.nextQuestionRevisions.single, previousRevision + 2);
+      _flowMarker('edit-next-question-observation-check-completed');
+      _flowMarker('edit-status-check-start');
       expect(afterEdit['revision'], client.nextQuestionRevisions.single);
       expect(afterEdit['status'], 'questioning');
+      _flowMarker('edit-status-check-completed');
+      _flowMarker('edit-answer-check-start');
       final editedQuestions = afterEdit['questions'] as List;
       final retainedQuestion = editedQuestions
           .whereType<Map<String, dynamic>>()
@@ -465,6 +474,8 @@ void main() {
         updatedAnswer['questionRevision'],
         savedAnswer['questionRevision'],
       );
+      _flowMarker('edit-answer-check-completed');
+      _flowMarker('edit-question-invalidation-check-start');
       for (final question in downstreamQuestions) {
         final invalidatedQuestion = editedQuestions
             .whereType<Map<String, dynamic>>()
@@ -484,6 +495,7 @@ void main() {
           reason: 'Invalidated branch answers must not remain in the intake.',
         );
       }
+      _flowMarker('edit-question-invalidation-check-completed');
       // Editing an early answer invalidates the old downstream branch. Follow
       // the real patient UI/API path through replacement questions and back to
       // review rather than assuming PATCH leaves the intake in review.

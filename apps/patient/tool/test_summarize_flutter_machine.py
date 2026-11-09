@@ -9,7 +9,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from summarize_flutter_machine import diagnose_partial, run_partial_diagnostic, summarize
+from summarize_flutter_machine import FLOW_MARKERS, diagnose_partial, run_partial_diagnostic, summarize
 
 
 RECOVERY = "patient retries a committed answer with the same key and body"
@@ -120,8 +120,10 @@ class SummarizerTest(unittest.TestCase):
             {"type": "print", "message": "edit-input-returned"},
             {"type": "print", "message": "edit-save-start"},
             {"type": "print", "message": "edit-save-tap-returned"},
+            *({"type": "print", "message": marker} for marker in FLOW_MARKERS if marker.startswith("edit-after-") or "-check-" in marker),
             {"type": "print", "message": "edit-open SECRET_NAME"},
             {"type": "print", "message": "edit-field-found SECRET_URL"},
+            {"type": "print", "message": "edit-after-get-completed SECRET_NAME"},
             {"type": "print", "message": "SECRET_NAME", "error": "SECRET_ERROR"},
             {"type": "print", "message": {"marker": "review"}},
         ]
@@ -141,9 +143,33 @@ class SummarizerTest(unittest.TestCase):
         self.assertIn("edit-input-returned=1", diagnostic)
         self.assertIn("edit-save-start=1", diagnostic)
         self.assertIn("edit-save-tap-returned=1", diagnostic)
+        for marker in FLOW_MARKERS:
+            if marker.startswith("edit-after-") or "-check-" in marker:
+                self.assertIn(f"{marker}=1", diagnostic)
         self.assertIn("review=0", diagnostic)
-        for secret in ("SECRET_NAME", "SECRET_URL", "SECRET_ERROR", "SECRET_RESULT", "unknown-secret-kind", "edit-open SECRET_NAME"):
+        for secret in ("SECRET_NAME", "SECRET_URL", "SECRET_ERROR", "SECRET_RESULT", "unknown-secret-kind", "edit-open SECRET_NAME", "edit-after-get-completed SECRET_NAME"):
             self.assertNotIn(secret, diagnostic)
+
+    def test_partial_diagnostic_counts_only_exact_allowlisted_markers(self):
+        events = [
+            {"type": "print", "message": marker}
+            for marker in FLOW_MARKERS
+        ] + [
+            {"type": "print", "message": "edit-after-get-completed-extra"},
+            {"type": "print", "message": "SECRET_TOKEN"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "machine.jsonl"
+            path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                diagnose_partial(path)
+        diagnostic = output.getvalue()
+        for marker in FLOW_MARKERS:
+            self.assertIn(f"{marker}=1", diagnostic)
+        self.assertIn("edit-after-get-completed=1", diagnostic)
+        self.assertNotIn("edit-after-get-completed-extra", diagnostic)
+        self.assertNotIn("SECRET_TOKEN", diagnostic)
 
     def test_partial_diagnostic_marks_truncated_output_incomplete(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -182,7 +208,7 @@ class SummarizerTest(unittest.TestCase):
             with contextlib.redirect_stdout(output):
                 diagnose_partial(path)
         self.assertIn("reporter_done_success_seen=yes", output.getvalue())
-        self.assertNotIn("completed=", output.getvalue())
+        self.assertNotIn(" completed=", output.getvalue())
         self.assertIn("testStart=0", output.getvalue())
         self.assertIn("testDone=0", output.getvalue())
 

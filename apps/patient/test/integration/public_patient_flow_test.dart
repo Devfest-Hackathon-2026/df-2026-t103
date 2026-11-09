@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,15 +23,71 @@ class _CaptureIntakeIdClient extends http.BaseClient {
 
   final http.Client inner;
   String? intakeId;
+  final patchRevisions = <int>[];
+  final nextQuestionRevisions = <int>[];
 
   @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) {
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (request.method == 'POST') {
       final match = RegExp(r'^/v1/intakes/([^/]+)/symptoms$')
           .firstMatch(request.url.path);
       if (match != null) intakeId = match.group(1);
     }
-    return inner.send(request);
+    final isAnswerPatch =
+        request.method == 'PATCH' &&
+        RegExp(r'^/v1/intakes/[^/]+/answers/[^/]+$').hasMatch(request.url.path);
+    final isNextQuestion =
+        request.method == 'POST' &&
+        RegExp(r'^/v1/intakes/[^/]+/next-question$').hasMatch(request.url.path);
+    final response = await inner.send(request);
+    if (!isAnswerPatch && !isNextQuestion) return response;
+
+    // Temporarily buffer at most 1 MiB while forwarding response chunks unchanged.
+    // The buffer is decoded only to extract a fixed schema field, then discarded;
+    // body content is never logged or retained after stream completion.
+    final bytes = BytesBuilder(copy: false);
+    var oversized = false;
+    final forwarded = response.stream.transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (chunk, sink) {
+          if (!oversized && bytes.length + chunk.length <= 1024 * 1024) {
+            bytes.add(chunk);
+          } else {
+            oversized = true;
+          }
+          sink.add(chunk);
+        },
+        handleError: (error, stack, sink) => sink.addError(error, stack),
+        handleDone: (sink) {
+          try {
+            final payload = oversized
+                ? null
+                : jsonDecode(utf8.decode(bytes.takeBytes()));
+            if (response.statusCode == 200 &&
+                payload is Map<String, dynamic> &&
+                payload['intakeRevision'] is int) {
+              (isAnswerPatch ? patchRevisions : nextQuestionRevisions).add(
+                payload['intakeRevision'] as int,
+              );
+            }
+          } catch (_) {
+            // The application remains responsible for reporting malformed API
+            // responses; observation must not alter its stream behavior.
+          }
+          sink.close();
+        },
+      ),
+    );
+    return http.StreamedResponse(
+      forwarded,
+      response.statusCode,
+      contentLength: response.contentLength,
+      request: response.request,
+      headers: response.headers,
+      isRedirect: response.isRedirect,
+      persistentConnection: response.persistentConnection,
+      reasonPhrase: response.reasonPhrase,
+    );
   }
 
   @override
@@ -40,6 +97,142 @@ class _CaptureIntakeIdClient extends http.BaseClient {
 void main() {
   const enabled = bool.fromEnvironment('RUN_INTAKE_UI_INTEGRATION');
   if (enabled) _LiveBinding();
+
+  test('revision observer forwards the original response stream', () async {
+    final inner = _SingleResponseClient(
+      http.StreamedResponse(
+        Stream<List<int>>.value(utf8.encode('{"intakeRevision":7}')),
+        200,
+      ),
+    );
+    final client = _CaptureIntakeIdClient(inner);
+    final response = await client.send(
+      http.Request(
+        'PATCH',
+        Uri.parse('http://127.0.0.1/v1/intakes/synthetic/answers/question'),
+      ),
+    );
+    expect(await response.stream.bytesToString(), '{"intakeRevision":7}');
+    expect(client.patchRevisions, [7]);
+    expect(client.nextQuestionRevisions, isEmpty);
+    client.close();
+  });
+
+  test(
+    'revision observer preserves response metadata and chunk boundaries',
+    () async {
+      final client = _CaptureIntakeIdClient(
+        _SingleResponseClient(
+          http.StreamedResponse(
+            Stream<List<int>>.fromIterable([
+              utf8.encode('{"intake'),
+              utf8.encode('Revision":8}'),
+            ]),
+            200,
+            headers: {'content-type': 'application/json'},
+            contentLength: 21,
+            reasonPhrase: 'OK',
+            isRedirect: true,
+            persistentConnection: false,
+          ),
+        ),
+      );
+      final response = await client.send(
+        http.Request(
+          'PATCH',
+          Uri.parse('http://127.0.0.1/v1/intakes/synthetic/answers/question'),
+        ),
+      );
+      final chunks = await response.stream.toList();
+      expect(
+        utf8.decode(chunks.expand((chunk) => chunk).toList()),
+        '{"intakeRevision":8}',
+      );
+      expect(chunks, [utf8.encode('{"intake'), utf8.encode('Revision":8}')]);
+      expect(response.statusCode, 200);
+      expect(response.headers, {'content-type': 'application/json'});
+      expect(response.contentLength, 21);
+      expect(response.reasonPhrase, 'OK');
+      expect(response.isRedirect, isTrue);
+      expect(response.persistentConnection, isFalse);
+      expect(client.patchRevisions, [8]);
+      client.close();
+    },
+  );
+
+  test(
+    'revision observer forwards stream errors without recording revision',
+    () async {
+      final client = _CaptureIntakeIdClient(
+        _SingleResponseClient(
+          http.StreamedResponse(
+            Stream<List<int>>.error(StateError('synthetic stream failure')),
+            200,
+          ),
+        ),
+      );
+      final response = await client.send(
+        http.Request(
+          'PATCH',
+          Uri.parse('http://127.0.0.1/v1/intakes/synthetic/answers/question'),
+        ),
+      );
+      await expectLater(
+        response.stream.drain<void>(),
+        throwsA(isA<StateError>()),
+      );
+      expect(client.patchRevisions, isEmpty);
+      client.close();
+    },
+  );
+
+  test('revision observer propagates response stream cancellation', () async {
+    var cancelled = false;
+    final source = Stream<List<int>>.multi((controller) {
+      controller.add(utf8.encode('{"intakeRevision":9}'));
+      controller.onCancel = () => cancelled = true;
+    });
+    final client = _CaptureIntakeIdClient(
+      _SingleResponseClient(http.StreamedResponse(source, 200)),
+    );
+    final response = await client.send(
+      http.Request(
+        'PATCH',
+        Uri.parse('http://127.0.0.1/v1/intakes/synthetic/answers/question'),
+      ),
+    );
+    await response.stream.listen((_) {}).cancel();
+    expect(cancelled, isTrue);
+    expect(client.patchRevisions, isEmpty);
+    client.close();
+  });
+
+  test(
+    'oversized response is forwarded but fails closed for revision',
+    () async {
+      final client = _CaptureIntakeIdClient(
+        _SingleResponseClient(
+          http.StreamedResponse(
+            Stream<List<int>>.fromIterable([
+              utf8.encode('{"intakeRevision":999,'),
+              List<int>.filled(1024 * 1024, 32),
+            ]),
+            200,
+          ),
+        ),
+      );
+      final response = await client.send(
+        http.Request(
+          'PATCH',
+          Uri.parse('http://127.0.0.1/v1/intakes/synthetic/answers/question'),
+        ),
+      );
+      final body = await response.stream.toBytes();
+      expect(body.length, greaterThan(1024 * 1024));
+      expect(client.patchRevisions, isEmpty);
+      client.close();
+    },
+  );
 
   testWidgets('public UI → real API → hospital receipt → logout', (
     tester,
@@ -247,7 +440,11 @@ void main() {
       await tap('編集内容を保存');
       _flowMarker('edit-save-tap-returned');
       final afterEdit = await getIntake();
-      expect(afterEdit['revision'], previousRevision + 1);
+      expect(client.patchRevisions, hasLength(1));
+      expect(client.patchRevisions.single, previousRevision + 1);
+      expect(client.nextQuestionRevisions, hasLength(1));
+      expect(client.nextQuestionRevisions.single, previousRevision + 2);
+      expect(afterEdit['revision'], client.nextQuestionRevisions.single);
       expect(afterEdit['status'], 'questioning');
       final editedQuestions = afterEdit['questions'] as List;
       final retainedQuestion = editedQuestions
@@ -424,4 +621,17 @@ void main() {
       await changes.close();
     }
   }, skip: !enabled);
+}
+
+class _SingleResponseClient extends http.BaseClient {
+  _SingleResponseClient(this.response);
+
+  final http.StreamedResponse response;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async =>
+      response;
+
+  @override
+  void close() {}
 }

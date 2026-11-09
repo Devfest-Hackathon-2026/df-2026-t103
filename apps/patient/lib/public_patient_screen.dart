@@ -600,8 +600,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       );
       if (result['answerId'] != body['questionId'] ||
           result['intakeRevision'] is! int ||
-          (result['intakeRevision'] as int) <=
-              (body['expectedIntakeRevision'] as int)) {
+          result['intakeRevision'] !=
+              (body['expectedIntakeRevision'] as int) + 1) {
         throw const PatientRequestFailure('INVALID_RESPONSE');
       }
     } on PatientRequestFailure catch (e) {
@@ -1116,7 +1116,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
             _answerKeyExpiresAt != null &&
                     !api.now().isBefore(_answerKeyExpiresAt!)
                 ? '回答の保存結果を確認できません。再送可能期間が終了したため再送を停止しました。問診を続けず、サポートへお問い合わせください。'
-                : '回答の保存結果を確認できません。同じ回答を安全に再送して保存状態を再確認できます。',
+                : '回答の保存結果を確認できません。同じ回答を再送して保存状態を再確認できます。',
           ),
         )
       else

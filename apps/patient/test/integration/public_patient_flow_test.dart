@@ -25,7 +25,10 @@ void main() {
     final changes = StreamController<void>.broadcast(sync: true);
     var epoch = Object();
     String? patientToken;
-    final symptom = '合成問診-${DateTime.now().toUtc().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
+    final symptom =
+        '合成問診-${DateTime.now().toUtc().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
+    final answerFreeText =
+        '合成自由回答-${DateTime.now().toUtc().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
     Future<String> login(String email, String password) async {
       final response = await client.post(
         Uri.parse(
@@ -117,6 +120,8 @@ void main() {
       await tester.tap(find.text('お腹').last);
       await tester.pumpAndSettle();
       await tap('保存して質問へ進む');
+      var submittedFreeText = false;
+      String? selectedOptionLabel;
       for (var step = 0; step < 20; step++) {
         await waitFor(
           find.byWidgetPredicate(
@@ -124,8 +129,20 @@ void main() {
           ),
         );
         if (find.text('問診の内容を確認しました').evaluate().isNotEmpty) break;
-        await tap('わからない');
+        if (!submittedFreeText) {
+          final answerField = find.byKey(const ValueKey('回答（任意）'));
+          await tester.enterText(answerField, answerFreeText);
+          final optionButton = find.byType(FilledButton).first;
+          final optionText =
+              tester.widget<FilledButton>(optionButton).child! as Text;
+          selectedOptionLabel = optionText.data!;
+          await tap(selectedOptionLabel);
+          submittedFreeText = true;
+        } else {
+          await tap('わからない');
+        }
       }
+      expect(submittedFreeText, isTrue);
       await waitFor(find.text('問診の内容を確認しました'));
       expect(find.text(symptom), findsOneWidget);
       await tap('問診の内容を確認しました');
@@ -149,10 +166,7 @@ void main() {
       for (var page = 0; page < 5; page++) {
         final uri = Uri.parse(
           'http://127.0.0.1:8080/v1/hospitals/$facility/deliveries',
-        ).replace(queryParameters: {
-          'limit': '10',
-          'cursor': ?cursor,
-        });
+        ).replace(queryParameters: {'limit': '10', 'cursor': ?cursor});
         final inbox = await tester.runAsync(
           () => client.get(uri, headers: headers),
         );
@@ -203,11 +217,23 @@ void main() {
       final matchedBody = matchingDetails.single;
       expect(matchedBody['questionnaireSnapshot'], isA<Map>());
       final snapshot = matchedBody['questionnaireSnapshot'] as Map;
-      expect(
-        (snapshot['chiefComplaint'] as Map)['value'],
-        symptom,
-      );
+      expect((snapshot['chiefComplaint'] as Map)['value'], symptom);
       expect(snapshot['bodyLocations'], contains('abdomen'));
+      final sections = snapshot['sections'] as Map;
+      final freeTextSections = sections.entries.where((entry) {
+        final section = entry.value;
+        return section is Map &&
+            section['answerState'] == 'answered' &&
+            section['value'] is String &&
+            (section['value'] as String).contains(answerFreeText);
+      }).toList();
+      expect(
+        freeTextSections,
+        hasLength(1),
+        reason: 'The selected answer and free text must be in one answered topic section.',
+      );
+      final answerSection = freeTextSections.single.value as Map;
+      expect(answerSection['value'], '$selectedOptionLabel　$answerFreeText');
       await tap('ログアウト');
       await waitFor(find.text('ログイン'));
       expect(find.text(symptom), findsNothing);

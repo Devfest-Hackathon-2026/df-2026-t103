@@ -95,6 +95,35 @@ void main() {
     },
   );
   test(
+    'public registration sends App Check without Firebase ID token',
+    () async {
+      final epoch = Object();
+      final api = PublicPatientApi(
+        origin: 'https://api.example.test',
+        session: () => epoch,
+        tokens: () async => (auth: null, appCheck: 'synthetic-appcheck'),
+        client: MockClient((request) async {
+          expect(request.url.path, '/v1/auth/register');
+          expect(request.headers.containsKey('authorization'), isFalse);
+          expect(request.headers['x-firebase-appcheck'], 'synthetic-appcheck');
+          expect(request.headers['idempotency-key'], 'same-attempt');
+          return http.Response('{"uid":"synthetic-user"}', 201);
+        }),
+      );
+      await api.request(
+        'POST',
+        '/auth/register',
+        authenticated: false,
+        key: 'same-attempt',
+        body: {'email': 'synthetic@example.test'},
+      );
+      await expectLater(
+        api.request('GET', '/me'),
+        throwsA(isA<PatientRequestFailure>()),
+      );
+    },
+  );
+  test(
     'auth changes during credentials or response reject stale data',
     () async {
       var epoch = Object();

@@ -305,6 +305,212 @@ Future<void> _openQuestion(
 
 void main() {
   testWidgets(
+    'first-time registration uses public documents, consent and API',
+    (tester) async {
+      final epoch = Object();
+      String? auth;
+      var registeredBody = <String, dynamic>{};
+      String? registrationKey;
+      String? header(http.BaseRequest request, String name) => request
+          .headers
+          .entries
+          .where((entry) => entry.key.toLowerCase() == name.toLowerCase())
+          .map((entry) => entry.value)
+          .firstOrNull;
+      final client = MockClient((request) async {
+        expect(header(request, 'x-firebase-appcheck'), 'synthetic-appcheck');
+        if (request.url.path == '/v1/public/legal-documents') {
+          expect(header(request, 'authorization'), isNull);
+          return http.Response(
+            jsonEncode({
+              'requiredConsents': [
+                'terms_of_service',
+                'privacy_policy_ack',
+                'health_data_collection',
+              ],
+              'documents': {
+                for (final type in [
+                  'terms_of_service',
+                  'privacy_policy_ack',
+                  'health_data_collection',
+                ])
+                  type: {
+                    'text': '合成文書 $type',
+                    'version': 'synthetic-v1',
+                    'documentHash': 'synthetic-hash',
+                  },
+              },
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path == '/v1/auth/register') {
+          expect(header(request, 'authorization'), isNull);
+          registrationKey = header(request, 'idempotency-key');
+          registeredBody = jsonDecode(request.body) as Map<String, dynamic>;
+          auth = 'synthetic-auth';
+          return http.Response('{"uid":"synthetic-user"}', 201);
+        }
+        if (request.url.path == '/v1/me') {
+          expect(header(request, 'authorization'), 'Bearer synthetic-auth');
+          return http.Response(
+            '{"emailVerified":false,"accountStatus":"onboarding_pending"}',
+            200,
+          );
+        }
+        fail('Unexpected request ${request.url}');
+      });
+      addTearDown(client.close);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PublicPatientScreen(
+            api: PublicPatientApi(
+              origin: 'https://api.example.test',
+              client: client,
+              session: () => epoch,
+              tokens: () async => (auth: auth, appCheck: 'synthetic-appcheck'),
+            ),
+            signIn: (_, _) async {},
+            signOut: () async {},
+            resetPassword: (_) async {},
+            changes: const Stream<void>.empty(),
+          ),
+        ),
+      );
+      await tester.tap(find.text('初めてご利用の方（新規登録）'));
+      await tester.pumpAndSettle();
+      expect(find.text('合成文書 terms_of_service'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('メールアドレス')),
+        'synthetic@example.test',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('パスワード（8〜128文字）')),
+        'Synthetic1234',
+      );
+      for (final label in [
+        '利用規約に同意する',
+        'プライバシーについてに同意する',
+        '健康情報の取得についてに同意する',
+      ]) {
+        await tester.ensureVisible(find.text(label));
+        await tester.tap(find.text(label));
+        await tester.pumpAndSettle();
+      }
+      await tester.ensureVisible(find.text('同意してアカウントを登録'));
+      await tester.tap(find.text('同意してアカウントを登録'));
+      await tester.pumpAndSettle();
+      expect(registrationKey, isNotEmpty);
+      expect(registeredBody['email'], 'synthetic@example.test');
+      expect(
+        (registeredBody['consents'] as Map).keys,
+        containsAll([
+          'terms_of_service',
+          'privacy_policy_ack',
+          'health_data_collection',
+        ]),
+      );
+      expect(find.text('メールアドレスの確認'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'uncertain registration can go to login without replay or clearing input',
+    (tester) async {
+      final epoch = Object();
+      var registrationPosts = 0;
+      final client = MockClient((request) async {
+        if (request.url.path == '/v1/public/legal-documents') {
+          return http.Response(
+            jsonEncode({
+              'requiredConsents': [
+                'terms_of_service',
+                'privacy_policy_ack',
+                'health_data_collection',
+              ],
+              'documents': {
+                for (final type in [
+                  'terms_of_service',
+                  'privacy_policy_ack',
+                  'health_data_collection',
+                ])
+                  type: {
+                    'text': '合成文書 $type',
+                    'version': 'synthetic-v1',
+                    'documentHash': 'synthetic-hash',
+                  },
+              },
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path == '/v1/auth/register') {
+          registrationPosts++;
+          return http.Response('{}', 503);
+        }
+        fail('Unexpected request ${request.url}');
+      });
+      addTearDown(client.close);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PublicPatientScreen(
+            api: PublicPatientApi(
+              origin: 'https://api.example.test',
+              client: client,
+              session: () => epoch,
+              tokens: () async => (auth: null, appCheck: 'synthetic-appcheck'),
+            ),
+            signIn: (_, _) async {},
+            signOut: () async {},
+            resetPassword: (_) async {},
+            changes: const Stream<void>.empty(),
+          ),
+        ),
+      );
+      await tester.tap(find.text('初めてご利用の方（新規登録）'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('メールアドレス')),
+        'synthetic@example.test',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('パスワード（8〜128文字）')),
+        'Synthetic1234',
+      );
+      for (final label in [
+        '利用規約に同意する',
+        'プライバシーについてに同意する',
+        '健康情報の取得についてに同意する',
+      ]) {
+        await tester.ensureVisible(find.text(label));
+        await tester.tap(find.text(label));
+        await tester.pumpAndSettle();
+      }
+      await tester.ensureVisible(find.text('同意してアカウントを登録'));
+      await tester.tap(find.text('同意してアカウントを登録'));
+      await tester.pumpAndSettle();
+      expect(registrationPosts, 1);
+      expect(find.textContaining('登録結果を確認できません'), findsOneWidget);
+
+      await tester.ensureVisible(find.text('登録を再送せずログインへ'));
+      await tester.tap(find.text('登録を再送せずログインへ'));
+      await tester.pumpAndSettle();
+      expect(find.text('ログインに切り替えますか？'), findsOneWidget);
+      expect(find.textContaining('登録POSTは再送しません'), findsOneWidget);
+      await tester.tap(find.text('ログインへ進む'));
+      await tester.pumpAndSettle();
+
+      expect(registrationPosts, 1);
+      final fields = tester.widgetList<TextField>(find.byType(TextField));
+      expect(fields.first.controller!.text, 'synthetic@example.test');
+      expect(fields.last.controller!.text, 'Synthetic1234');
+      expect(find.textContaining('登録結果を確認できません'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
     'posts optional freeText separately and clears it on question change',
     (tester) async {
       final backend = _IntakeBackend();
@@ -689,7 +895,7 @@ void main() {
     expect(find.text('保存済みの回答'), findsNothing);
     expect(find.byKey(const ValueKey('保存済み回答の補足')), findsNothing);
     expect(
-      find.text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
+      find.text('アカウントをお持ちの方はログインしてください。初めての方は新規登録へ進めます。'),
       findsOneWidget,
     );
   });
@@ -1006,7 +1212,7 @@ void main() {
 
     expect(find.text('合成の質問q1'), findsNothing);
     expect(
-      find.text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
+      find.text('アカウントをお持ちの方はログインしてください。初めての方は新規登録へ進めます。'),
       findsOneWidget,
     );
   });
@@ -1030,7 +1236,7 @@ void main() {
 
     expect(find.text('合成の質問q2'), findsNothing);
     expect(
-      find.text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
+      find.text('アカウントをお持ちの方はログインしてください。初めての方は新規登録へ進めます。'),
       findsOneWidget,
     );
   });
@@ -1049,7 +1255,7 @@ void main() {
 
     expect(find.text('合成の質問q1'), findsNothing);
     expect(
-      find.text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
+      find.text('アカウントをお持ちの方はログインしてください。初めての方は新規登録へ進めます。'),
       findsOneWidget,
     );
   });

@@ -23,6 +23,7 @@ import {
 } from "../helpers/emulator.js";
 import { AUDIT_ACTIONS } from "../../src/domain/auditEvents.js";
 import type { DeliveryDoc } from "../../src/domain/firestoreDocs.js";
+import { idempotencyKeyHash } from "../../src/lib/idempotency.js";
 
 /**
  * 主要E2E（docs/03 §10 E2E-001〜006）のサーバ側観点を
@@ -95,6 +96,7 @@ async function seedFacilityConsentState(
  */
 class CommitBombFirestore {
   bombAfterWrites = false;
+  injectedFailures = 0;
 
   constructor(private readonly inner: Firestore) {}
 
@@ -117,6 +119,7 @@ class CommitBombFirestore {
     return this.inner.runTransaction(async (tx) => {
       const result = await updateFunction(tx);
       if (this.bombAfterWrites) {
+        this.injectedFailures += 1;
         throw new Error("injected pre-commit failure");
       }
       return result;
@@ -414,6 +417,68 @@ describe("E2E server-side perspectives / Firestore エミュレータ結合", ()
       selectedBodyLocations,
       "1週間より前　" + answerFreeText,
     );
+  });
+
+  it("回答の全書き込みをステージ後に失敗しても部分commitせず同一キーで再送できる (#298)", async () => {
+    await seedAccount(deps, PATIENT);
+    await seedCurrentConsents(deps, PATIENT);
+    const created = await app.inject({
+      method: "POST", url: "/v1/intakes",
+      headers: { ...authHeader(PATIENT), ...idem("rollback-create") },
+      payload: { locale: "ja-JP" },
+    });
+    expect(created.statusCode).toBe(201);
+    const { intakeId } = created.json() as { intakeId: string };
+    const symptoms = await app.inject({
+      method: "POST", url: `/v1/intakes/${intakeId}/symptoms`,
+      headers: authHeader(PATIENT),
+      payload: { initialSymptomText: "合成テスト", bodyLocations: ["head"], expectedIntakeRevision: 1 },
+    });
+    expect(symptoms.statusCode).toBe(200);
+    const question = await app.inject({
+      method: "POST", url: `/v1/intakes/${intakeId}/next-question`,
+      headers: authHeader(PATIENT), payload: { expectedIntakeRevision: 2 },
+    });
+    expect(question.statusCode).toBe(200);
+    const { questionId } = (question.json() as { question: { questionId: string } }).question;
+    const intakeRef = deps.firestore.doc(`intakes/${intakeId}`);
+    const questionRef = intakeRef.collection("questions").doc(questionId);
+    const answerRef = intakeRef.collection("answers").doc(questionId);
+    const key = "answer-rollback";
+    const ledgerRef = deps.firestore.doc(`idempotencyKeys/${idempotencyKeyHash(deps, "intake_answer", PATIENT, key)}`);
+    const beforeIntake = (await intakeRef.get()).data();
+    const beforeQuestion = (await questionRef.get()).data();
+    expect(beforeIntake?.revision).toBe(3);
+    expect(beforeQuestion?.status).not.toBe("answered");
+    expect((await answerRef.get()).exists).toBe(false);
+    expect((await ledgerRef.get()).exists).toBe(false);
+
+    const payload = { questionId, questionRevision: 1, selectedCodes: ["LT_WEEK"], freeText: "合成回答", answerState: "answered", expectedIntakeRevision: 3 };
+    const request = { method: "POST" as const, url: `/v1/intakes/${intakeId}/answers`, headers: { ...authHeader(PATIENT), ...idem(key) }, payload };
+    const bomb = new CommitBombFirestore(deps.firestore);
+    bomb.bombAfterWrites = true;
+    deps.db = bomb;
+    const failed = await app.inject(request);
+    expect(failed.statusCode).toBe(500);
+    expect(bomb.injectedFailures).toBe(1);
+    expect((await intakeRef.get()).data()).toEqual(beforeIntake);
+    expect((await questionRef.get()).data()).toEqual(beforeQuestion);
+    expect((await answerRef.get()).exists).toBe(false);
+    expect((await ledgerRef.get()).exists).toBe(false);
+
+    deps.db = deps.flakyDb;
+    const saved = await app.inject(request);
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toEqual({ answerId: questionId, intakeRevision: 4 });
+    expect((await intakeRef.get()).data()?.revision).toBe(4);
+    expect((await questionRef.get()).data()?.status).toBe("answered");
+    expect((await answerRef.get()).data()).toMatchObject({ questionId, selectedCodes: ["LT_WEEK"], freeText: "合成回答", answerState: "answered" });
+    expect((await ledgerRef.get()).data()).toMatchObject({ status: "completed", result: saved.json() });
+    const replay = await app.inject(request);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(saved.json());
+    expect((await intakeRef.get()).data()?.revision).toBe(4);
+    expect((await intakeRef.collection("answers").get()).size).toBe(1);
   });
 
   it("E2E-002: 通信断リトライで回答が二重記録されない（同一再送は409→最新で1件）", async () => {

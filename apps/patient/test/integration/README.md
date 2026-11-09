@@ -1,5 +1,13 @@
 # メール登録のローカル結合テスト
 
+初回登録の実API/Auth確認は、リポジトリルートから次を実行します。
+
+```sh
+nix develop --command bash apps/patient/tool/run_public_registration_e2e.sh
+```
+
+使い捨て `demo-mmr-dev` のAuth/Firestore Emulatorとloopback限定の実ローカルAPIを起動し、合成法務文書で登録API→Authサインイン→メール確認OOB適用→`/v1/me.emailVerified`を検証します。終了時に子プロセスを停止し、成功時の一時ログは削除します。失敗時は診断用一時ログを残します。実クラウドや外部メール配送へ接続しません。
+
 このテストは合成アカウントと同意データを作成します。**必ず使い捨ての Firebase Emulator と、すべての接続先をそのエミュレータに向けたローカル API だけで実行してください。** 共有環境・実クラウド・実データに対して実行しないでください。Auth ユーザーは可能な限り削除しますが、API の Firestore データは残るため、テスト後は使い捨てのエミュレータ環境ごと破棄してください。
 
 API を `127.0.0.1:8080`、Auth Emulator を `127.0.0.1:9099`、Firestore Emulator を `127.0.0.1:8081` で起動します。API は `demo-mmr-dev` を使い、Firebase サービスをすべてエミュレータに向けます。実行前にエミュレータと API が起動完了していることを確認してください。

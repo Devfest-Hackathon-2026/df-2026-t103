@@ -24,6 +24,7 @@ class PatientRequestFailure implements Exception {
     'LEGAL_UNAVAILABLE' => '利用文書を確認できません。運営者による文書の準備が必要です。',
     '500' || '503' => 'サービスの準備状況を確認できません。時間をおいて再試行してください。',
     '401' => 'ログインの有効期限が切れました。ログインし直してください。',
+    'SIGN_IN_AFTER_REGISTER' => '登録は完了しました。入力したメールアドレスとパスワードでログインしてください。',
     '403' => 'この操作を行う権限がありません。利用状態を確認してください。',
     '409' => '保存状態が更新されています。「保存状態を再確認」で最新状態を取得してください。',
     '412' => '現在の利用状態では操作できません。同意・問診・施設の状態を再確認してください。',
@@ -53,7 +54,7 @@ class PublicPatientApi {
   }) : now = clock ?? DateTime.now;
   final String origin;
   final http.Client client;
-  final Future<({String auth, String appCheck})> Function() tokens;
+  final Future<({String? auth, String appCheck})> Function() tokens;
   final Object Function() session;
   final PatientAnalytics analytics;
   final DateTime Function() now;
@@ -63,12 +64,16 @@ class PublicPatientApi {
     String path, {
     Map<String, Object?>? body,
     String? key,
+    bool authenticated = true,
   }) async {
     if (!RegExp(r'^/[A-Za-z0-9_/-]+$').hasMatch(path)) {
       throw const PatientRequestFailure('INVALID_PATH');
     }
     final owner = session();
     final credential = await tokens();
+    if (authenticated && credential.auth == null) {
+      throw const PatientRequestFailure('401');
+    }
     if (!identical(owner, session())) throw const PatientRequestFailure('401');
     final abort = Completer<void>();
     final req =
@@ -79,7 +84,8 @@ class PublicPatientApi {
           )
           ..followRedirects = false
           ..headers.addAll({
-            'Authorization': 'Bearer ${credential.auth}',
+            if (credential.auth != null)
+              'Authorization': 'Bearer ${credential.auth}',
             'X-Firebase-AppCheck': credential.appCheck,
           });
     if (key != null) req.headers['Idempotency-Key'] = key;

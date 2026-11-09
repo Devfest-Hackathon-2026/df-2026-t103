@@ -64,10 +64,9 @@ class PublicPatientConnection {
       tokens: () async {
         final user = FirebaseAuth.instance.currentUser;
         connection._syncIdentity(user);
-        if (user == null) throw const PatientRequestFailure('401');
-        final auth = await user.getIdToken();
+        final auth = await user?.getIdToken();
         final check = await FirebaseAppCheck.instance.getToken();
-        if (auth == null || check == null || check.isEmpty) {
+        if (check == null || check.isEmpty) {
           throw const PatientRequestFailure('401');
         }
         return (auth: auth, appCheck: check);

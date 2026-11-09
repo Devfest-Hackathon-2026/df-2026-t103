@@ -87,8 +87,11 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   Map<String, dynamic> _legal = {};
   final _accepted = <String>{};
   String? _consentKey;
+  String? _registrationKey;
+  String? _registrationRecoveryNotice;
   String _step = 'login';
   bool _busy = false,
+      _firstRegistration = false,
       _answerAttempted = false,
       _answerUncertain = false,
       _reviewed = false,
@@ -173,6 +176,9 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _legal = {};
     _accepted.clear();
     _consentKey = null;
+    _registrationKey = null;
+    _registrationRecoveryNotice = null;
+    _firstRegistration = false;
     for (final field in _profileFields.values) {
       field.clear();
     }
@@ -309,7 +315,11 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
 
   Future<void> _loadRegistrationDocuments() async {
     final generation = _generation;
-    final response = await api.request('GET', '/public/legal-documents');
+    final response = await api.request(
+      'GET',
+      '/public/legal-documents',
+      authenticated: false,
+    );
     final required = response['requiredConsents'];
     final documents = response['documents'];
     const baseline = {
@@ -346,6 +356,103 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       _accepted.clear();
       _consentKey = null;
       _step = 'consent';
+    });
+  }
+
+  Future<void> _registerAccount() async {
+    if (_legal.isEmpty || !_accepted.containsAll(_legal.keys)) {
+      throw const PatientRequestFailure('412');
+    }
+    if (_email.text.trim().isEmpty ||
+        _email.text.trim().length > 254 ||
+        _password.text.length < 8 ||
+        _password.text.length > 128) {
+      throw const PatientRequestFailure('400');
+    }
+    _registrationKey ??= patientOperationKey();
+    try {
+      await api.request(
+        'POST',
+        '/auth/register',
+        authenticated: false,
+        key: _registrationKey,
+        body: {
+          'email': _email.text.trim(),
+          'password': _password.text,
+          'locale': 'ja-JP',
+          'consents': {
+            for (final entry in _legal.entries)
+              entry.key: {
+                'accepted': true,
+                'documentVersion': entry.value['version'],
+              },
+          },
+        },
+      );
+    } on PatientRequestFailure catch (error) {
+      // A definitive validation/consent rejection did not create an account;
+      // allow correction with a fresh key. For an unknown network outcome,
+      // retain both this key and the now-locked request fields for safe replay.
+      if (error.code == '400' || error.code == '412') {
+        _registrationKey = null;
+        _registrationRecoveryNotice = null;
+      } else if (error.code == '409') {
+        _registrationRecoveryNotice = '登録を完了できませんでした。既存アカウントの場合は、ログインをお試しください。';
+      } else {
+        _registrationRecoveryNotice =
+            '登録結果を確認できません。登録済みの可能性があります。再試行する場合は同じ入力・同じキーを使います。';
+      }
+      rethrow;
+    }
+    _registrationRecoveryNotice =
+        '登録は完了しました。ログインに失敗した場合は、同じメールアドレスとパスワードでログインできます。';
+    try {
+      await widget.signIn(_email.text.trim(), _password.text);
+      _password.clear();
+      await _resumeRegistration();
+    } catch (_) {
+      _registrationRecoveryNotice =
+          '登録は完了しましたが、自動ログインを確認できませんでした。同じメールアドレスとパスワードでログインしてください。';
+      throw const PatientRequestFailure('SIGN_IN_AFTER_REGISTER');
+    }
+  }
+
+  Future<void> _beginRegistration() async {
+    _firstRegistration = true;
+    if (_registrationKey != null && _legal.isNotEmpty) {
+      if (mounted) setState(() => _step = 'consent');
+      return;
+    }
+    await _loadRegistrationDocuments();
+  }
+
+  Future<void> _returnToLogin() async {
+    if (_registrationKey != null) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('ログインに切り替えますか？'),
+          content: Text(
+            '${_registrationRecoveryNotice ?? '登録APIの結果を確認できません。'} '
+            'ログインへ進んでも登録POSTは再送しません。メールアドレスとパスワードはこの画面内に保持します。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('登録画面に戻る'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('ログインへ進む'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true || !mounted) return;
+    }
+    setState(() {
+      _step = 'login';
+      _error = null;
     });
   }
 
@@ -1037,9 +1144,9 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     Object? questionId,
   ) {
     if (questions is! List) return null;
-    final matching = questions
-        .whereType<Map<String, dynamic>>()
-        .where((item) => item['questionId'] == questionId);
+    final matching = questions.whereType<Map<String, dynamic>>().where(
+      (item) => item['questionId'] == questionId,
+    );
     return matching.length == 1 ? matching.single : null;
   }
 
@@ -1384,7 +1491,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       );
       final editingThisAnswer =
           _editingAnswer?['questionId'] == raw['questionId'];
-      final q = editingThisAnswer &&
+      final q =
+          editingThisAnswer &&
               _latestQuestionForAnswer(questions, raw['questionId']) != null
           ? _latestQuestionForAnswer(questions, raw['questionId'])
           : question.length == 1
@@ -1563,7 +1671,9 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
       ),
       const SizedBox(height: 12),
-      const Text('発行されたアカウントでログインしてください。未完了の登録手続きはログイン後に案内します。'),
+      const Text('アカウントをお持ちの方はログインしてください。初めての方は新規登録へ進めます。'),
+      if (_registrationRecoveryNotice != null)
+        Semantics(liveRegion: true, child: Text(_registrationRecoveryNotice!)),
       _field('メールアドレス', _email),
       _field('パスワード', _password, secret: true),
       FilledButton(onPressed: _busy ? null : _login, child: const Text('ログイン')),
@@ -1586,6 +1696,10 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
                 }
               }),
         child: const Text('パスワードを再設定'),
+      ),
+      TextButton(
+        onPressed: _busy ? null : () => _run(_beginRegistration),
+        child: const Text('初めてご利用の方（新規登録）'),
       ),
     ],
     'verify' => [
@@ -1612,6 +1726,20 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
       ),
       const Text('各文書を読み、同意する項目を選んでください。医療機関への送信は、問診後に別途確認します。'),
+      if (_firstRegistration) ...[
+        if (_registrationRecoveryNotice != null)
+          Semantics(
+            liveRegion: true,
+            child: Text(_registrationRecoveryNotice!),
+          ),
+        _field('メールアドレス', _email, readOnly: _registrationKey != null),
+        _field(
+          'パスワード（8〜128文字）',
+          _password,
+          secret: true,
+          readOnly: _registrationKey != null,
+        ),
+      ],
       for (final entry in _legal.entries) ...[
         const SizedBox(height: 20),
         Text(
@@ -1622,7 +1750,10 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         CheckboxListTile(
           title: Text('${_legalLabels[entry.key]}に同意する'),
           value: _accepted.contains(entry.key),
-          onChanged: _busy || _consentKey != null
+          onChanged:
+              _busy ||
+                  _consentKey != null ||
+                  (_firstRegistration && _registrationKey != null)
               ? null
               : (value) => setState(() {
                   if (value == true) {
@@ -1634,10 +1765,15 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         ),
       ],
       _button(
-        '同意して登録を続ける',
-        _submitRegistrationConsents,
+        _firstRegistration ? '同意してアカウントを登録' : '同意して登録を続ける',
+        _firstRegistration ? _registerAccount : _submitRegistrationConsents,
         enabled: _legal.isNotEmpty && _accepted.containsAll(_legal.keys),
       ),
+      if (_firstRegistration)
+        TextButton(
+          onPressed: _busy ? null : _returnToLogin,
+          child: const Text('登録を再送せずログインへ'),
+        ),
     ],
     'profile' => [
       const Text(

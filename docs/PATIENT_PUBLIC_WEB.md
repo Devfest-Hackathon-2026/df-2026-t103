@@ -1,6 +1,6 @@
 # 患者Webの公開接続と配信
 
-公開接続の入口は `apps/patient/lib/main_public.dart`。登録・メール認証・同意・プロフィール完了済みの確認用アカウントが必要です。既存の `main.dart` はローカルエミュレータ用です。
+公開接続の入口は `apps/patient/lib/main_public.dart`。初回利用者はログイン画面から新規登録へ進み、公開APIの最新規約を確認して必須同意した後に登録します。登録API成功後にFirebase Authでサインインし、メール確認と残りのオンボーディングを行います。既存の `main.dart` はローカルエミュレータ用です。
 
 指定プロジェクトは `project-7efcc4c4-6c86-490c-ba5`、Hostingサイトは `moshimoshi-patient-842827776169` です。
 公開先は https://moshimoshi-patient-842827776169.web.app です。サイトの存在やビルド成功だけでは実接続の受入完了とは扱いません。

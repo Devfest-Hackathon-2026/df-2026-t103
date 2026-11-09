@@ -14,10 +14,10 @@ const input: QuestionGenInput = {
   maxQuestions: 1,
 };
 
-function adapter(): VertexAiLlmAdapter {
+function adapter(location = "us-central1"): VertexAiLlmAdapter {
   return new VertexAiLlmAdapter({
     model: "synthetic-test-model",
-    location: "us-central1",
+    location,
     projectId: "synthetic-test-project",
     timeoutMs: 1000,
   }, async () => "synthetic-access-token");
@@ -28,6 +28,25 @@ afterEach(() => {
 });
 
 describe("VertexAiLlmAdapter (synthetic fetch only)", () => {
+  it.each([
+    ["global", "aiplatform.googleapis.com"],
+    ["asia-northeast1", "asia-northeast1-aiplatform.googleapis.com"],
+    ["us-central1", "us-central1-aiplatform.googleapis.com"],
+  ])("%sの公式ホストとlocationパスへADC付きで送信する", async (location, host) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("synthetic failure", { status: 503 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(adapter(location).generateQuestions(input)).rejects.toMatchObject({ upstreamStatus: 503 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `https://${host}/v1/projects/synthetic-test-project/locations/${location}/publishers/google/models/synthetic-test-model:generateContent`,
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer synthetic-access-token" });
+  });
+
   it("症状文と身体部位を独立した入力フィールドとして送信し、応答を読む", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(

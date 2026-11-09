@@ -14,6 +14,7 @@ locals {
     "SERVER_HMAC_SECRET",
     "INTERNAL_JOB_TOKEN",
     "GOOGLE_PLACES_API_KEY",
+    # Legacy box retained to avoid deleting an existing secret; no runtime access.
     "VERTEX_AI_API_KEY",
   ]
 }

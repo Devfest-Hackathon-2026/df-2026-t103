@@ -64,8 +64,6 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === "true"),
-  /** Vertex AI APIキー（Secret Managerから注入）。 */
-  VERTEX_AI_API_KEY: z.string().optional(),
   /** 採用モデル（安価・高効率を既定。変更は審査済み版で管理）。 */
   VERTEX_AI_MODEL: z.string().default("gemini-2.5-flash-lite"),
   /** リージョン（PHIは国内処理）。 */
@@ -124,7 +122,6 @@ export type AppConfig = Readonly<{
   ocrTasksOidcSa: string | undefined;
   intakeDraftTtlDays: number;
   aiIntakeEnabled: boolean;
-  vertexAiApiKey: string | undefined;
   vertexAiModel: string;
   vertexAiLocation: string;
   vertexAiTimeoutMs: number;
@@ -271,7 +268,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ocrTasksOidcSa: parsed.OCR_TASKS_OIDC_SA,
     intakeDraftTtlDays: parsed.INTAKE_DRAFT_TTL_DAYS,
     aiIntakeEnabled: parsed.AI_INTAKE_ENABLED,
-    vertexAiApiKey: parsed.VERTEX_AI_API_KEY,
     vertexAiModel: parsed.VERTEX_AI_MODEL,
     vertexAiLocation: parsed.VERTEX_AI_LOCATION,
     vertexAiTimeoutMs: parsed.VERTEX_AI_TIMEOUT_MS,

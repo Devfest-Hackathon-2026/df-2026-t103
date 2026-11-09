@@ -58,18 +58,16 @@ async function main(): Promise<void> {
           },
         }
       : new CloudTasksOcrQueue(config),
-    // APIキーが未注入（Secret Manager未設定）の環境ではdummy。
-    // aiIntakeEnabled=false 既定では呼ばれず、呼ばれても固定質問へ戻る。
-    llmAdapter:
-      config.vertexAiApiKey !== undefined && config.vertexAiApiKey !== ""
-        ? new VertexAiLlmAdapter({
-            apiKey: config.vertexAiApiKey,
-            model: config.vertexAiModel,
-            location: config.vertexAiLocation,
-            projectId: config.projectId,
-            timeoutMs: config.vertexAiTimeoutMs,
-          })
-        : new DummyLlmAdapter(),
+    // Emulator runs never acquire cloud credentials. Production uses its
+    // attached runtime SA; AI approval gates still control every LLM call.
+    llmAdapter: config.emulator
+      ? new DummyLlmAdapter()
+      : new VertexAiLlmAdapter({
+          model: config.vertexAiModel,
+          location: config.vertexAiLocation,
+          projectId: config.projectId,
+          timeoutMs: config.vertexAiTimeoutMs,
+        }),
     placesGateway:
       config.googlePlacesApiKey !== undefined && config.googlePlacesApiKey !== ""
         ? new GooglePlacesGateway(config.googlePlacesApiKey)

@@ -77,3 +77,10 @@ resource "google_cloud_run_v2_service_iam_member" "api_browser_invoker" {
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
+
+# Only the API generates intake questions. No worker/deployer Vertex role.
+resource "google_project_iam_member" "api_vertex" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.api_run.email}"
+}

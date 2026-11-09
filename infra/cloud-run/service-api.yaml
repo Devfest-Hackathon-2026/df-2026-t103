@@ -85,11 +85,6 @@ spec:
                 secretKeyRef:
                   name: GOOGLE_PLACES_API_KEY
                   key: latest
-            - name: VERTEX_AI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: VERTEX_AI_API_KEY
-                  key: latest
   traffic:
     - percent: 100
       latestRevision: true

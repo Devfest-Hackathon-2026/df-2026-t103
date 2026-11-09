@@ -166,6 +166,9 @@ export function registerIntakeRoutes(
       config: { access: { tier: "active" } },
       schema: {
         params: intakeIdParam,
+        headers: z.object({
+          "idempotency-key": z.string().optional().describe("任意の再試行識別キー"),
+        }).passthrough(),
         body: intakeAnswerSchema,
         response: {
           200: answerSaveResponseSchema,

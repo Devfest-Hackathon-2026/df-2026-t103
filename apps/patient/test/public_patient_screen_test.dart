@@ -27,6 +27,7 @@ class _IntakeBackend {
   bool loseFirstAnswerResponse = false;
   int lostAnswerResponseStatus = 503;
   bool rejectAnswer = false;
+  Map<String, dynamic>? answerResponseOverride;
   bool failNextIntakeGet = false;
   Object? intakeAnswersOverride;
   Map<String, dynamic> intakeOverride = {};
@@ -142,7 +143,7 @@ class _IntakeBackend {
           },
         }, lostAnswerResponseStatus);
       }
-      return json(replay ?? idempotentAnswers[key]!);
+      return json(answerResponseOverride ?? replay ?? idempotentAnswers[key]!);
     }
     fail('Unexpected request: ${request.method} $path');
   });
@@ -371,6 +372,30 @@ void main() {
       expect(find.textContaining('通信結果を確認できません'), findsOneWidget);
     });
   }
+
+  testWidgets(
+    'invalid 2xx answer is uncertain and explicit retry reuses the same key and body',
+    (tester) async {
+      final backend = _IntakeBackend()
+        ..answerResponseOverride = {'answerId': 'wrong', 'intakeRevision': 2};
+      await _openQuestion(tester, backend);
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('同じ回答を再送して確認'), findsOneWidget);
+      expect(find.text('合成の質問q1'), findsOneWidget);
+      final key = backend.answerKeys.single;
+      final body = Map<String, dynamic>.from(backend.answerBodies.single);
+      backend.answerResponseOverride = null;
+      await tester.ensureVisible(find.text('同じ回答を再送して確認'));
+      await tester.tap(find.text('同じ回答を再送して確認'));
+      await tester.pumpAndSettle();
+
+      expect(backend.answerKeys, [key, key]);
+      expect(backend.answerBodies, [body, body]);
+      expect(find.text('合成の質問q2'), findsOneWidget);
+    },
+  );
 
   testWidgets(
     'uncertain save requires explicit same-key retry and does not claim success before it',

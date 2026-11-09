@@ -106,6 +106,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   Map<String, Object?>? _answerBody;
   Object? _answerOwner;
   DateTime? _answerKeyExpiresAt;
+  final Stopwatch _answerKeyAge = Stopwatch();
+  static const _answerRetryWindow = Duration(hours: 20);
   PublicPatientApi get api => widget.api;
   String _id(Object? value) {
     if (value is! String ||
@@ -556,7 +558,13 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _answerAttempted = true;
     _answerKey = patientOperationKey();
     _answerOwner = owner;
-    _answerKeyExpiresAt = api.now().add(const Duration(hours: 24));
+    // Server idempotency records expire after 24h. Use a shorter monotonic
+    // window to leave margin; this cannot account for device suspension, so
+    // retries are only best-effort and the server remains authoritative.
+    _answerKeyAge
+      ..reset()
+      ..start();
+    _answerKeyExpiresAt = api.now().add(_answerRetryWindow);
     _answerBody = {
       'questionId': _id(q['questionId']),
       'questionRevision': q['questionRevision'],
@@ -577,17 +585,25 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       throw const PatientRequestFailure('401');
     }
     if (_answerKeyExpiresAt == null ||
-        !api.now().isBefore(_answerKeyExpiresAt!)) {
+        !api.now().isBefore(_answerKeyExpiresAt!) ||
+        !_answerKeyAge.isRunning ||
+        _answerKeyAge.elapsed >= _answerRetryWindow) {
       _answerUncertain = true;
       throw const PatientRequestFailure('ANSWER_KEY_EXPIRED');
     }
     try {
-      await api.request(
+      final result = await api.request(
         'POST',
         '/intakes/$_intakeId/answers',
         key: key,
         body: body,
       );
+      if (result['answerId'] != body['questionId'] ||
+          result['intakeRevision'] is! int ||
+          (result['intakeRevision'] as int) <=
+              (body['expectedIntakeRevision'] as int)) {
+        throw const PatientRequestFailure('INVALID_RESPONSE');
+      }
     } on PatientRequestFailure catch (e) {
       if (_isCurrent(generation)) {
         final rejected =
@@ -617,13 +633,19 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _answerBody = null;
     _answerOwner = null;
     _answerKeyExpiresAt = null;
+    _answerKeyAge
+      ..stop()
+      ..reset();
     _answerAttempted = false;
     _answerUncertain = false;
   }
 
   Future<void> _retryPendingAnswer() async {
     final expiry = _answerKeyExpiresAt;
-    if (expiry == null || !api.now().isBefore(expiry)) {
+    if (expiry == null ||
+        !api.now().isBefore(expiry) ||
+        !_answerKeyAge.isRunning ||
+        _answerKeyAge.elapsed >= _answerRetryWindow) {
       _answerUncertain = true;
       throw const PatientRequestFailure('ANSWER_KEY_EXPIRED');
     }

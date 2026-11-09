@@ -245,6 +245,9 @@ for test_file in "${test_files[@]}"; do
     else
       echo "==> Flutter test process nonzero exit: exit code $status; target ${test_file##*/}; output suppressed" >&2
     fi
+    if ! python3 tool/summarize_flutter_machine.py "$RUN_DIR/${test_file##*/}.jsonl" --diagnostic-partial >&2; then
+      echo "==> partial Flutter diagnostics unavailable" >&2
+    fi
     exit "$status"
   fi
 done

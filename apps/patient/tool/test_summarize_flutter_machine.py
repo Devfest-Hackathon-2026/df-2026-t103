@@ -1,13 +1,15 @@
 import contextlib
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from summarize_flutter_machine import summarize
+from summarize_flutter_machine import diagnose_partial, run_partial_diagnostic, summarize
 
 
 RECOVERY = "patient retries a committed answer with the same key and body"
@@ -102,6 +104,71 @@ class SummarizerTest(unittest.TestCase):
         events = report()
         events.remove(events[0])
         self.assert_rejected(events)
+
+    def test_partial_diagnostic_contains_only_allowlisted_counts_and_completion(self):
+        events = [
+            {"type": "start"},
+            {"type": "testStart", "test": {"name": "SECRET_NAME", "url": "SECRET_URL"}},
+            {"type": "testDone", "result": "success", "skipped": False},
+            {"type": "testDone", "result": "error", "skipped": True},
+            {"type": "testDone", "result": "SECRET_RESULT", "skipped": False},
+            {"type": "done", "success": True, "error": "SECRET_ERROR"},
+            {"type": "unknown-secret-kind", "secret": "SECRET"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "machine.jsonl"
+            path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                diagnose_partial(path)
+        diagnostic = output.getvalue()
+        self.assertIn("testStart=1", diagnostic)
+        self.assertIn("success=1 failure=0 error=0 skip=1", diagnostic)
+        self.assertIn("completed=yes", diagnostic)
+        for secret in ("SECRET_NAME", "SECRET_URL", "SECRET_ERROR", "SECRET_RESULT", "unknown-secret-kind"):
+            self.assertNotIn(secret, diagnostic)
+
+    def test_partial_diagnostic_marks_truncated_output_incomplete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "machine.jsonl"
+            path.write_text('{"type":"start"}\n{"type":"done","success":false}\n', encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                diagnose_partial(path)
+        self.assertIn("completed=no", output.getvalue())
+
+    def test_partial_diagnostic_ignores_unhashable_event_values(self):
+        events = [
+            {"type": ["not", "hashable"]},
+            [{"event": {"also": "not hashable"}}],
+            {"type": "testDone", "result": {"bad": "result"}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "machine.jsonl"
+            path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                diagnose_partial(path)
+        self.assertIn("diagnostic completed=no", output.getvalue())
+        self.assertNotIn("not hashable", output.getvalue())
+
+    def test_diagnostic_exception_is_replaced_with_fixed_message(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            with patch("summarize_flutter_machine.diagnose_partial", side_effect=TypeError("SECRET")):
+                run_partial_diagnostic("unused")
+        self.assertEqual(output.getvalue(), "partial Flutter diagnostics unavailable\n")
+
+    def test_runner_diagnostic_does_not_replace_flutter_exit_status(self):
+        script = Path(__file__).with_name("summarize_flutter_machine.py")
+        runner = (
+            "set -e; status=37; "
+            f"python3 {str(script)!r} /no/such/machine.jsonl --diagnostic-partial; "
+            "exit \"$status\""
+        )
+        result = subprocess.run(["bash", "-c", runner], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 37)
+        self.assertEqual(result.stderr, "")
+        self.assertIn("diagnostic completed=no", result.stdout)
 
 
 if __name__ == "__main__":

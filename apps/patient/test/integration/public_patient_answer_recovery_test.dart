@@ -13,6 +13,31 @@ class _LiveBinding extends AutomatedTestWidgetsFlutterBinding {
   bool get overrideHttpClient => false;
 }
 
+class _BoundedClient extends http.BaseClient {
+  _BoundedClient(this.inner);
+
+  final http.Client inner;
+  static const _responseIdleTimeout = Duration(seconds: 15);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final response = await inner.send(request).timeout(_responseIdleTimeout);
+    return http.StreamedResponse(
+      response.stream.timeout(_responseIdleTimeout),
+      response.statusCode,
+      contentLength: response.contentLength,
+      request: response.request,
+      headers: response.headers,
+      isRedirect: response.isRedirect,
+      reasonPhrase: response.reasonPhrase,
+      persistentConnection: response.persistentConnection,
+    );
+  }
+
+  @override
+  void close() => inner.close();
+}
+
 class _LoseFirstAnswerResponse extends http.BaseClient {
   _LoseFirstAnswerResponse(this.inner);
 
@@ -71,7 +96,7 @@ void main() {
   testWidgets(
     'patient retries a committed answer with the same key and body',
     (tester) async {
-      final transport = _LoseFirstAnswerResponse(http.Client());
+      final transport = _LoseFirstAnswerResponse(_BoundedClient(http.Client()));
       final changes = StreamController<void>.broadcast(sync: true);
       var epoch = Object();
       String? patientToken;

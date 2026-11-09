@@ -9,6 +9,54 @@ RECOVERY = "patient retries a committed answer with the same key and body"
 RECOVERY_SUITE = "test/integration/public_patient_answer_recovery_test.dart"
 DEMO_SKIP_SUITE = "test/integration/demo_email_registration_test.dart"
 FLUTTER_EVENTS = {"test.startedProcess"}
+DIAGNOSTIC_EVENTS = ("start", "suite", "testStart", "testDone", "allSuites", "done", "error", "group", "print", "debug", "test.startedProcess")
+DIAGNOSTIC_RESULTS = ("success", "failure", "error", "skip")
+
+
+def diagnose_partial(path):
+    """Print only allowlisted event/result counts; never echo event contents."""
+    events = defaultdict(int)
+    results = defaultdict(int)
+    completed = False
+    try:
+        with open(path, encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    event = json.loads(line)
+                except (json.JSONDecodeError, UnicodeError):
+                    continue
+                if isinstance(event, list) and len(event) == 1 and isinstance(event[0], dict):
+                    kind = event[0].get("event")
+                    if isinstance(kind, str) and kind in FLUTTER_EVENTS:
+                        events[kind] += 1
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                kind = event.get("type")
+                if not isinstance(kind, str) or kind not in DIAGNOSTIC_EVENTS:
+                    continue
+                events[kind] += 1
+                if kind == "testDone":
+                    result = event.get("result")
+                    if result in ("success", "failure", "error"):
+                        result = "skip" if event.get("skipped") is True else result
+                        results[result] += 1
+                if kind == "done" and event.get("success") is True:
+                    completed = True
+    except (OSError, UnicodeError):
+        pass
+    print("diagnostic events " + " ".join(f"{kind}={events[kind]}" for kind in DIAGNOSTIC_EVENTS))
+    print("diagnostic results " + " ".join(f"{result}={results[result]}" for result in DIAGNOSTIC_RESULTS))
+    print(f"diagnostic completed={'yes' if completed else 'no'}")
+
+
+def run_partial_diagnostic(path):
+    """Keep diagnostic failures silent and success-shaped for the caller."""
+    try:
+        diagnose_partial(path)
+    except Exception:
+        # Do not expose parser errors or untrusted event values in CI logs.
+        print("partial Flutter diagnostics unavailable")
 
 
 def summarize(path, require_recovery=False, allow_all_skipped=False):
@@ -143,6 +191,9 @@ def summarize(path, require_recovery=False, allow_all_skipped=False):
 
 if __name__ == "__main__":
     try:
+        if len(sys.argv) == 3 and sys.argv[2] == "--diagnostic-partial":
+            run_partial_diagnostic(sys.argv[1])
+            raise SystemExit(0)
         if len(sys.argv) > 3 or (len(sys.argv) == 3 and sys.argv[2] not in ("--require-recovery", "--allow-all-skipped")):
             raise ValueError("invalid invocation")
         summarize(sys.argv[1], "--require-recovery" in sys.argv[2:], "--allow-all-skipped" in sys.argv[2:])

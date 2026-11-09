@@ -12,8 +12,14 @@ String patientOperationKey() => List.generate(
 ).map((n) => n.toRadixString(16).padLeft(2, '0')).join();
 
 class PatientRequestFailure implements Exception {
-  const PatientRequestFailure(this.code);
+  const PatientRequestFailure(
+    this.code, {
+    this.apiCode,
+    this.retryable = false,
+  });
   final String code;
+  final String? apiCode;
+  final bool retryable;
   String get message => switch (code) {
     'LEGAL_UNAVAILABLE' => '利用文書を確認できません。運営者による文書の準備が必要です。',
     '500' || '503' => 'サービスの準備状況を確認できません。時間をおいて再試行してください。',
@@ -23,6 +29,7 @@ class PatientRequestFailure implements Exception {
     '412' => '現在の利用状態では操作できません。同意・問診・施設の状態を再確認してください。',
     '429' => '操作が集中しています。少し時間をおいて再試行してください。',
     '400' => '入力内容を確認してください。',
+    'ANSWER_KEY_EXPIRED' => '回答の再送可能期間が終了しました。問診を続けず、サポートへお問い合わせください。',
     _ => '通信結果を確認できません。入力を保持していますので、再試行してください。',
   };
 }
@@ -36,12 +43,14 @@ class PublicPatientApi {
     required this.tokens,
     required this.session,
     this.analytics = const PatientAnalytics.disabled(),
-  });
+    DateTime Function()? clock,
+  }) : now = clock ?? DateTime.now;
   final String origin;
   final http.Client client;
   final Future<({String auth, String appCheck})> Function() tokens;
   final Object Function() session;
   final PatientAnalytics analytics;
+  final DateTime Function() now;
 
   Future<Map<String, dynamic>> request(
     String method,
@@ -75,15 +84,33 @@ class PublicPatientApi {
     try {
       Future<Map<String, dynamic>> send() async {
         final response = await client.send(req);
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw PatientRequestFailure('${response.statusCode}');
-        }
         final bytes = <int>[];
         await for (final chunk in response.stream) {
           bytes.addAll(chunk);
           if (bytes.length > 512 * 1024) {
             throw const PatientRequestFailure('INVALID_RESPONSE');
           }
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          String? apiCode;
+          var retryable = false;
+          try {
+            final errorBody = jsonDecode(utf8.decode(bytes));
+            final error = errorBody is Map ? errorBody['error'] : null;
+            if (error is Map) {
+              apiCode = error['code'] is String
+                  ? error['code'] as String
+                  : null;
+              retryable = error['retryable'] == true;
+            }
+          } catch (_) {
+            // Keep status-only error handling for nonstandard error bodies.
+          }
+          throw PatientRequestFailure(
+            '${response.statusCode}',
+            apiCode: apiCode,
+            retryable: retryable,
+          );
         }
         if (!identical(owner, session())) {
           throw const PatientRequestFailure('401');

@@ -102,6 +102,12 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   List<dynamic> _history = [];
   int _questionnaireRevision = 1;
   int? _questionIntakeRevision;
+  String? _answerKey;
+  Map<String, Object?>? _answerBody;
+  Object? _answerOwner;
+  DateTime? _answerKeyExpiresAt;
+  final Stopwatch _answerKeyAge = Stopwatch();
+  static const _answerRetryWindow = Duration(hours: 20);
   PublicPatientApi get api => widget.api;
   String _id(Object? value) {
     if (value is! String ||
@@ -145,6 +151,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _answerFreeText.clear();
     _answerAttempted = false;
     _answerUncertain = false;
+    _clearPendingAnswer();
     _legal = {};
     _accepted.clear();
     _consentKey = null;
@@ -494,8 +501,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         previousQuestion?['questionRevision'] !=
             _question?['questionRevision']) {
       _answerFreeText.clear();
-      _answerAttempted = false;
-      _answerUncertain = false;
+      _clearPendingAnswer();
     }
     _id(_question!['questionId']);
     if (_question!['questionText'] is! String ||
@@ -549,29 +555,104 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       _answerAttempted = false;
       throw const PatientRequestFailure('412');
     }
-    // Only lock the user's answer once the preflight snapshot succeeded. The
-    // GET cannot establish that this user's answer was saved by another writer.
     _answerAttempted = true;
+    _answerKey = patientOperationKey();
+    _answerOwner = owner;
+    // Server idempotency records expire after 24h. Use a shorter monotonic
+    // window to leave margin; this cannot account for device suspension, so
+    // retries are only best-effort and the server remains authoritative.
+    _answerKeyAge
+      ..reset()
+      ..start();
+    _answerKeyExpiresAt = api.now().add(_answerRetryWindow);
+    _answerBody = {
+      'questionId': _id(q['questionId']),
+      'questionRevision': q['questionRevision'],
+      'selectedCodes': code == null ? <String>[] : [code],
+      'answerState': state,
+      if (code != null && state == 'answered' && freeText.trim().isNotEmpty)
+        'freeText': freeText,
+      'expectedIntakeRevision': _revision(_intake!),
+    };
+    await _postPendingAnswer(generation);
+  }
+
+  Future<void> _postPendingAnswer(int generation) async {
+    final key = _answerKey;
+    final body = _answerBody;
+    if (key == null || body == null || !_isCurrent(generation)) return;
+    if (!identical(_answerOwner, api.session())) {
+      throw const PatientRequestFailure('401');
+    }
+    if (_answerKeyExpiresAt == null ||
+        !api.now().isBefore(_answerKeyExpiresAt!) ||
+        !_answerKeyAge.isRunning ||
+        _answerKeyAge.elapsed >= _answerRetryWindow) {
+      _answerUncertain = true;
+      throw const PatientRequestFailure('ANSWER_KEY_EXPIRED');
+    }
     try {
-      await api.request(
+      final result = await api.request(
         'POST',
         '/intakes/$_intakeId/answers',
-        body: {
-          'questionId': _id(q['questionId']),
-          'questionRevision': q['questionRevision'],
-          'selectedCodes': code == null ? <String>[] : [code],
-          'answerState': state,
-          if (code != null && state == 'answered' && freeText.trim().isNotEmpty)
-            'freeText': freeText,
-          'expectedIntakeRevision': _revision(_intake!),
-        },
+        key: key,
+        body: body,
       );
+      if (result['answerId'] != body['questionId'] ||
+          result['intakeRevision'] is! int ||
+          result['intakeRevision'] !=
+              (body['expectedIntakeRevision'] as int) + 1) {
+        throw const PatientRequestFailure('INVALID_RESPONSE');
+      }
+    } on PatientRequestFailure catch (e) {
+      if (_isCurrent(generation)) {
+        final rejected =
+            const {'400', '401', '403', '404', '412'}.contains(e.code) ||
+            (e.code == '409' &&
+                e.apiCode != null &&
+                !(e.apiCode == 'IDEMPOTENCY_IN_PROGRESS' && e.retryable));
+        if (rejected) {
+          _clearPendingAnswer();
+        } else {
+          // A 409 may mean the server is still processing this same operation.
+          _answerUncertain = true;
+        }
+      }
+      rethrow;
     } catch (_) {
       if (_isCurrent(generation)) _answerUncertain = true;
       rethrow;
     }
     if (!_isCurrent(generation)) return;
+    _clearPendingAnswer();
     await _nextQuestion();
+  }
+
+  void _clearPendingAnswer() {
+    _answerKey = null;
+    _answerBody = null;
+    _answerOwner = null;
+    _answerKeyExpiresAt = null;
+    _answerKeyAge
+      ..stop()
+      ..reset();
+    _answerAttempted = false;
+    _answerUncertain = false;
+  }
+
+  Future<void> _retryPendingAnswer() async {
+    final expiry = _answerKeyExpiresAt;
+    if (expiry == null ||
+        !api.now().isBefore(expiry) ||
+        !_answerKeyAge.isRunning ||
+        _answerKeyAge.elapsed >= _answerRetryWindow) {
+      _answerUncertain = true;
+      throw const PatientRequestFailure('ANSWER_KEY_EXPIRED');
+    }
+    if (!identical(_answerOwner, api.session())) {
+      throw const PatientRequestFailure('401');
+    }
+    await _postPendingAnswer(_generation);
   }
 
   void _validateActiveQuestion(Map<String, dynamic> question) {
@@ -1032,13 +1113,23 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         Semantics(
           liveRegion: true,
           child: Text(
-            '回答の保存結果を確認できません。誤った回答への置き換えを防ぐため、自動進行・再送を停止しました。サポートへお問い合わせください。',
+            _answerKeyExpiresAt != null &&
+                    !api.now().isBefore(_answerKeyExpiresAt!)
+                ? '回答の保存結果を確認できません。再送可能期間が終了したため再送を停止しました。問診を続けず、サポートへお問い合わせください。'
+                : '回答の保存結果を確認できません。同じ回答を再送して保存状態を再確認できます。',
           ),
         )
       else
         TextButton(
           onPressed: _busy ? null : () => _run(_nextQuestion),
           child: const Text('保存状態を再確認'),
+        ),
+      if (_answerUncertain &&
+          _answerKeyExpiresAt != null &&
+          api.now().isBefore(_answerKeyExpiresAt!))
+        TextButton(
+          onPressed: _busy ? null : () => _run(_retryPendingAnswer),
+          child: const Text('同じ回答を再送して確認'),
         ),
     ],
     'review' => [

@@ -26,6 +26,8 @@ class _IntakeBackend {
   bool symptomsSaved = false;
   bool loseFirstAnswerResponse = false;
   int lostAnswerResponseStatus = 503;
+  bool rejectAnswer = false;
+  Map<String, dynamic>? answerResponseOverride;
   bool failNextIntakeGet = false;
   Object? intakeAnswersOverride;
   Map<String, dynamic> intakeOverride = {};
@@ -35,6 +37,10 @@ class _IntakeBackend {
   Completer<void>? intakeGetGate;
   Completer<void>? nextQuestionGate;
   int answerPosts = 0;
+  int answerWrites = 0;
+  final answerKeys = <String?>[];
+  final answerBodies = <Map<String, dynamic>>[];
+  final idempotentAnswers = <String, Map<String, dynamic>>{};
 
   http.Response json(Map<String, dynamic> value, [int status = 200]) =>
       http.Response(
@@ -95,21 +101,49 @@ class _IntakeBackend {
       final body = jsonDecode(request.body) as Map<String, dynamic>;
       answerPosts++;
       postedAnswers.add(body);
-      answers.add({
-        'answerId': body['questionId'],
-        ...body,
-        'stepIndex': 0,
-        'answeredAt': 'now',
-        'updatedAt': 'now',
-      });
-      revision++;
+      answerKeys.add(request.headers['idempotency-key']);
+      answerBodies.add(Map<String, dynamic>.from(body));
+      if (rejectAnswer) {
+        return json({
+          'error': {
+            'code': 'REVISION_CONFLICT',
+            'retryable': false,
+            'message': 'synthetic revision conflict',
+          },
+        }, 409);
+      }
+      final key = request.headers['idempotency-key']!;
+      final replay = idempotentAnswers[key];
+      if (replay == null) {
+        final result = {
+          'answerId': body['questionId'],
+          'intakeRevision': revision + 1,
+        };
+        idempotentAnswers[key] = result;
+        answers.add({
+          'answerId': body['questionId'],
+          ...body,
+          'stepIndex': 0,
+          'freeText': body['freeText'],
+          'answeredAt': 'now',
+          'updatedAt': 'now',
+        });
+        revision++;
+        answerWrites++;
+      }
       if (loseFirstAnswerResponse) {
         loseFirstAnswerResponse = false;
         return json({
-          'error': 'synthetic response loss',
+          'error': {
+            'code': lostAnswerResponseStatus == 409
+                ? 'IDEMPOTENCY_IN_PROGRESS'
+                : 'UPSTREAM_UNAVAILABLE',
+            'retryable': true,
+            'message': 'synthetic response loss',
+          },
         }, lostAnswerResponseStatus);
       }
-      return json({'answerId': body['questionId'], 'intakeRevision': revision});
+      return json(answerResponseOverride ?? replay ?? idempotentAnswers[key]!);
     }
     fail('Unexpected request: ${request.method} $path');
   });
@@ -119,6 +153,7 @@ Future<void> _openQuestion(
   WidgetTester tester,
   _IntakeBackend backend, {
   Stream<void> changes = const Stream<void>.empty(),
+  DateTime Function()? clock,
 }) async {
   final client = backend.client();
   addTearDown(client.close);
@@ -136,6 +171,7 @@ Future<void> _openQuestion(
             }
             return backend.sessionEpoch;
           },
+          clock: clock,
         ),
         signIn: (_, _) async {},
         signOut: () async {},
@@ -189,8 +225,10 @@ void main() {
     },
   );
 
-  for (final status in [409, 412]) {
-    testWidgets('does not infer safe retry from HTTP $status', (tester) async {
+  for (final status in [409, 503]) {
+    testWidgets('retries same answer after uncertain HTTP $status', (
+      tester,
+    ) async {
       final backend = _IntakeBackend()
         ..loseFirstAnswerResponse = true
         ..lostAnswerResponseStatus = status;
@@ -200,11 +238,85 @@ void main() {
 
       expect(backend.answerPosts, 1);
       expect(find.textContaining('保存結果を確認できません'), findsOneWidget);
-      expect(find.text('保存状態を再確認'), findsNothing);
+      expect(find.text('同じ回答を再送して確認'), findsOneWidget);
+      await tester.ensureVisible(find.text('同じ回答を再送して確認'));
+      await tester.tap(find.text('同じ回答を再送して確認'));
       await tester.pumpAndSettle();
-      expect(backend.answerPosts, 1);
+      expect(backend.answerPosts, 2);
+      expect(backend.answerWrites, 1);
+      expect(backend.answerKeys.first, isNotEmpty);
+      expect(backend.answerKeys[1], backend.answerKeys.first);
+      expect(backend.answerBodies[1], backend.answerBodies.first);
+      expect(backend.nextQuestion, 2);
+      expect(find.textContaining('通信結果を確認できません'), findsNothing);
+      expect(find.text('合成の質問q2'), findsOneWidget);
     });
   }
+
+  testWidgets('does not retry a definitive answer revision conflict', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend()..rejectAnswer = true;
+    await _openQuestion(tester, backend);
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+    expect(backend.answerPosts, 1);
+    expect(backend.answerWrites, 0);
+    expect(find.text('同じ回答を再送して確認'), findsNothing);
+    expect(find.text('保存状態を再確認'), findsOneWidget);
+  });
+
+  testWidgets('multiple taps send one answer operation', (tester) async {
+    final backend = _IntakeBackend();
+    await _openQuestion(tester, backend);
+    backend.intakeGetGate = Completer<void>();
+    await tester.tap(find.text('はい'));
+    await tester.pump();
+    await tester.tap(find.text('はい'));
+    await tester.pump();
+    backend.intakeGetGate!.complete();
+    await tester.pumpAndSettle();
+    expect(backend.answerPosts, 1);
+    expect(backend.answerWrites, 1);
+  });
+
+  testWidgets('does not retry an uncertain answer after the 24-hour TTL', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend()..loseFirstAnswerResponse = true;
+    var now = DateTime.utc(2026, 1, 1);
+    await _openQuestion(tester, backend, clock: () => now);
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+    expect(backend.answerPosts, 1);
+    now = now.add(const Duration(hours: 24));
+    await tester.ensureVisible(find.text('同じ回答を再送して確認'));
+    await tester.tap(find.text('同じ回答を再送して確認'));
+    await tester.pumpAndSettle();
+    expect(backend.answerPosts, 1);
+    expect(find.text('同じ回答を再送して確認'), findsNothing);
+    expect(
+      find.text('回答の再送可能期間が終了しました。問診を続けず、サポートへお問い合わせください。'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('session change discards an uncertain answer retry key', (
+    tester,
+  ) async {
+    final backend = _IntakeBackend()..loseFirstAnswerResponse = true;
+    final changes = StreamController<void>();
+    addTearDown(changes.close);
+    await _openQuestion(tester, backend, changes: changes.stream);
+    await tester.tap(find.text('はい'));
+    await tester.pumpAndSettle();
+    expect(backend.answerPosts, 1);
+    changes.add(null);
+    await tester.pumpAndSettle();
+    expect(find.text('同じ回答を再送して確認'), findsNothing);
+    expect(find.text('合成の質問q1'), findsNothing);
+    expect(backend.answerPosts, 1);
+  });
 
   testWidgets('limits freeText by UTF-16 code units and omits it for skip', (
     tester,
@@ -262,7 +374,55 @@ void main() {
   }
 
   testWidgets(
-    'stops after uncertain save without posting twice or claiming success',
+    'mismatched answerId in 2xx is uncertain and explicit retry reuses the same key and body',
+    (tester) async {
+      final backend = _IntakeBackend()
+        ..answerResponseOverride = {'answerId': 'wrong', 'intakeRevision': 2};
+      await _openQuestion(tester, backend);
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('同じ回答を再送して確認'), findsOneWidget);
+      expect(find.text('合成の質問q1'), findsOneWidget);
+      final key = backend.answerKeys.single;
+      final body = Map<String, dynamic>.from(backend.answerBodies.single);
+      backend.answerResponseOverride = null;
+      await tester.ensureVisible(find.text('同じ回答を再送して確認'));
+      await tester.tap(find.text('同じ回答を再送して確認'));
+      await tester.pumpAndSettle();
+
+      expect(backend.answerKeys, [key, key]);
+      expect(backend.answerBodies, [body, body]);
+      expect(find.text('合成の質問q2'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'overlarge intakeRevision in 2xx is uncertain and explicit retry reuses the same key and body',
+    (tester) async {
+      final backend = _IntakeBackend()
+        ..answerResponseOverride = {'answerId': 'q1', 'intakeRevision': 999};
+      await _openQuestion(tester, backend);
+      await tester.tap(find.text('はい'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('同じ回答を再送して確認'), findsOneWidget);
+      expect(find.text('合成の質問q1'), findsOneWidget);
+      final key = backend.answerKeys.single;
+      final body = Map<String, dynamic>.from(backend.answerBodies.single);
+      backend.answerResponseOverride = null;
+      await tester.ensureVisible(find.text('同じ回答を再送して確認'));
+      await tester.tap(find.text('同じ回答を再送して確認'));
+      await tester.pumpAndSettle();
+
+      expect(backend.answerKeys, [key, key]);
+      expect(backend.answerBodies, [body, body]);
+      expect(find.text('合成の質問q2'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'uncertain save requires explicit same-key retry and does not claim success before it',
     (tester) async {
       final backend = _IntakeBackend()..loseFirstAnswerResponse = true;
       await _openQuestion(tester, backend);
@@ -274,25 +434,16 @@ void main() {
       expect(find.text('合成の質問q1'), findsOneWidget);
       expect(find.textContaining('サービスの準備状況を確認できません'), findsOneWidget);
       expect(find.textContaining('保存結果を確認できません'), findsOneWidget);
-      expect(find.text('保存状態を再確認'), findsNothing);
-      // A subsequent GET can observe a different writer's answer (or a stale
-      // mixed snapshot); it must not be treated as this patient's save.
-      backend.answers
-        ..clear()
-        ..add({
-          'questionId': 'q1',
-          'questionRevision': 1,
-          'selectedCodes': ['NO'],
-          'answerState': 'answered',
-          'answerId': 'q1',
-          'stepIndex': 0,
-          'answeredAt': 'now',
-          'updatedAt': 'now',
-          'freeText': '別端末の回答',
-        });
+      expect(find.text('同じ回答を再送して確認'), findsOneWidget);
       await tester.pumpAndSettle();
       expect(backend.answerPosts, 1);
       expect(find.text('合成の質問q2'), findsNothing);
+      await tester.ensureVisible(find.text('同じ回答を再送して確認'));
+      await tester.tap(find.text('同じ回答を再送して確認'));
+      await tester.pumpAndSettle();
+      expect(backend.answerPosts, 2);
+      expect(backend.answerWrites, 1);
+      expect(find.text('合成の質問q2'), findsOneWidget);
     },
   );
 

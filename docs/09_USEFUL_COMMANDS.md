@@ -92,11 +92,12 @@ make test-firebase-rules   # compose のエミュレータ起動中に実行
 
 ## 5. Firebase CLI（ホストで直接使う場合）
 
-通常はコンテナ内で動くため不要。直接触りたい場合のみ：
+ホストから利用する場合は、リポジトリルートで `nix develop` に入ると利用できます。
+Nix を使わない場合は `firebase-tools` を別途導入します。認証やデプロイは必要な場合のみ手動で実行してください。
 
 ```bash
-npm install -g firebase-tools          # 初回のみ（コンテナ内はインストール済み）
-firebase login                         # 実プロジェクトを触る場合のみ
+npm install -g firebase-tools@15.35.0  # Nix devShell を使わない場合のみ
+firebase login                         # 必要な場合のみ（認証情報はローカルに保存）
 firebase use <project-id>              # プロジェクト切替（.firebaserc）
 firebase emulators:start               # ローカルエミュレータ（Dockerを使わない場合）
 firebase emulators:export ./backup     # エミュレータデータのエクスポート

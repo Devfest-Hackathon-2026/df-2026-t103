@@ -14,6 +14,26 @@ class _LiveBinding extends AutomatedTestWidgetsFlutterBinding {
   bool get overrideHttpClient => false;
 }
 
+class _CaptureIntakeIdClient extends http.BaseClient {
+  _CaptureIntakeIdClient(this.inner);
+
+  final http.Client inner;
+  String? intakeId;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    if (request.method == 'POST') {
+      final match = RegExp(r'^/v1/intakes/([^/]+)/symptoms$')
+          .firstMatch(request.url.path);
+      if (match != null) intakeId = match.group(1);
+    }
+    return inner.send(request);
+  }
+
+  @override
+  void close() => inner.close();
+}
+
 void main() {
   const enabled = bool.fromEnvironment('RUN_INTAKE_UI_INTEGRATION');
   if (enabled) _LiveBinding();
@@ -21,7 +41,7 @@ void main() {
   testWidgets('public UI → real API → hospital receipt → logout', (
     tester,
   ) async {
-    final client = http.Client();
+    final client = _CaptureIntakeIdClient(http.Client());
     final changes = StreamController<void>.broadcast(sync: true);
     var epoch = Object();
     String? patientToken;
@@ -146,6 +166,87 @@ void main() {
       await waitFor(find.text('問診の内容を確認しました'));
       expect(find.text(symptom), findsOneWidget);
       await tap('問診の内容を確認しました');
+      final intakeId = client.intakeId;
+      expect(intakeId, isNotNull);
+      Future<Map<String, dynamic>> getIntake() async {
+        final response = await tester.runAsync(
+          () => client.get(
+            Uri.parse('http://127.0.0.1:8080/v1/intakes/$intakeId'),
+            headers: {'Authorization': 'Bearer $patientToken'},
+          ),
+        );
+        expect(response, isNotNull);
+        expect(response!.statusCode, 200);
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+
+      final beforeEdit = await getIntake();
+      final previousRevision = beforeEdit['revision'] as int;
+      final questionCount = beforeEdit['questionCount'] as int;
+      final savedAnswers = beforeEdit['answers'] as List;
+      final savedQuestions = beforeEdit['questions'] as List;
+      expect(questionCount, greaterThan(0));
+      expect(savedQuestions, hasLength(questionCount));
+      for (final answer in savedAnswers.whereType<Map<String, dynamic>>()) {
+        final question = savedQuestions
+            .whereType<Map<String, dynamic>>()
+            .singleWhere((item) => item['questionId'] == answer['questionId']);
+        expect(answer['questionRevision'], question['questionRevision']);
+      }
+      final savedAnswer = savedAnswers
+          .whereType<Map<String, dynamic>>()
+          .singleWhere((answer) => answer['freeText'] == answerFreeText);
+      final answerId = savedAnswer['answerId'] as String;
+      final selectedCodes = List<String>.from(
+        savedAnswer['selectedCodes'] as List,
+      );
+      final editedFreeText = '$answerFreeText（編集済み）';
+      final answerCard = find.ancestor(
+        of: find.text(answerFreeText),
+        matching: find.byType(Card),
+      );
+      final editButton = find.descendant(
+        of: answerCard,
+        matching: find.text('回答を編集'),
+      );
+      await tester.ensureVisible(editButton);
+      await tap('回答を編集');
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const ValueKey('保存済み回答の補足')),
+        editedFreeText,
+      );
+      await tap('編集内容を保存');
+      final afterEdit = await getIntake();
+      expect(afterEdit['revision'], previousRevision + 1);
+      expect(afterEdit['status'], 'review');
+      expect(afterEdit['questionCount'], questionCount);
+      final editedQuestions = afterEdit['questions'] as List;
+      expect(editedQuestions, hasLength(savedQuestions.length));
+      for (final question in savedQuestions.whereType<Map<String, dynamic>>()) {
+        final editedQuestion = editedQuestions
+            .whereType<Map<String, dynamic>>()
+            .singleWhere(
+              (item) => item['questionId'] == question['questionId'],
+            );
+        expect(
+          editedQuestion['questionRevision'],
+          question['questionRevision'],
+        );
+      }
+      final editedAnswers = afterEdit['answers'] as List;
+      expect(editedAnswers, hasLength(savedAnswers.length));
+      final updatedAnswer = editedAnswers
+          .whereType<Map<String, dynamic>>()
+          .singleWhere((answer) => answer['answerId'] == answerId);
+      expect(updatedAnswer['freeText'], editedFreeText);
+      expect(updatedAnswer['selectedCodes'], selectedCodes);
+      expect(updatedAnswer['answerState'], savedAnswer['answerState']);
+      expect(
+        updatedAnswer['questionRevision'],
+        savedAnswer['questionRevision'],
+      );
+      await waitFor(find.text('問診の内容を確認しました'));
       await tap('この内容で問診票を確定');
       await waitFor(find.text('合成データ受入施設'));
       await tap('「合成データ受入施設」へ、この問診票と選択した情報を送信することに同意します');
@@ -225,7 +326,7 @@ void main() {
         return section is Map &&
             section['answerState'] == 'answered' &&
             section['value'] is String &&
-            (section['value'] as String).contains(answerFreeText);
+            (section['value'] as String).contains(editedFreeText);
       }).toList();
       expect(
         freeTextSections,
@@ -233,7 +334,7 @@ void main() {
         reason: 'The selected answer and free text must be in one answered topic section.',
       );
       final answerSection = freeTextSections.single.value as Map;
-      expect(answerSection['value'], '$selectedOptionLabel　$answerFreeText');
+      expect(answerSection['value'], '$selectedOptionLabel　$editedFreeText');
       await tap('ログアウト');
       await waitFor(find.text('ログイン'));
       expect(find.text(symptom), findsNothing);

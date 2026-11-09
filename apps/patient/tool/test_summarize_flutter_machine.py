@@ -115,7 +115,13 @@ class SummarizerTest(unittest.TestCase):
             {"type": "done", "success": True, "error": "SECRET_ERROR"},
             {"type": "unknown-secret-kind", "secret": "SECRET"},
             {"type": "print", "message": "edit-open-start"},
+            {"type": "print", "message": "edit-open-tap-returned"},
+            {"type": "print", "message": "edit-field-found"},
+            {"type": "print", "message": "edit-input-returned"},
+            {"type": "print", "message": "edit-save-start"},
+            {"type": "print", "message": "edit-save-tap-returned"},
             {"type": "print", "message": "edit-open SECRET_NAME"},
+            {"type": "print", "message": "edit-field-found SECRET_URL"},
             {"type": "print", "message": "SECRET_NAME", "error": "SECRET_ERROR"},
             {"type": "print", "message": {"marker": "review"}},
         ]
@@ -130,6 +136,11 @@ class SummarizerTest(unittest.TestCase):
         self.assertIn("success=1 failure=0 error=0 skip=1", diagnostic)
         self.assertIn("reporter_done_success_seen=unknown", diagnostic)
         self.assertIn("edit-open-start=1", diagnostic)
+        self.assertIn("edit-open-tap-returned=1", diagnostic)
+        self.assertIn("edit-field-found=1", diagnostic)
+        self.assertIn("edit-input-returned=1", diagnostic)
+        self.assertIn("edit-save-start=1", diagnostic)
+        self.assertIn("edit-save-tap-returned=1", diagnostic)
         self.assertIn("review=0", diagnostic)
         for secret in ("SECRET_NAME", "SECRET_URL", "SECRET_ERROR", "SECRET_RESULT", "unknown-secret-kind", "edit-open SECRET_NAME"):
             self.assertNotIn(secret, diagnostic)
@@ -175,18 +186,20 @@ class SummarizerTest(unittest.TestCase):
         self.assertIn("testStart=0", output.getvalue())
         self.assertIn("testDone=0", output.getvalue())
 
-    def test_partial_diagnostic_reports_no_success_done_when_absent_or_false(self):
-        for contents in (
-            '{"type":"start"}\n',
-            '{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":false}\n',
-        ):
+    def test_partial_diagnostic_distinguishes_absent_done_from_false_done(self):
+        cases = (
+            ('{"type":"start"}\n', "unknown"),
+            ('{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":false}\n', "no"),
+            ('{"type":"start"}\n{"type":"allSuites","count":1}\n{"type":"done","success":true}\n', "yes"),
+        )
+        for contents, expected in cases:
             with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "machine.jsonl"
                 path.write_text(contents, encoding="utf-8")
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
                     diagnose_partial(path)
-                self.assertIn("reporter_done_success_seen=no", output.getvalue())
+                self.assertIn(f"reporter_done_success_seen={expected}", output.getvalue())
 
     def test_partial_diagnostic_marks_malformed_done_unknown_without_leaking_secret(self):
         for contents in (
@@ -233,7 +246,7 @@ class SummarizerTest(unittest.TestCase):
         result = subprocess.run(["bash", "-c", runner], capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 37)
         self.assertEqual(result.stderr, "")
-        self.assertIn("diagnostic reporter_done_success_seen=no", result.stdout)
+        self.assertIn("diagnostic reporter_done_success_seen=unknown", result.stdout)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,17 @@ DEMO_SKIP_SUITE = "test/integration/demo_email_registration_test.dart"
 FLUTTER_EVENTS = {"test.startedProcess"}
 DIAGNOSTIC_EVENTS = ("start", "suite", "testStart", "testDone", "allSuites", "done", "error", "group", "print", "debug", "test.startedProcess")
 DIAGNOSTIC_RESULTS = ("success", "failure", "error", "skip")
-FLOW_MARKERS = ("edit-open-start", "edit-save-start", "requestion", "review", "hospital")
+FLOW_MARKERS = (
+    "edit-open-start",
+    "edit-open-tap-returned",
+    "edit-field-found",
+    "edit-input-returned",
+    "edit-save-start",
+    "edit-save-tap-returned",
+    "requestion",
+    "review",
+    "hospital",
+)
 
 
 def diagnose_partial(path):
@@ -20,7 +30,7 @@ def diagnose_partial(path):
     results = defaultdict(int)
     markers = defaultdict(int)
     completion_known = True
-    done_success_seen = False
+    done_success_seen = None
     saw_start = False
     saw_all_suites = False
     saw_done = False
@@ -86,7 +96,10 @@ def diagnose_partial(path):
         pass
     print("diagnostic events " + " ".join(f"{kind}={events[kind]}" for kind in DIAGNOSTIC_EVENTS))
     print("diagnostic results " + " ".join(f"{result}={results[result]}" for result in DIAGNOSTIC_RESULTS))
-    done_success = "unknown" if not completion_known else ("yes" if done_success_seen else "no")
+    if not completion_known or not saw_done or type(done_success_seen) is not bool:
+        done_success = "unknown"
+    else:
+        done_success = "yes" if done_success_seen else "no"
     print(f"diagnostic reporter_done_success_seen={done_success}")
     print("diagnostic flow " + " ".join(f"{marker}={markers[marker]}" for marker in FLOW_MARKERS))
 

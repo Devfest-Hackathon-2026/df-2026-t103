@@ -233,13 +233,17 @@ void main() {
       await tester.ensureVisible(editButton);
       _flowMarker('edit-open-start');
       await tap('回答を編集');
+      _flowMarker('edit-open-tap-returned');
       await tester.pump();
-      await tester.enterText(
-        find.byKey(const ValueKey('保存済み回答の補足')),
-        editedFreeText,
-      );
-      await tap('編集内容を保存');
+      final editField = find.byKey(const ValueKey('保存済み回答の補足'));
+      if (editField.evaluate().isNotEmpty) {
+        _flowMarker('edit-field-found');
+      }
+      await tester.enterText(editField, editedFreeText);
+      _flowMarker('edit-input-returned');
       _flowMarker('edit-save-start');
+      await tap('編集内容を保存');
+      _flowMarker('edit-save-tap-returned');
       final afterEdit = await getIntake();
       expect(afterEdit['revision'], previousRevision + 1);
       expect(afterEdit['status'], 'questioning');

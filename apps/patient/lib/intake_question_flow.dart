@@ -37,13 +37,21 @@ class _AnsweredItem {
 }
 
 class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
+  final TextEditingController _freeTextController = TextEditingController();
   late int _revision;
   _Phase _phase = _Phase.questioning;
   IntakeQuestion? _question;
   IntakeSummary? _summary;
   final List<_AnsweredItem> _history = [];
   bool _busy = false;
+  bool _answerSaveUncertain = false;
   String? _message;
+
+  @override
+  void dispose() {
+    _freeTextController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -61,6 +69,7 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
       final next = await widget.api.nextQuestion(widget.submission, _revision);
       if (!mounted) return;
       _revision = next.intakeRevision;
+      _freeTextController.clear();
       if (next.question == null) {
         await _enterReview();
         return;
@@ -79,7 +88,15 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
     required String answerState,
     required List<String> selectedCodes,
     required String answerLabel,
+    String? freeText,
   }) async {
+    if (_answerSaveUncertain) return;
+    if (freeText != null && freeText.length > 2000) {
+      setState(() {
+        _message = '自由記述はAPI上限の2000文字以内で入力してください。';
+      });
+      return;
+    }
     setState(() {
       _busy = true;
       _message = null;
@@ -91,13 +108,25 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
         selectedCodes: selectedCodes,
         answerState: answerState,
         expectedIntakeRevision: _revision,
+        freeText: freeText,
       );
       if (!mounted) return;
       _revision = revision;
-      _history.add(_AnsweredItem(question.questionText, answerLabel));
+      _history.add(
+        _AnsweredItem(
+          question.questionText,
+          freeText == null || freeText.isEmpty
+              ? answerLabel
+              : '$answerLabel\n$freeText',
+        ),
+      );
       await _loadNext();
     } catch (error) {
-      _fail(error, '回答を保存できません。');
+      // The response may have been lost after the server committed. Retrying
+      // with the old revision is not safe to interpret as a replay, and
+      // loading the next question would silently skip the answer.
+      _answerSaveUncertain = true;
+      _fail(error, '回答の保存結果を確認できません。安全に再開・照合する方法がないため、この問診では操作を続けないでください。回答は再送されません。画面上部の「ログアウト」で終了できます。再ログイン後もこの問診が再開できる保証はありません。');
     }
   }
 
@@ -137,7 +166,9 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
     if (!mounted) return;
     setState(() {
       _busy = false;
-      _message = error is IntakeApiException
+      _message = _answerSaveUncertain
+          ? fallback
+          : error is IntakeApiException
           ? '$fallback（${error.code}）再試行してください。'
           : '$fallback 再試行してください。';
     });
@@ -172,10 +203,8 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
     }
     if (_message != null) {
       children.add(const SizedBox(height: 16));
-      children.add(
-        Semantics(liveRegion: true, child: Text(_message!)),
-      );
-      if (_phase != _Phase.done) {
+      children.add(Semantics(liveRegion: true, child: Text(_message!)));
+      if (_phase != _Phase.done && !_answerSaveUncertain) {
         children.add(
           TextButton(
             onPressed: _busy ? null : _retry,
@@ -195,9 +224,7 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
     final question = _question;
     if (question == null) {
       // 初回ロード中・エラー時は質問カードを描かない（進捗/メッセージのみ）。
-      return [
-        const Text('質問を準備しています。'),
-      ];
+      return [const Text('質問を準備しています。')];
     }
     return [
       const Text('質問に答えると、医療機関に伝える内容を整理できます。診断は行いません。'),
@@ -213,19 +240,37 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
         semanticsLabel: question.questionText,
       ),
       const SizedBox(height: 16),
+      TextField(
+        controller: _freeTextController,
+        enabled: !_busy && !_answerSaveUncertain,
+        maxLength: 2000,
+        maxLines: 3,
+        decoration: const InputDecoration(
+          labelText: '自由記述（任意）',
+          hintText: '選択肢にない内容があれば入力してください',
+          border: OutlineInputBorder(),
+        ),
+      ),
+      const SizedBox(height: 16),
       for (final option in question.options)
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: OutlinedButton(
-            onPressed: _busy
+            onPressed: _busy || _answerSaveUncertain
                 ? null
                 : () => _answer(
                     question,
                     // 選択肢中の UNKNOWN は「分からない」= unknown 状態で保存する。
-                    answerState: option.code == 'UNKNOWN' ? 'unknown' : 'answered',
-                    selectedCodes:
-                        option.code == 'UNKNOWN' ? const [] : [option.code],
+                    answerState: option.code == 'UNKNOWN'
+                        ? 'unknown'
+                        : 'answered',
+                    selectedCodes: option.code == 'UNKNOWN'
+                        ? const []
+                        : [option.code],
                     answerLabel: option.label,
+                    freeText: _freeTextController.text.isEmpty
+                        ? null
+                        : _freeTextController.text,
                   ),
             style: OutlinedButton.styleFrom(
               minimumSize: const Size(48, 48),
@@ -236,13 +281,14 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
         ),
       const Divider(),
       TextButton(
-        onPressed: _busy
+        onPressed: _busy || _answerSaveUncertain
             ? null
             : () => _answer(
                 question,
                 answerState: 'skipped',
                 selectedCodes: const [],
                 answerLabel: '答えたくない',
+                freeText: null,
               ),
         style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
         child: const Text('答えたくない'),
@@ -271,7 +317,9 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
         for (var i = 0; i < _history.length; i++)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: Text('Q${i + 1}. ${_history[i].questionText}\n→ ${_history[i].answerLabel}'),
+            child: Text(
+              'Q${i + 1}. ${_history[i].questionText}\n→ ${_history[i].answerLabel}',
+            ),
           ),
       if (summary != null && summary.unansweredTopics.isNotEmpty) ...[
         const SizedBox(height: 8),
@@ -293,10 +341,7 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
         child: Text('問診票を確定しました', style: textTheme.titleLarge),
       ),
       const SizedBox(height: 16),
-      const Text(
-        '問診票を確定しました。',
-        semanticsLabel: '問診票を確定しました。',
-      ),
+      const Text('問診票を確定しました。', semanticsLabel: '問診票を確定しました。'),
       const Text('医療機関への送信はまだ行っていません。送信は別の操作で確認します。'),
     ];
   }

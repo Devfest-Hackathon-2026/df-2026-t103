@@ -78,7 +78,7 @@ async function makeFinalizedQuestionnaire(app: FastifyInstance, uid = UID): Prom
 /** 施設ドキュメントをシードする。 */
 async function seedFacility(
   deps: TestDeps,
-  opts: { receivingEnabled?: boolean; verificationStatus?: string } = {},
+  opts: { receivingEnabled?: boolean; verificationStatus?: string; syntheticDemo?: boolean; syntheticPatientUid?: string } = {},
 ): Promise<void> {
   const ts = FieldValue.serverTimestamp();
   await deps.db.doc(`facilities/${FAC_ID}`).set({
@@ -87,6 +87,8 @@ async function seedFacility(
     displayName: "テスト病院",
     verificationStatus: opts.verificationStatus ?? "verified",
     receivingEnabled: opts.receivingEnabled ?? true,
+    ...(opts.syntheticDemo !== undefined ? { syntheticDemo: opts.syntheticDemo } : {}),
+    ...(opts.syntheticPatientUid !== undefined ? { syntheticPatientUid: opts.syntheticPatientUid } : {}),
     serviceAgreementVersion: "v1",
     createdAt: ts,
     updatedAt: ts,
@@ -399,6 +401,62 @@ describe("delivery routes (#17, API-029/030)", () => {
       headers: { ...authHeader(UID), "idempotency-key": "dlv-unver" },
       payload: deliveryPayload(qid),
     });
+    expect(res.statusCode).toBe(412);
+  });
+
+  it("allows pending synthetic demo delivery only for its server-configured synthetic patient", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps, {
+      verificationStatus: "pending",
+      syntheticDemo: true,
+      syntheticPatientUid: UID,
+    });
+    await deps.db.doc(`syntheticDemoPatients/${UID}`).set({ facilityId: FAC_ID });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": "dlv-synthetic-match" },
+      payload: deliveryPayload(qid),
+    });
+    expect(res.statusCode).toBe(202);
+  });
+
+  it("rejects a matching synthetic patient when receiving is disabled", async () => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps, { verificationStatus: "pending", syntheticDemo: true, syntheticPatientUid: UID, receivingEnabled: false });
+    await deps.db.doc(`syntheticDemoPatients/${UID}`).set({ facilityId: FAC_ID });
+    const res = await app.inject({ method: "POST", url: "/v1/deliveries", headers: { ...authHeader(UID), "idempotency-key": "dlv-synthetic-stopped" }, payload: deliveryPayload(qid) });
+    expect(res.statusCode).toBe(412);
+  });
+
+  it.each([
+    { syntheticDemo: false, syntheticPatientUid: UID },
+    { syntheticDemo: true, syntheticPatientUid: OTHER },
+    { syntheticDemo: true },
+  ])("rejects pending facility when synthetic demo identity does not match (%o)", async (markers) => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps, { verificationStatus: "pending", ...markers });
+    await deps.db.doc(`syntheticDemoPatients/${UID}`).set({ facilityId: FAC_ID });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/deliveries",
+      headers: { ...authHeader(UID), "idempotency-key": `dlv-synthetic-deny-${Math.random()}` },
+      payload: deliveryPayload(qid),
+    });
+    expect(res.statusCode).toBe(412);
+  });
+
+  it.each([undefined, {}, { facilityId: "other" }])("rejects missing or mismatched patient binding %o", async (binding) => {
+    const { deps, app } = await setup();
+    const qid = await makeFinalizedQuestionnaire(app);
+    await seedFacility(deps, { verificationStatus: "pending", syntheticDemo: true, syntheticPatientUid: UID });
+    if (binding) await deps.db.doc(`syntheticDemoPatients/${UID}`).set(binding);
+    const res = await app.inject({ method: "POST", url: "/v1/deliveries", headers: { ...authHeader(UID), "idempotency-key": "dlv-binding-deny" }, payload: deliveryPayload(qid) });
     expect(res.statusCode).toBe(412);
   });
 

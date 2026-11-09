@@ -37,6 +37,8 @@ export function registerFacilityRoutes(
   deps: Deps,
 ): void {
   const typed = app.withTypeProvider<ZodTypeProvider>();
+  const uidOf = (req: { requestContext: { auth?: { uid: string } } }) =>
+    req.requestContext.auth!.uid;
 
   // API-027 近隣施設検索（位置情報同意時のみ利用可）
   typed.post(
@@ -82,6 +84,9 @@ export function registerFacilityRoutes(
         security: [{ bearerAuth: [] }],
       },
     },
-    async (req) => getFacilityDetail(deps, req.params.facilityId),
+    async (req, reply) => {
+      reply.header("Cache-Control", "private, no-store");
+      return getFacilityDetail(deps, req.params.facilityId, uidOf(req));
+    },
   );
 }

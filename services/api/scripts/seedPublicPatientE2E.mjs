@@ -38,5 +38,39 @@ await db.doc("facilityMemberships/synthetic-public-staff-membership").set({
   role: "facility_staff", status: "active", mfaEnforced: false,
   createdAt: timestamp, revokedAt: null,
 });
+// Separate fixture: never change the verified facility shared by other E2Es.
+const sourcePatient = await auth.getUserByEmail("synthetic-intake-ui@example.test");
+const patient = await auth.createUser({
+  email: "synthetic-pending-e2e@example.test",
+  password: "local-only-pending-123!", emailVerified: true,
+});
+const sourceAccount = await db.doc(`accounts/${sourcePatient.uid}`).get();
+const sourceProfile = await db.doc(`patientProfiles/${sourcePatient.uid}`).get();
+await db.doc(`accounts/${patient.uid}`).set({ ...sourceAccount.data(), uid: patient.uid });
+await db.doc(`patientProfiles/${patient.uid}`).set({
+  ...sourceProfile.data(), patientUid: patient.uid,
+});
+const consents = await db.collection("legalConsents")
+  .where("subjectUid", "==", sourcePatient.uid).get();
+for (const consent of consents.docs) {
+  await db.collection("legalConsents").doc().set({
+    ...consent.data(), subjectUid: patient.uid,
+  });
+}
+await db.doc("facilities/synthetic-pending-e2e-facility").set({
+  facilityId: "synthetic-pending-e2e-facility", displayName: "合成データ未検証受入施設",
+  legalName: "合成データ未検証受入施設", verificationStatus: "pending",
+  receivingEnabled: true, serviceAgreementVersion: "v1",
+  syntheticDemo: true, syntheticPatientUid: patient.uid,
+  address: { formatted: "合成データの住所" }, createdAt: timestamp, updatedAt: timestamp,
+});
+await db.doc(`syntheticDemoPatients/${patient.uid}`).set({
+  facilityId: "synthetic-pending-e2e-facility",
+});
+await db.doc("facilityMemberships/synthetic-pending-e2e-staff-membership").set({
+  userUid: staff.uid, facilityId: "synthetic-pending-e2e-facility",
+  role: "facility_staff", status: "active", mfaEnforced: false,
+  createdAt: timestamp, revokedAt: null,
+});
 console.log("Public E2E facility and staff fixtures ready (local demo only)");
 await app.delete();

@@ -1177,4 +1177,127 @@ void main() {
       },
     );
   }
+
+  for (final scenario in [
+    (
+      name: '合成施設は受付中',
+      syntheticRecipient: true,
+      receivingEnabled: true,
+      sendable: true,
+    ),
+    (
+      name: '別患者のpending施設は受付不可',
+      syntheticRecipient: false,
+      receivingEnabled: true,
+      sendable: false,
+    ),
+    (
+      name: '停止中の合成施設は受付不可',
+      syntheticRecipient: false,
+      receivingEnabled: false,
+      sendable: false,
+    ),
+  ]) {
+    testWidgets('${scenario.name} の表示と送信可否が一致する', (tester) async {
+      Map<String, dynamic>? sent;
+      final epoch = Object();
+      final client = MockClient((request) async {
+        Object response;
+        switch (request.url.path) {
+          case '/v1/me':
+            response = {
+              'accountStatus': 'active',
+              'emailVerified': true,
+              'profileComplete': true,
+              'requiredConsents': {'current': true},
+            };
+          case '/v1/questionnaires':
+            response = {
+              'questionnaires': [
+                {'questionnaireId': 'synthetic-questionnaire'},
+              ],
+            };
+          case '/v1/questionnaires/synthetic-questionnaire':
+            response = {
+              'questionnaireId': 'synthetic-questionnaire',
+              'revision': {'versionNumber': 2},
+            };
+          case '/v1/facilities/synthetic-facility':
+            response = {
+              'facilityId': 'synthetic-facility',
+              'displayName': '合成データ施設',
+              'verificationStatus': 'pending',
+              'syntheticRecipient': scenario.syntheticRecipient,
+              'receivingEnabled': scenario.receivingEnabled,
+            };
+          case '/v1/public/legal-documents':
+            response = {
+              'documents': {
+                'hospital_disclosure': {
+                  'version': 'v2',
+                  'documentHash': 'hash',
+                },
+              },
+            };
+          case '/v1/deliveries':
+            sent = jsonDecode(request.body) as Map<String, dynamic>;
+            response = {'deliveryId': 'delivery'};
+          default:
+            fail('Unexpected request path: ${request.url.path}');
+        }
+        return http.Response(
+          jsonEncode(response),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      addTearDown(client.close);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PublicPatientScreen(
+            api: PublicPatientApi(
+              origin: 'https://api.example.test',
+              client: client,
+              tokens: () async => (auth: 'synthetic', appCheck: 'synthetic'),
+              session: () => epoch,
+            ),
+            signIn: (_, _) async {},
+            signOut: () async {},
+            resetPassword: (_) async {},
+            changes: const Stream<void>.empty(),
+          ),
+        ),
+      );
+      Future<void> tap(String label) async {
+        await tester.ensureVisible(find.text(label));
+        await tester.tap(find.text(label));
+        await tester.pumpAndSettle();
+      }
+
+      await tap('ログイン');
+      await tap('過去の問診票を見る');
+      await tap('確定済み問診票');
+      await tester.enterText(find.byType(TextField), 'synthetic-facility');
+      await tap('施設を確認');
+      expect(
+        find.text('合成デモ施設です。実際の医療機関ではありません。'),
+        scenario.syntheticRecipient ? findsOneWidget : findsNothing,
+      );
+      expect(
+        find.text('この施設は現在受け付けていません。送信できません。'),
+        scenario.sendable ? findsNothing : findsOneWidget,
+      );
+      await tap('「合成データ施設」へ、この問診票と選択した情報を送信することに同意します');
+      final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, '同意した施設へ送信'),
+      );
+      expect(button.onPressed != null, scenario.sendable);
+      if (scenario.sendable) {
+        await tap('同意した施設へ送信');
+        expect(sent, isNotNull);
+      } else {
+        expect(sent, isNull);
+      }
+    });
+  }
 }

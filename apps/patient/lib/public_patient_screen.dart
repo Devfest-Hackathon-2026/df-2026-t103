@@ -1123,7 +1123,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     final facility = _facility;
     if (facility == null ||
         !_share ||
-        facility['verificationStatus'] != 'verified' ||
+        (facility['verificationStatus'] != 'verified' &&
+            facility['syntheticRecipient'] != true) ||
         facility['receivingEnabled'] != true) {
       throw const PatientRequestFailure('412');
     }
@@ -1711,7 +1712,10 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         Text('${_facility!['formattedAddress'] ?? ''}'),
-        if (_facility!['verificationStatus'] != 'verified' ||
+        if (_facility!['syntheticRecipient'] == true)
+          const Text('合成デモ施設です。実際の医療機関ではありません。'),
+        if ((_facility!['verificationStatus'] != 'verified' &&
+                _facility!['syntheticRecipient'] != true) ||
             _facility!['receivingEnabled'] != true)
           const Text('この施設は現在受け付けていません。送信できません。'),
         CheckboxListTile(
@@ -1751,7 +1755,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
           _send,
           enabled:
               _share &&
-              _facility!['verificationStatus'] == 'verified' &&
+              (_facility!['verificationStatus'] == 'verified' ||
+                  _facility!['syntheticRecipient'] == true) &&
               _facility!['receivingEnabled'] == true,
         ),
       ],

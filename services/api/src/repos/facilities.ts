@@ -16,6 +16,14 @@ export interface FacilityDoc {
   address: { formatted?: string };
   verificationStatus: "pending" | "verified" | "rejected" | "suspended";
   receivingEnabled: boolean;
+  syntheticDemo?: boolean;
+  syntheticPatientUid?: string;
+}
+
+/** Server-owned markers must both match; never accept these from a client. */
+export function isSyntheticRecipient(facility: { verificationStatus: string; syntheticDemo?: boolean; syntheticPatientUid?: string }, uid: string, facilityId: string, patient: unknown): boolean {
+  return facility.verificationStatus === "pending" && facility.syntheticDemo === true && facility.syntheticPatientUid === uid &&
+    typeof patient === "object" && patient !== null && "facilityId" in patient && patient.facilityId === facilityId;
 }
 
 /** facilityId で施設を取得する。存在しなければ null。 */

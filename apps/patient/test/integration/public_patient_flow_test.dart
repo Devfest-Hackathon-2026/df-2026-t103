@@ -291,6 +291,11 @@ void main() {
   testWidgets('public UI → real API → hospital receipt → logout', (
     tester,
   ) async {
+    const pending = bool.fromEnvironment('RUN_SYNTHETIC_PENDING_E2E');
+    const facility = pending
+        ? 'synthetic-pending-e2e-facility'
+        : 'synthetic-public-facility';
+    const facilityName = pending ? '合成データ未検証受入施設' : '合成データ受入施設';
     final client = _CaptureIntakeIdClient(http.Client());
     final changes = StreamController<void>.broadcast(sync: true);
     var epoch = Object();
@@ -358,7 +363,7 @@ void main() {
           home: PublicPatientScreen(
             api: api,
             changes: changes.stream,
-            initialFacilityId: 'synthetic-public-facility',
+            initialFacilityId: facility,
             signIn: (email, password) async {
               patientToken = await login(email, password);
               epoch = Object();
@@ -376,11 +381,13 @@ void main() {
       );
       await tester.enterText(
         find.byType(TextField).at(0),
-        'synthetic-intake-ui@example.test',
+        pending
+            ? 'synthetic-pending-e2e@example.test'
+            : 'synthetic-intake-ui@example.test',
       );
       await tester.enterText(
         find.byType(TextField).at(1),
-        'local-only-intake-123!',
+        pending ? 'local-only-pending-123!' : 'local-only-intake-123!',
       );
       await tap('ログイン');
       await waitFor(find.text('新しい問診をはじめる'));
@@ -594,10 +601,7 @@ void main() {
       expect(restoredAnswer['freeText'], editedFreeText);
       _flowMarker('review');
       final reviewConfirmation = find.text('問診の内容を確認しました');
-      final finalizeButton = find.widgetWithText(
-        FilledButton,
-        'この内容で問診票を確定',
-      );
+      final finalizeButton = find.widgetWithText(FilledButton, 'この内容で問診票を確定');
       _flowMarker('review-confirmation-wait-start');
       await waitFor(reviewConfirmation);
       _flowMarker('review-confirmation-wait-completed');
@@ -609,18 +613,15 @@ void main() {
       _flowMarker('review-confirmation-tap-start');
       await tap('問診の内容を確認しました', finder: reviewConfirmation);
       _flowMarker('review-confirmation-tap-returned');
-      expect(
-        tester.widget<FilledButton>(finalizeButton).onPressed,
-        isNotNull,
-      );
+      expect(tester.widget<FilledButton>(finalizeButton).onPressed, isNotNull);
       _flowMarker('review-finalize-tap-start');
       await tap('この内容で問診票を確定');
       _flowMarker('review-finalize-tap-returned');
       _flowMarker('hospital-facility-wait-start');
-      await waitFor(find.text('合成データ受入施設'));
+      await waitFor(find.text(facilityName));
       _flowMarker('hospital-facility-wait-completed');
       _flowMarker('hospital-consent-tap-start');
-      await tap('「合成データ受入施設」へ、この問診票と選択した情報を送信することに同意します');
+      await tap('「$facilityName」へ、この問診票と選択した情報を送信することに同意します');
       _flowMarker('hospital-consent-tap-returned');
       _flowMarker('hospital-send-tap-start');
       await tap('同意した施設へ送信');
@@ -635,7 +636,6 @@ void main() {
           'local-only-public-staff-123!',
         ),
       );
-      const facility = 'synthetic-public-facility';
       final headers = {'Authorization': 'Bearer $staffToken'};
       String? cursor;
       final seenCursors = <String>{};

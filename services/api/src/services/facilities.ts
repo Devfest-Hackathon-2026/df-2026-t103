@@ -3,6 +3,7 @@ import { ApiError } from "../lib/errors.js";
 import {
   getFacilityById,
   getFacilitiesByPlaceIds,
+  isSyntheticRecipient,
 } from "../repos/facilities.js";
 
 export interface FacilitySearchItem {
@@ -23,6 +24,7 @@ export interface FacilityDetail {
   formattedAddress: string;
   verificationStatus: string;
   receivingEnabled: boolean;
+  syntheticRecipient: boolean;
 }
 
 export interface SearchNearbyInput {
@@ -92,9 +94,11 @@ export async function searchNearbyFacilities(
 export async function getFacilityDetail(
   deps: Deps,
   facilityId: string,
+  uid: string,
 ): Promise<FacilityDetail> {
   const facility = await getFacilityById(deps.db, facilityId);
   if (!facility) throw ApiError.notFound("施設が見つかりません。");
+  const patient = await deps.db.doc(`syntheticDemoPatients/${uid}`).get();
 
   return {
     facilityId: facility.facilityId,
@@ -102,5 +106,6 @@ export async function getFacilityDetail(
     formattedAddress: facility.address.formatted ?? "",
     verificationStatus: facility.verificationStatus,
     receivingEnabled: facility.receivingEnabled,
+    syntheticRecipient: facility.receivingEnabled === true && isSyntheticRecipient(facility, uid, facilityId, patient.data()),
   };
 }

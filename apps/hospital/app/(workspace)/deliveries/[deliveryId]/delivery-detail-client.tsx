@@ -30,6 +30,62 @@ interface QuestionnaireSnapshot {
   unansweredTopics?: string[];
 }
 
+export function DeliveryQuestionnaireSummary({ snapshot }: { snapshot: QuestionnaireSnapshot }) {
+  const complaint = snapshot.chiefComplaint;
+  const chiefComplaintText =
+    typeof complaint === "string" ? complaint : (complaint && typeof complaint === "object" && complaint.value) || "—";
+  const sections = Object.entries(snapshot.sections ?? {})
+    .filter(([, s]) => s && typeof s === "object" && typeof s.answerState === "string")
+    .sort(([a], [b]) => {
+      const order = Object.keys(TOPIC_LABEL);
+      const ia = order.indexOf(a);
+      const ib = order.indexOf(b);
+      return (ia < 0 ? order.length : ia) - (ib < 0 ? order.length : ib);
+    });
+  const unanswered = snapshot.unansweredTopics ?? [];
+
+  return (
+    <>
+      <dl className="mb-4 space-y-2 text-hx-body">
+        <div>
+          <dt className="text-hx-caption text-hx-text-subtle">主訴</dt>
+          <dd className="font-semibold whitespace-pre-wrap">{chiefComplaintText}</dd>
+        </div>
+        {snapshot.bodyLocations && snapshot.bodyLocations.length > 0 ? (
+          <div>
+            <dt className="text-hx-caption text-hx-text-subtle">症状の部位</dt>
+            <dd>{snapshot.bodyLocations.map((loc) => BODY_LOCATION_LABEL[loc] ?? loc).join("、")}</dd>
+          </div>
+        ) : null}
+      </dl>
+      {sections.length > 0 ? (
+        <HxDataTable caption="問診票の回答項目">
+          <thead><tr><HxTh className="w-56">項目</HxTh><HxTh>回答</HxTh></tr></thead>
+          <tbody>
+            {sections.map(([topic, section]) => (
+              <HxTr key={topic}>
+                <th scope="row" className="border-b border-hx-divider px-3 py-2.5 text-left align-middle font-semibold">
+                  {TOPIC_LABEL[topic] ?? topic}
+                </th>
+                <HxTd className="whitespace-pre-wrap">
+                  {section.answerState === "answered" && section.value
+                    ? section.value
+                    : (ANSWER_STATE_LABEL[section.answerState] ?? "—")}
+                </HxTd>
+              </HxTr>
+            ))}
+          </tbody>
+        </HxDataTable>
+      ) : null}
+      {unanswered.length > 0 ? (
+        <p className="mt-3 text-hx-caption text-hx-text-subtle">
+          未回答の項目: {unanswered.map((t) => TOPIC_LABEL[t] ?? t).join("、")}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 interface PatientIdentity {
   familyName?: string;
   givenName?: string;
@@ -285,22 +341,6 @@ export function DeliveryDetailClient({ deliveryId }: { deliveryId: string }) {
     .join(" ");
   // §18 状態別操作: created はまだ受信扱いにしない（不可）。delivered のみ受領可能
   const canAcknowledge = detail.status === "delivered";
-  // chiefComplaint は契約上 {value} だが旧データの生文字列も安全側で受ける
-  const chiefComplaintRaw = snapshot.chiefComplaint;
-  const chiefComplaintText =
-    typeof chiefComplaintRaw === "string"
-      ? chiefComplaintRaw
-      : (chiefComplaintRaw && typeof chiefComplaintRaw === "object" && chiefComplaintRaw.value) || "—";
-  // 臨床順（TOPIC_LABEL 定義順）で並べ、形の合わないエントリは落とす
-  const sections = Object.entries(snapshot.sections ?? {})
-    .filter(([, s]) => s && typeof s === "object" && typeof s.answerState === "string")
-    .sort(([a], [b]) => {
-      const order = Object.keys(TOPIC_LABEL);
-      const ia = order.indexOf(a);
-      const ib = order.indexOf(b);
-      return (ia < 0 ? order.length : ia) - (ib < 0 ? order.length : ib);
-    });
-  const unanswered = snapshot.unansweredTopics ?? [];
   const medicationsShared = detail.shareScope.includeConfirmedMedications === true;
   const profileShared = detail.shareScope.includeProfile === true;
 
@@ -397,51 +437,7 @@ export function DeliveryDetailClient({ deliveryId }: { deliveryId: string }) {
         <h2 id="questionnaire-heading" className="mb-3 text-hx-section-title font-semibold">
           確定問診票
         </h2>
-        <dl className="mb-4 space-y-2 text-hx-body">
-          <div>
-            <dt className="text-hx-caption text-hx-text-subtle">主訴</dt>
-            <dd className="font-semibold whitespace-pre-wrap">{chiefComplaintText}</dd>
-          </div>
-          {snapshot.bodyLocations && snapshot.bodyLocations.length > 0 ? (
-            <div>
-              <dt className="text-hx-caption text-hx-text-subtle">症状の部位</dt>
-              <dd>
-                {snapshot.bodyLocations.map((loc) => BODY_LOCATION_LABEL[loc] ?? loc).join("、")}
-              </dd>
-            </div>
-          ) : null}
-        </dl>
-
-        {sections.length > 0 ? (
-          <HxDataTable caption="問診票の回答項目">
-            <thead>
-              <tr>
-                <HxTh className="w-56">項目</HxTh>
-                <HxTh>回答</HxTh>
-              </tr>
-            </thead>
-            <tbody>
-              {sections.map(([topic, section]) => (
-                <HxTr key={topic}>
-                  <th scope="row" className="border-b border-hx-divider px-3 py-2.5 text-left align-middle font-semibold">
-                    {TOPIC_LABEL[topic] ?? topic}
-                  </th>
-                  <HxTd className="whitespace-pre-wrap">
-                    {section.answerState === "answered" && section.value
-                      ? section.value
-                      : (ANSWER_STATE_LABEL[section.answerState] ?? "—")}
-                  </HxTd>
-                </HxTr>
-              ))}
-            </tbody>
-          </HxDataTable>
-        ) : null}
-
-        {unanswered.length > 0 ? (
-          <p className="mt-3 text-hx-caption text-hx-text-subtle">
-            未回答の項目: {unanswered.map((t) => TOPIC_LABEL[t] ?? t).join("、")}
-          </p>
-        ) : null}
+        <DeliveryQuestionnaireSummary snapshot={snapshot} />
       </section>
 
       <section aria-labelledby="medication-heading" className="rounded-md border border-hx-border bg-hx-surface p-5">

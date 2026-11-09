@@ -86,8 +86,12 @@ export class VertexAiLlmAdapter implements LlmAdapter {
 
   private get endpoint(): string {
     const { location, projectId, model } = this.cfg;
+    // Global uses the unprefixed host; the resource path still contains global.
+    const host = location === "global"
+      ? "aiplatform.googleapis.com"
+      : `${location}-aiplatform.googleapis.com`;
     return (
-      `https://${location}-aiplatform.googleapis.com/v1/projects/` +
+      `https://${host}/v1/projects/` +
       `${projectId}/locations/${location}/publishers/google/models/` +
       `${model}:generateContent`
     );

@@ -1,0 +1,13 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+# 実値（秘密・環境固有）はコミットしない
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json
+# Remote-state bootstrap settings and saved plans (may contain sensitive data)
+backend.local.tf
+*.tfplan

@@ -1,0 +1,191 @@
+name: patient-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patient-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patient-ios:
+    name: patient / iOS Release compile (unsigned)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+      # Compile only. This synthetic configuration never accesses Firebase and
+      # produces no installable IPA. No Apple or Firebase credentials in PR CI.
+      - name: Compile public iOS entrypoint
+        working-directory: apps/patient
+        run: >-
+          python3 tool/build_ios.py
+          --config ios/public-config.example.json
+          --build-number "${{ github.run_number }}"
+          --unsigned
+
+  patient:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        working-directory: apps/patient
+        run: flutter pub get
+
+      - name: flutter analyze
+        working-directory: apps/patient
+        run: flutter analyze
+
+      - name: flutter test
+        working-directory: apps/patient
+        run: flutter test
+
+      - name: Test iOS build configuration (no Apple tools)
+        working-directory: apps/patient
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tool -p 'test_*.py' -v
+
+  patient-e2e:
+    name: patient / intake E2E (emulator)
+    runs-on: ubuntu-latest
+    # Dedicated GitHub-hosted disposable VM only. Script bounds: build 5m +
+    # readiness 4m + seeding 2m + Flutter (7 x 2m + recovery 15m) 29m +
+    # bounded cleanup reserve 20s = 40m20s. The 55m job timeout leaves 14m40s
+    # for checkout/setup/npm install/post-job cleanup. Bounds are best-effort;
+    # timeout cleanup cannot prove descendants exited, so VM disposal is final.
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - name: Set up Java (Firebase emulators requirement)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: Install api dependencies
+        working-directory: services/api
+        run: npm ci
+
+      # Stands up the emulators + real API and runs the gated Flutter intake E2E
+      # (E2E-001 / 001B / 002, including answer recovery after response loss).
+      # firebase-tools is pinned to match the api job.
+      - name: Run patient intake E2E
+        env:
+          FIREBASE_BIN: npx -y firebase-tools@15.35.0
+          FLUTTER_BIN: flutter
+          # Opt-in assertion only; this does not itself isolate ports/processes.
+          # GitHub-hosted job VMs are dedicated and freshly provisioned.
+          E2E_DISPOSABLE_RUNNER: '1'
+        run: bash apps/patient/tool/run_intake_e2e.sh
+
+  patient-registration-e2e:
+    name: patient / public registration E2E (emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - name: Set up Java (Firebase emulators requirement)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: Install API dependencies
+        run: npm --prefix services/api ci
+
+      # This runner creates isolated, loopback-only emulators and seeds only
+      # synthetic legal documents. No real Firebase project or credentials.
+      - name: Run public registration E2E
+        env:
+          FIREBASE_BIN: npx -y firebase-tools@15.35.0
+          FLUTTER_BIN: flutter
+        run: bash apps/patient/tool/run_public_registration_e2e.sh
+
+  patient-browser-integration:
+    name: patient / browser CORS + Dart API (emulators)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: Verify Firefox and Xvfb are available on the hosted runner
+        run: |
+          command -v firefox
+          firefox --version
+          command -v Xvfb
+
+      - name: Install API dependencies
+        run: npm --prefix services/api ci
+
+      - name: Test browser runner timeout and cleanup failure paths
+        run: python3 -m unittest discover -s apps/patient/tool -p 'test_run_browser_integration.py' -v
+
+      - name: Run isolated real-browser integration checks
+        env:
+          FIREBASE_BIN: npx -y firebase-tools@15.35.0
+          FLUTTER_BIN: flutter
+          FIREFOX_BIN: firefox
+        run: python3 apps/patient/tool/run_browser_integration.py

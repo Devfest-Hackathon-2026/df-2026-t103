@@ -1,0 +1,39 @@
+{
+  "name": "hospital-portal-demo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev --hostname 0.0.0.0",
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
+    "start": "next start --hostname 0.0.0.0",
+    "lint": "eslint .",
+    "test": "node --import tsx --test tests/*.test.ts tests/*.test.tsx",
+    "test:security": "node --test tests/security-http.mjs",
+    "test:api": "node --dns-result-order=ipv4first --import tsx --test tests/real-api.ts",
+    "test:browser": "HOSPITAL_BROWSER_SMOKE=true npm run test:api",
+    "test:emulator": "node --dns-result-order=ipv4first --import tsx --test tests/*.integration.ts"
+  },
+  "dependencies": {
+    "firebase": "^13.2.0",
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.4",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^10.14.0",
+    "eslint-config-next": "16.4.5",
+    "tailwindcss": "^4.3.4",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "overrides": {
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "1.13.6"
+    }
+  }
+}

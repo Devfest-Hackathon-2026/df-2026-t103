@@ -1,0 +1,22 @@
+# gitleaks 設定（Issue #37 / security.yaml から参照）
+# デフォルトルールを継承しつつ、実秘密ではないパスを allowlist する。
+# 新規の本番コード・設定での誤コミットは引き続き検出対象。
+
+title = "moshimoshimonshin gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "テスト・ドキュメント・雛形・ベンダー資産のプレースホルダを除外"
+paths = [
+  # テストfixture内のダミートークン（例: tok-finalize-1）
+  '''services/api/test/.*''',
+  # 仕様書・設計ドキュメント内のプレースホルダ（<FIREBASE_ID_TOKEN> 等）
+  '''docs/.*''',
+  # 秘密情報の雛形（実値は含めない運用）
+  '''\.secret\.example''',
+  '''\.env\.example''',
+  # ベンダー登録した Google スキル資産（curl例など）
+  '''\.agents/skills/.*''',
+]

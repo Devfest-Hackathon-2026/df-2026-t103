@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: api / typecheck + lint + test + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+      - name: Test deployment gate
+        working-directory: .
+        run: node --test scripts/cd-gate.test.cjs
+
+  api-emulator:
+    name: api / firebase emulator integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - name: Set up Java (Firebase emulators requirement)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install api dependencies
+        working-directory: services/api
+        run: npm ci
+
+      # demo-mmr-dev（demo- プレフィックスのため実プロジェクトへは接続しない）。
+      # emulators:exec が FIRESTORE/FIREBASE_AUTH_EMULATOR_HOST を設定する。
+      # firebase-tools は docker/firebase/Dockerfile の FIREBASE_TOOLS_VERSION と揃える。
+      - name: Run emulator integration tests
+        run: >-
+          npx -y firebase-tools@15.35.0 emulators:exec
+          --only auth,firestore --project demo-mmr-dev
+          "npm --prefix services/api run test:emulator"
+
+  docker:
+    name: docker / image build + compose config
+    runs-on: ubuntu-latest
+    # Isolated HTTP smoke fixtures; .invalid origins and inert public keys never
+    # contact Firebase/API. Production deployment supplies registered settings.
+    env:
+      NEXT_PUBLIC_USE_FIREBASE_EMULATOR: 'false'
+      NEXT_PUBLIC_API_BASE_URL: https://api.invalid/v1
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: project-7efcc4c4-6c86-490c-ba5
+      NEXT_PUBLIC_FIREBASE_API_KEY: ci-not-a-real-key
+      NEXT_PUBLIC_FIREBASE_APP_ID: ci-not-a-real-app
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: auth.invalid
+      NEXT_PUBLIC_APP_CHECK_SITE_KEY: ci-not-a-real-site-key
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build api image (all targets)
+        run: docker build -f docker/api/Dockerfile .
+
+      - name: Build hospital server image
+        run: |
+          docker build -f docker/hospital/Dockerfile --target prod -t hospital-ci \
+            --build-arg NEXT_PUBLIC_API_BASE_URL \
+            --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID \
+            --build-arg NEXT_PUBLIC_FIREBASE_API_KEY \
+            --build-arg NEXT_PUBLIC_FIREBASE_APP_ID \
+            --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN \
+            --build-arg NEXT_PUBLIC_APP_CHECK_SITE_KEY .
+
+      - name: Smoke test the packaged hospital server
+        run: |
+          container="$(docker run -d -p 127.0.0.1::8080 \
+            -e HOSPITAL_PUBLIC_ORIGIN=https://hospital-ci.example.test \
+            -e NEXT_PUBLIC_USE_FIREBASE_EMULATOR \
+            -e NEXT_PUBLIC_API_BASE_URL -e NEXT_PUBLIC_FIREBASE_PROJECT_ID \
+            -e NEXT_PUBLIC_FIREBASE_API_KEY -e NEXT_PUBLIC_FIREBASE_APP_ID \
+            -e NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN -e NEXT_PUBLIC_APP_CHECK_SITE_KEY hospital-ci)"
+          trap 'result=$?; if [ "$result" -ne 0 ]; then docker logs "$container"; fi; docker rm -f "$container" >/dev/null; exit "$result"' EXIT
+          port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8080/tcp") 0).HostPort}}' "$container")"
+          # Docker may accept the connection before Next is listening, then reset it.
+          # Bound readiness retries; the assertions below run once after readiness.
+          curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 1 --retry-max-time 45 --max-time 3 "http://127.0.0.1:$port/login" -o /dev/null
+          node scripts/hospital-server-smoke.mjs "http://127.0.0.1:$port"
+
+      - name: Build firebase emulator image
+        run: docker build -f docker/firebase/Dockerfile .
+
+      - name: Validate docker-compose.yml
+        run: docker compose config -q

@@ -1,0 +1,90 @@
+# Cloud Run サービス定義（患者/病院向け API）— Issue #29 / docs/02 §10・§11.2・ADR-0005
+#
+# 宣言的な単一ソース。適用は:
+#   gcloud run services replace infra/cloud-run/service-api.yaml \
+#     --project <PROJECT_ID> --region asia-northeast1
+#
+# CD（.github/workflows/cd.yaml）は現状 `gcloud run deploy` でイメージを差し替える。
+# 本マニフェストは SA・スケーリング・並行度・タイムアウト・env/secret の正本であり、
+# deploy 時の設定はこの値に揃える（将来 CD を services replace へ寄せる場合の基準）。
+#
+# 注意:
+#  - image は CD がコミット SHA 付きイメージへ差し替える。ここでは placeholder。
+#  - secret 参照（SERVER_HMAC_SECRET 等）は Secret Manager 側の作成が前提（Issue #32）。
+#  - サービスアカウントへの IAM ロール付与は infra/README.md 記載の手順で owner が実施。
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: api
+  labels:
+    app: moshimoshimonshin
+    component: api
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        # 初期はコスト最小化で min=0。冷間起動が UX に影響する場合のみ増やす（§11.2）。
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+        # CPU は常時割当にせず、リクエスト処理中のみ（min=0 と整合）。
+        run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      # 患者/病院向け API 専用 SA（最小権限は infra/README.md 参照）。
+      serviceAccountName: api-run-sa@PROJECT_ID.iam.gserviceaccount.com
+      # 1 インスタンスあたりの同時リクエスト数。I/O 主体のため既定より高め。
+      containerConcurrency: 80
+      # AI 問診チャット等の長めの処理を考慮（上限 3600 まで可）。
+      timeoutSeconds: 300
+      containers:
+        - name: api
+          image: asia-northeast1-docker.pkg.dev/PROJECT_ID/api/api:latest
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: "8080"
+            - name: LOG_LEVEL
+              value: info
+            - name: FIREBASE_PROJECT_ID
+              value: PROJECT_ID
+            - name: FIREBASE_STORAGE_BUCKET
+              value: PROJECT_ID.appspot.com
+            - name: APP_CHECK_MODE
+              value: enforce
+            - name: API_DOCS_ENABLED
+              value: "false"
+            - name: OCR_TASKS_LOCATION
+              value: asia-northeast1
+            - name: VERTEX_AI_LOCATION
+              value: asia-northeast1
+            # --- Secret Manager 由来（Issue #32 でシークレット作成後に有効化）---
+            - name: SERVER_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: SERVER_HMAC_SECRET
+                  key: latest
+            - name: INTERNAL_JOB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: INTERNAL_JOB_TOKEN
+                  key: latest
+            - name: GOOGLE_PLACES_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: GOOGLE_PLACES_API_KEY
+                  key: latest
+  traffic:
+    - percent: 100
+      latestRevision: true

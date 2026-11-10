@@ -1,0 +1,21 @@
+{
+  "name": "@mmr/firebase-rules-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Firestore/RTDB/Storage Security Rules のエミュレータ単体テスト",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:compose": "FIRESTORE_EMULATOR_HOST=localhost:8081 FIREBASE_DATABASE_EMULATOR_HOST=localhost:9000 FIREBASE_STORAGE_EMULATOR_HOST=localhost:9199 vitest run"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "6.0.0",
+    "@types/node": "^22.20.5",
+    "firebase": "13.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  }
+}

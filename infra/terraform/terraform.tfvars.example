@@ -1,0 +1,10 @@
+# 実値は owner が設定（コミット禁止の terraform.tfvars にコピーして使う）
+project_id = "project-7efcc4c4-6c86-490c-ba5"
+region     = "asia-northeast1"
+
+# CD が差し替えるが初回 apply 用の初期イメージ
+# api_image = "asia-northeast1-docker.pkg.dev/project-7efcc4c4-6c86-490c-ba5/api/api:latest"
+
+# 患者Hosting originが既定。追加originは実在確認後にカンマ区切りで指定する。
+# cors_origins = "https://project-7efcc4c4-6c86-490c-ba5.web.app"
+# storage_bucket を旧 -app bucketに上書きしない。画像は -patient-uploads を使用。

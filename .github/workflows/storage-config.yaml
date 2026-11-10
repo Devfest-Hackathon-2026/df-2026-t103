@@ -1,0 +1,27 @@
+name: storage-config
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  configuration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test local configuration rendering (no cloud access)
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s infra/storage -p 'test_*.py' -v
+      - name: Test Firestore backup configuration failures (no cloud access)
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          bash -n infra/firestore/backup-export.sh
+          python3 -m unittest discover -s infra/firestore -p 'test_*.py' -v

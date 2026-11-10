@@ -38,11 +38,14 @@ class _Backend {
   int revision = 2;
   final List<String> answered = [];
   final List<String?> answerFreeTexts = [];
+  final List<String?> answerKeys = [];
+  final Map<String, http.Response> committedAnswers = {};
   bool summarized = false;
   bool finalized = false;
   int nextCalls = 0;
   int answerRequests = 0;
   bool failAnswer = false;
+  int? rejectAnswer;
   bool includeSecondQuestion = false;
 
   // http.Response defaults to latin1 without a charset, so always declare utf-8
@@ -111,6 +114,8 @@ class _Backend {
     }
     if (path.endsWith('/answers')) {
       answerRequests++;
+      final key = request.headers['idempotency-key'];
+      answerKeys.add(key);
       final body = jsonDecode(request.body) as Map;
       expect(body['expectedIntakeRevision'], revision);
       if (failAnswer) {
@@ -119,9 +124,22 @@ class _Backend {
           'error': {'code': 'INTERNAL'},
         }, 500);
       }
+      if (rejectAnswer != null) {
+        final status = rejectAnswer!;
+        rejectAnswer = null;
+        return _json({
+          'error': {'code': 'CONFLICT'},
+        }, status);
+      }
+      // Same-key resends replay the committed result like the real ledger.
+      if (key != null && committedAnswers.containsKey(key)) {
+        return committedAnswers[key]!;
+      }
       answered.add(body['answerState'] as String);
       answerFreeTexts.add(body['freeText'] as String?);
-      return _json({'answerId': 'a1', 'intakeRevision': ++revision});
+      final result = _json({'answerId': 'a1', 'intakeRevision': ++revision});
+      if (key != null) committedAnswers[key] = result;
+      return result;
     }
     if (path.endsWith('/summary')) {
       summarized = true;
@@ -359,7 +377,7 @@ void main() {
     expect(tester.widget<TextField>(textField).controller!.text, isEmpty);
   });
 
-  testWidgets('does not advance after uncertain answer save failure', (
+  testWidgets('resends the same key once after an uncertain answer failure', (
     tester,
   ) async {
     final backend = _Backend()..failAnswer = true;
@@ -392,21 +410,75 @@ void main() {
     await tester.pumpAndSettle();
     expect(backend.nextCalls, 1);
     expect(backend.answerRequests, 1);
-    expect(find.text('再試行'), findsNothing);
+    expect(find.textContaining('同じ回答を再送'), findsOneWidget);
     expect(find.text('いつ頃からですか？'), findsOneWidget);
-    expect(find.textContaining('安全に再開・照合する方法がない'), findsOneWidget);
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
       '保存結果不明の回答',
     );
 
-    // Neither another option nor skip nor edits can cause a stale-revision
-    // answer request after the save outcome became uncertain.
-    await tester.tap(find.text('今日から'));
+    // While the save outcome is uncertain, a different answer (or skip) must
+    // not be sent: another attempt with a new key could double-record.
+    await tester.tap(find.text('分からない'));
     await tester.tap(find.text('答えたくない'));
     await tester.pumpAndSettle();
     expect(backend.answerRequests, 1);
     expect(backend.nextCalls, 1);
-    expect(find.text('再試行'), findsNothing);
+
+    // Retry resends the identical request with the same Idempotency-Key, so
+    // the server replays the prior result instead of duplicating the answer.
+    await tester.tap(find.text('再試行'));
+    await tester.pumpAndSettle();
+    expect(backend.answerRequests, 2);
+    expect(backend.answerKeys[0], isNotNull);
+    expect(backend.answerKeys[0], backend.answerKeys[1]);
+    expect(backend.answered, ['answered']);
+    expect(backend.answerFreeTexts, ['保存結果不明の回答']);
+    expect(find.text('ここまでの回答'), findsOneWidget);
+  });
+
+  testWidgets('a rejected answer can be retried as a fresh attempt', (
+    tester,
+  ) async {
+    final backend = _Backend()..rejectAnswer = 412;
+    final owner = IntakeIdentity('patient-a', Object(), 'synthetic-token');
+    final api = PatientIntakeApi(
+      origin: 'http://127.0.0.1:8080',
+      client: backend.client(),
+      identity: () async => owner,
+      isCurrent: (_) => true,
+    );
+    final submission = IntakeSubmission('合成の症状');
+    final startRevision = await api.submit(submission);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: IntakeQuestionFlow(
+              api: api,
+              submission: submission,
+              startRevision: startRevision,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('いつ頃からですか？'), findsOneWidget);
+    await tester.tap(find.text('今日から'));
+    await tester.pumpAndSettle();
+    expect(backend.answerRequests, 1);
+    expect(find.textContaining('回答を保存できません'), findsOneWidget);
+
+    // The request was rejected before commit, so the same question stays
+    // answerable and a fresh attempt carries a fresh Idempotency-Key.
+    await tester.tap(find.text('今日から'));
+    await tester.pumpAndSettle();
+    expect(backend.answerRequests, 2);
+    expect(backend.answerKeys[0], isNotNull);
+    expect(backend.answerKeys[1], isNotNull);
+    expect(backend.answerKeys[0], isNot(backend.answerKeys[1]));
+    expect(backend.answered, ['answered']);
+    expect(find.text('ここまでの回答'), findsOneWidget);
   });
 }

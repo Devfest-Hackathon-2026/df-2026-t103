@@ -1,3 +1,44 @@
+# 環境変数・秘密情報（.env.example / .secret.example は雛形として管理）
+.env.local
+.secret.local
+.env.*.local
+
+# make / 開発時の実行状態・ログ
+.local/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+npm-debug.log*
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+*.iml
+
+# Firebase
+firebase-debug.log
+firestore-debug.log
+database-debug.log
+ui-debug.log
+firebase-export-*/
+# Temp emulator config written by apps/patient/tool/run_intake_e2e.sh
+.firebase-e2e.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Submission repository safeguards (preserved from destination)
 # 秘密情報（コミットしない）
 .env
 .env.*

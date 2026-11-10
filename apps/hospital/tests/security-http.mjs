@@ -1,0 +1,103 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { test } from "node:test";
+
+// Starts the actual production build on a disposable loopback port. No cloud,
+// credentials, browsers or patient fixtures are used.
+test("production HTTP responses retain CSP, fresh script nonces and no-store", { timeout: 30000 }, async () => {
+  const child = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "0"], {
+    env: { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", HOSPITAL_PUBLIC_ORIGIN: "https://public.example.test" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  try {
+    const origin = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Server startup timed out: ${output}`)), 15000);
+      child.once("error", (err) => { clearTimeout(timer); reject(err); });
+      child.once("exit", (code) => { clearTimeout(timer); reject(new Error(`Server exited ${code}: ${output}`)); });
+      const read = (chunk) => {
+        output += chunk.toString();
+        const address = output.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
+        if (address && /Ready in/.test(output)) { clearTimeout(timer); resolve(address); }
+      };
+      child.stdout.on("data", read);
+      child.stderr.on("data", read);
+    });
+    const marker = "SYNTHETIC_PRIVATE_INPUT_90";
+    const nonces = new Set();
+    for (const path of ["/", "/", "/operator", "/not-found.html", "/faviconXico-private"]) {
+      const response = await fetch(`${origin}${path}`, { headers: {
+        cookie: `session=${marker}`,
+        authorization: `Bearer ${marker}`,
+        "x-nonce": "attacker",
+        "content-security-policy": "script-src 'unsafe-inline'",
+      } });
+      assert.equal(response.status, ["/", "/operator"].includes(path) ? 200 : 404);
+      const csp = response.headers.get("content-security-policy");
+      const nonce = csp?.match(/'nonce-([^']+)'/)?.[1];
+      assert.ok(nonce);
+      assert.ok(!nonces.has(nonce), "Nonce must change for every response");
+      nonces.add(nonce);
+      assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval|attacker/);
+      assert.match(response.headers.get("cache-control"), /no-store/);
+      assert.doesNotMatch(response.headers.get("cache-control"), /s-maxage|public|immutable/);
+      assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+      assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+      assert.equal(response.headers.get("x-frame-options"), "DENY");
+      assert.equal(response.headers.get("set-cookie"), null);
+      const html = await response.text();
+      assert.doesNotMatch(html, new RegExp(`${marker}|attacker`));
+      const scripts = [...html.matchAll(/<script\b([^>]*)>/g)];
+      assert.ok(scripts.length > 0, "Next.js bootstrap scripts must be present");
+      for (const [, attrs] of scripts) assert.ok(attrs.includes(`nonce="${nonce}"`), "Bootstrap script must match CSP");
+      if (path === "/") {
+        const asset = html.match(/src="([^\"]*\/_next\/static\/[^\"]+\.js)"/)?.[1];
+        assert.ok(asset);
+        const assetResponse = await fetch(new URL(asset, origin));
+        assert.equal(assetResponse.status, 200);
+      }
+    }
+    // Production routes must not derive redirects from the bind/forwarded host.
+    for (const [path, expected] of [
+      ["/deliveries?status=delivered", "/login?next=%2Fdeliveries%3Fstatus%3Ddelivered"],
+      ["/api/session/logout", "/login"],
+      ["/api/session/logout?next=%2Fdeliveries", "/login?next=%2Fdeliveries"],
+      ["/api/session/logout?next=https%3A%2F%2Fevil.example", "/login"],
+    ]) {
+      const response = await fetch(`${origin}${path}`, { redirect: "manual", headers: {
+        "x-forwarded-host": "evil.example", "x-forwarded-proto": "https",
+      } });
+      assert.equal(response.status, 307);
+      assert.equal(response.headers.get("location"), `https://public.example.test${expected}`);
+      assert.match(response.headers.get("cache-control"), /no-store/);
+      if (path.startsWith("/api/session/logout")) {
+        const cookies = response.headers.getSetCookie();
+        for (const name of ["__Host-mmr-session", "__Host-mmr-appcheck", "__Host-mmr-facility", "mmr-session", "mmr-appcheck", "mmr-facility"]) {
+          const expired = cookies.find((value) => value.startsWith(`${name}=`));
+          assert.ok(expired, `Logout expires ${name}`);
+          assert.match(expired, /Expires=Thu, 01 Jan 1970/i);
+          assert.match(expired, /Max-Age=0/i);
+          assert.match(expired, /Path=\//i);
+          assert.doesNotMatch(expired, /Domain=/i);
+          if (name.startsWith("__Host-")) assert.match(expired, /; Secure(?:;|$)/i, "Browsers require Secure to delete __Host- cookies");
+        }
+      }
+    }
+    // Router prefetches and RSC are also covered; no request-header opt-out.
+    for (const headers of [{ "next-router-prefetch": "1", purpose: "prefetch" }, { RSC: "1" }]) {
+      const response = await fetch(origin, { headers });
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("cache-control"), /no-store/);
+      assert.ok(response.headers.has("content-security-policy"));
+      const body = await response.text();
+      assert.ok(!body.includes(marker));
+    }
+  } finally {
+    if (child.exitCode === null) {
+      const closed = once(child, "exit");
+      child.kill("SIGTERM");
+      await closed;
+    }
+  }
+});

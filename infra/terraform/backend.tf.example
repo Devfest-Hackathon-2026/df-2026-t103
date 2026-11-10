@@ -1,0 +1,7 @@
+# Copy to backend.local.tf only after confirming the state owner and location.
+terraform {
+  backend "gcs" {
+    bucket = "project-7efcc4c4-6c86-490c-ba5-tfstate"
+    prefix = "infra"
+  }
+}

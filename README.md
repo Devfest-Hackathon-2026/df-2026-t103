@@ -4,7 +4,7 @@ DevFest Hackathon 2026 / チーム「社会課題.exe」の提出用リポジト
 
 患者が医療機関へ伝える情報の整理と、許可した医療機関への安全な提出を支援するサービス（診断・治療・予約は行わない）。
 
-![もしもし問診のプロダクト紹介画像](assets/readme/product.png)
+<img src="assets/readme/product.png" alt="もしもし問診のプロダクト紹介画像" width="480">
 
 ## 審査の入口
 

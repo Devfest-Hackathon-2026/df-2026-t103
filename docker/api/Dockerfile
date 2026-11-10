@@ -3,7 +3,7 @@
 # コンテナ起動時の `npm install && npm run dev` に依存を任せるため COPYしない。
 # prod は実装追加後に npm scripts (build/start) を定義すること。
 
-FROM node:22-trixie-slim AS base
+FROM node:26-trixie-slim AS base
 WORKDIR /app
 
 FROM base AS dev

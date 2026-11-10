@@ -1,6 +1,6 @@
 FROM eclipse-temurin:25.0.5_8-jre-noble@sha256:a98128a57de944a72bd31fbc79b898edd5a5864d3652071d5bbd2160ab7d7dce AS java
 
-FROM node:22-trixie-slim
+FROM node:26-trixie-slim
 
 ARG FIREBASE_TOOLS_VERSION=15.35.0
 

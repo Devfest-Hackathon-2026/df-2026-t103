@@ -162,6 +162,9 @@ class SummarizerTest(unittest.TestCase):
         ] + [
             {"type": "print", "message": "edit-after-get-completed-extra"},
             {"type": "print", "message": "SECRET_TOKEN"},
+            {"type": "print", "message": "synthetic-ui-profile SECRET_PATIENT_INPUT"},
+            {"type": "print", "message": "synthetic-ui-error-state SECRET_STACK"},
+            {"type": "error", "error": "SECRET_CREDENTIAL", "stackTrace": "SECRET_STACK"},
         ]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "machine.jsonl"
@@ -175,6 +178,9 @@ class SummarizerTest(unittest.TestCase):
         self.assertIn("edit-after-get-completed=1", diagnostic)
         self.assertNotIn("edit-after-get-completed-extra", diagnostic)
         self.assertNotIn("SECRET_TOKEN", diagnostic)
+        self.assertNotIn("SECRET_PATIENT_INPUT", diagnostic)
+        self.assertNotIn("SECRET_STACK", diagnostic)
+        self.assertNotIn("SECRET_CREDENTIAL", diagnostic)
 
     def test_partial_diagnostic_marks_truncated_output_incomplete(self):
         with tempfile.TemporaryDirectory() as directory:

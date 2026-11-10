@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Next server: Cookie/BFF/nonce CSP requires a server, never static export.
-FROM node:22-trixie-slim AS base
+FROM node:26-trixie-slim AS base
 WORKDIR /app
 
 FROM base AS dev

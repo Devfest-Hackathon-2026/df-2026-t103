@@ -20,16 +20,20 @@ class IntakeApiException implements Exception {
   final String code;
 }
 
+/// A fresh Idempotency-Key for one logical operation. Retries of the same
+/// operation reuse the same key; a different operation needs a new key.
+String newOperationKey() => List.generate(
+  24,
+  (_) => Random.secure().nextInt(256),
+).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+
 /// One submission attempt. Keep it on uncertain failures; a retry uses the same
 /// creation key and symptom text. Never reuse it across authentication sessions.
 class IntakeSubmission {
   IntakeSubmission(String text, {List<String> bodyLocations = const []})
     : text = text.trim(),
       bodyLocations = List.unmodifiable(bodyLocations),
-      key = List.generate(
-        24,
-        (_) => Random.secure().nextInt(256),
-      ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+      key = newOperationKey();
   final String text;
   final List<String> bodyLocations;
   final String key;
@@ -315,12 +319,16 @@ class PatientIntakeApi {
   /// API-013. Saves the patient's answer to [question]. `answerState` is one of
   /// `answered`, `unknown`, `skipped`. Returns the new intake revision, which
   /// must be threaded into the following request as `expectedIntakeRevision`.
+  /// [idempotencyKey] scopes one logical answer attempt: resend it unchanged
+  /// on uncertain failures, never reuse it for a different answer or after the
+  /// server's 24h operation ledger expires.
   Future<int> saveAnswer(
     IntakeSubmission submission, {
     required IntakeQuestion question,
     required List<String> selectedCodes,
     required String answerState,
     required int expectedIntakeRevision,
+    required String idempotencyKey,
     String? freeText,
   }) async {
     final owner = await _resume(submission);
@@ -328,6 +336,7 @@ class PatientIntakeApi {
       owner,
       'POST',
       '/intakes/${submission._intakeId}/answers',
+      key: idempotencyKey,
       body: {
         'questionId': question.questionId,
         'questionRevision': question.questionRevision,

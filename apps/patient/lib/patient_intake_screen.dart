@@ -265,8 +265,6 @@ class _PatientIntakeScreenState extends State<PatientIntakeScreen> {
                 ] else if (_saved &&
                     _submission != null &&
                     _startRevision != null) ...[
-                  const Text('症状を保存しました。続けて質問にお答えください。'),
-                  const SizedBox(height: 16),
                   IntakeQuestionFlow(
                     api: widget.api,
                     submission: _submission!,

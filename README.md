@@ -13,6 +13,7 @@ DevFest Hackathon 2026 / チーム「社会課題.exe」の提出用リポジト
 - **患者 Web:** https://moshimoshi-patient-842827776169.web.app/
 - **医療機関 Web:** https://hospital-842827776169.asia-northeast1.run.app/login
 - [現行の資料一覧](docs/README.md) / [運営の提出ガイド](SUBMISSION_GUIDE.md)
+- [提出資料（原本ファイル）](submission-materials/)
 
 患者Hostingは `a5083cd` を配信済みです（2026-11-10 07:24 UTC のリリース記録）。配信完了は認証後デモの完走や病院受領の確認を意味しません。既存サンプルの認証情報は公開しません。実患者情報・実処方箋を使わず、架空のプロフィール・症状だけで確認してください。
 

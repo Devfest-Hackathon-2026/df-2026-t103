@@ -16,6 +16,7 @@ import { HxField, hxInputClass } from "../../../components/design-system/hx-fiel
 import { HxIcon } from "../../../components/design-system/hx-icon";
 import { firebaseClient } from "../../../lib/firebase-client";
 import { establishSession } from "../../../lib/staff-session";
+import { completeLoginSession, loginErrorMessage } from "../../../lib/staff-login";
 
 type Step =
   | { kind: "credentials" }
@@ -24,19 +25,6 @@ type Step =
 const subscribe = () => () => {};
 const clientReady = () => true;
 const serverReady = () => false;
-
-const GENERIC_AUTH_ERROR = "メールアドレスまたはパスワードが正しくありません。";
-
-function errorMessage(error: unknown): string {
-  const code = (error as { code?: string }).code ?? "";
-  if (code === "auth/too-many-requests" || code === "auth/too-many-requests-try-later") {
-    return "試行回数が多すぎます。時間をおいて再試行してください。";
-  }
-  if (code === "auth/network-request-failed") {
-    return "通信できませんでした。接続状態を確認してください。";
-  }
-  return GENERIC_AUTH_ERROR;
-}
 
 export function LoginForm({ next }: { next: string }) {
   const router = useRouter();
@@ -49,14 +37,14 @@ export function LoginForm({ next }: { next: string }) {
 
   async function finish() {
     // セッションCookieの確立が失敗したらサインイン済みでも進ませない（資格情報を残さない）
-    const ok = await establishSession();
-    if (ok) {
+    const failure = await completeLoginSession(establishSession, () => signOut(firebaseClient().auth));
+    if (failure === null) {
       router.replace(next);
       router.refresh();
       return;
     }
-    await signOut(firebaseClient().auth).catch(() => undefined);
-    setMessage("セッションを確立できませんでした。時間をおいて再試行してください。");
+    setStep({ kind: "credentials" });
+    setMessage(failure);
   }
 
   async function submitCredentials(event: FormEvent<HTMLFormElement>) {
@@ -71,14 +59,14 @@ export function LoginForm({ next }: { next: string }) {
       // Existing enrolled factors are still challenged by Firebase below.
       await finish();
     } catch (error) {
-      const code = (error as { code?: string }).code;
+      const code = error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
       if (code === "auth/multi-factor-auth-required") {
         const resolver = getMultiFactorResolver(firebaseClient().auth, error as MultiFactorError);
         const hint = resolver.hints.find((h) => h.factorId === TotpMultiFactorGenerator.FACTOR_ID);
         if (hint) setStep({ kind: "mfa", resolver, hintUid: hint.uid });
         else setMessage("このMFA方式は未対応です。管理者に確認してください。");
       } else {
-        setMessage(errorMessage(error));
+        setMessage(loginErrorMessage(error));
       }
     } finally {
       setBusy(false);

@@ -26,3 +26,26 @@ variable "cors_origins" {
   description = "API_CORS_ORIGINS（カンマ区切り）。未指定なら対象projectの患者Hosting originのみ。追加originは実在確認後に指定する。"
   default     = null
 }
+
+variable "synthetic_self_service_enabled" {
+  type        = bool
+  description = "本人の明示opt-inによる送信保存のみの合成デモ。環境ごとに別途承認した場合だけ有効化する。"
+  default     = false
+  nullable    = false
+}
+
+variable "synthetic_self_service_max_facilities" {
+  type        = number
+  description = "自己専用合成デモ施設の累積作成上限（整数1〜10000）。削除で補充しない。"
+  default     = 1000
+  nullable    = false
+
+  validation {
+    condition = (
+      var.synthetic_self_service_max_facilities >= 1 &&
+      var.synthetic_self_service_max_facilities <= 10000 &&
+      floor(var.synthetic_self_service_max_facilities) == var.synthetic_self_service_max_facilities
+    )
+    error_message = "synthetic_self_service_max_facilities は1〜10000の整数で指定してください。"
+  }
+}

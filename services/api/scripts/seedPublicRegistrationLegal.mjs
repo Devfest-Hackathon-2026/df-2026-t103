@@ -20,6 +20,7 @@ const documents = Object.fromEntries(
     ['terms_of_service', '合成の利用規約です。'],
     ['privacy_policy_ack', '合成のプライバシー文書です。'],
     ['health_data_collection', '合成の健康情報取扱文書です。'],
+    ['hospital_disclosure', '合成デモ施設への情報提供に関する文書です。'],
   ].map(([type, text]) => [
     type,
     {
@@ -33,7 +34,7 @@ const documents = Object.fromEntries(
 
 try {
   await getFirestore(app).doc('appConfigs/publicLegalVersion').set({
-    requiredConsents: Object.keys(documents),
+    requiredConsents: Object.keys(documents).filter((type) => type !== 'hospital_disclosure'),
     documents,
   });
 } finally {

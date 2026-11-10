@@ -21,6 +21,8 @@ class PatientRequestFailure implements Exception {
   final String? apiCode;
   final bool retryable;
   String get message => switch (code) {
+    'APP_CHECK_UNAVAILABLE' =>
+      'アプリの安全性を確認できません。時間をおいて、アプリやブラウザを開き直してください。続く場合はサポートへお問い合わせください。',
     'LEGAL_UNAVAILABLE' => '利用文書を確認できません。運営者による文書の準備が必要です。',
     '500' || '503' => 'サービスの準備状況を確認できません。時間をおいて再試行してください。',
     '401' => 'ログインの有効期限が切れました。ログインし直してください。',
@@ -30,6 +32,10 @@ class PatientRequestFailure implements Exception {
     '412' => '現在の利用状態では操作できません。同意・問診・施設の状態を再確認してください。',
     '429' => '操作が集中しています。少し時間をおいて再試行してください。',
     '400' => '入力内容を確認してください。',
+    'REGISTER_EMAIL_INVALID' => 'メールアドレスの形式を確認してください。',
+    'REGISTER_PASSWORD_LENGTH' => 'パスワードは8〜128文字で入力してください。',
+    'REGISTER_PASSWORD_COMPLEXITY' => 'パスワードには英字と数字を両方含めてください。',
+    'REGISTER_REJECTED' => 'メールアドレス・パスワード・同意内容を確認してください。',
     'ANSWER_KEY_EXPIRED' => '回答の再送可能期間が終了しました。問診を続けず、サポートへお問い合わせください。',
     'ANSWER_EDIT_NOT_CONFIRMED' =>
       '保存操作の成否は確認できませんでした。現在の保存内容を確認し、入力を保ったまま再編集してください。',

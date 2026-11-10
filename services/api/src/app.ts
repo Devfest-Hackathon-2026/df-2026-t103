@@ -22,6 +22,7 @@ import { registerInternalJobRoutes } from "./routes/internalJobs.js";
 import { registerCors } from "./lib/cors.js";
 import { registerDeliveryRoutes } from "./routes/deliveries.js";
 import { registerFacilityRoutes } from "./routes/facilities.js";
+import { registerSyntheticDemoRoutes } from "./routes/syntheticDemo.js";
 import { registerHospitalRoutes } from "./routes/hospitals.js";
 import { registerStaffRoutes } from "./routes/staff.js";
 import { registerOperatorRoutes } from "./routes/operator.js";
@@ -110,6 +111,7 @@ export function buildApp(deps: Deps): FastifyInstance {
     registerInternalJobRoutes(instance, deps);
     registerDeliveryRoutes(instance, deps);
     registerFacilityRoutes(instance, deps);
+    registerSyntheticDemoRoutes(instance, deps);
     registerHospitalRoutes(instance, deps);
     registerStaffRoutes(instance, deps);
     registerOperatorRoutes(instance, deps);

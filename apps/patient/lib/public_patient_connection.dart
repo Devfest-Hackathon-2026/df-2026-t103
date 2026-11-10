@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import 'public_patient_config.dart';
 import 'public_patient_api.dart';
+import 'public_patient_app_check.dart';
 import 'patient_analytics.dart';
 
 class PublicPatientConnection {
@@ -65,10 +66,9 @@ class PublicPatientConnection {
         final user = FirebaseAuth.instance.currentUser;
         connection._syncIdentity(user);
         final auth = await user?.getIdToken();
-        final check = await FirebaseAppCheck.instance.getToken();
-        if (check == null || check.isEmpty) {
-          throw const PatientRequestFailure('401');
-        }
+        final check = await patientAppCheckToken(
+          () => FirebaseAppCheck.instance.getToken(),
+        );
         return (auth: auth, appCheck: check);
       },
     );

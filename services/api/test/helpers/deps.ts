@@ -50,6 +50,8 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     internalJobToken: "test-internal-token",
     apiDocsEnabled: true,
     corsOrigins: [],
+    syntheticSelfServiceEnabled: false,
+    syntheticSelfServiceMaxFacilities: 1000,
     reauthWindowSeconds: 900,
     deletionGracePeriodDays: 30,
     deletionJobMaxAttempts: 5,

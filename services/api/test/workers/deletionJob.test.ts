@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { Timestamp, FieldValue } from "firebase-admin/firestore";
 import { DeletionWorker } from "../../src/workers/deletionJob.js";
-import { CLAIM_TTL_MS, initialSteps } from "../../src/domain/deletion.js";
+import { CLAIM_TTL_MS, DELETION_STEPS, initialSteps } from "../../src/domain/deletion.js";
 import type { DeletionJobDoc } from "../../src/domain/firestoreDocs.js";
 import { makeTestDeps, type TestDeps } from "../helpers/deps.js";
 import { seedAccount } from "../helpers/app.js";
+import { selfServiceFacilityId } from "../../src/services/syntheticDemo.js";
 
 const UID = "u-worker-1";
 
@@ -90,6 +91,47 @@ async function seedPatientData(deps: TestDeps, uid = UID): Promise<void> {
 }
 
 describe("DeletionWorker.runJob", () => {
+  it.each(["authAccount", "residualScan"] as const)("does not complete %s when self-service binding has an unsupported version", async (stage) => {
+    const deps = makeTestDeps();
+    await seedPatientData(deps);
+    const facilityId = selfServiceFacilityId(UID);
+    const facilityRef = deps.db.doc(`facilities/${facilityId}`);
+    const bindingRef = deps.db.doc(`syntheticDemoPatients/${UID}`);
+    const facility = { facilityId, syntheticDemo: true, syntheticSelfService: true, syntheticPatientUid: UID, verificationStatus: "pending" };
+    const binding = { facilityId, selfServiceVersion: 2 };
+    await facilityRef.set(facility);
+    await bindingRef.set(binding);
+    const jobId = await seedJob(deps);
+    if (stage === "residualScan") {
+      await deps.db.doc(`deletionJobs/${jobId}`).update({ steps: Object.fromEntries(DELETION_STEPS.map((step) =>
+        [step, step === "residualScan" ? "pending" : "succeeded"])) });
+    }
+    const worker = new DeletionWorker(deps);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await worker.runJob(jobId);
+      expect(result.outcome).toBe("failed_retryable");
+      expect(result.failedStep).toBe(stage);
+      expect((await facilityRef.get()).data()).toEqual(facility);
+      expect((await bindingRef.get()).data()).toEqual(binding);
+      expect((await deps.db.doc(`deletionJobs/${jobId}`).get()).data()?.status).not.toBe("succeeded");
+      deps.clock.advanceMs(3600_000);
+    }
+  });
+  it("removes only the self-service patient's sandbox pair, preserving legacy demo and quota", async () => {
+    const deps = makeTestDeps();
+    await seedPatientData(deps);
+    const facilityId = selfServiceFacilityId(UID);
+    await deps.db.doc(`facilities/${facilityId}`).set({ facilityId, syntheticDemo: true, syntheticSelfService: true, syntheticPatientUid: UID, verificationStatus: "pending" });
+    await deps.db.doc(`syntheticDemoPatients/${UID}`).set({ facilityId, selfServiceVersion: 1 });
+    await deps.db.doc("facilities/synthetic-demo-taichi-20261109").set({ preserved: true });
+    await deps.db.doc("syntheticDemoProvisioning/selfService").set({ createdCount: 1 });
+    const jobId = await seedJob(deps);
+    expect((await new DeletionWorker(deps).runJob(jobId)).outcome).toBe("succeeded");
+    expect((await deps.db.doc(`facilities/${facilityId}`).get()).exists).toBe(false);
+    expect((await deps.db.doc(`syntheticDemoPatients/${UID}`).get()).exists).toBe(false);
+    expect((await deps.db.doc("facilities/synthetic-demo-taichi-20261109").get()).data()).toEqual({ preserved: true });
+    expect((await deps.db.doc("syntheticDemoProvisioning/selfService").get()).data()?.createdCount).toBe(1);
+  });
   it("全ストアを順序通り削除しジョブを succeeded にする", async () => {
     const deps = makeTestDeps();
     await seedPatientData(deps);

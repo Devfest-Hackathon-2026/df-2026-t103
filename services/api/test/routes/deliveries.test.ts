@@ -423,6 +423,28 @@ describe("delivery routes (#17, API-029/030)", () => {
     expect(res.statusCode).toBe(202);
   });
 
+  it.each(["other-patient", "flag-off", "unverified-email", "verified-marker"])("self-service delivery denies %s", async (scenario) => {
+    const deps = makeTestDeps({ syntheticSelfServiceEnabled: true });
+    await seedLegalDocuments(deps);
+    for (const uid of [UID, OTHER]) {
+      await seedAccount(deps, uid);
+      await seedCurrentConsents(deps, uid);
+    }
+    const app = buildTestApp(deps);
+    const started = await app.inject({ method: "POST", url: "/v1/me/synthetic-demo", headers: authHeader(UID), payload: { syntheticDataOnly: true } });
+    expect(started.statusCode).toBe(200);
+    const facilityId = started.json().facilityId;
+    const sender = scenario === "other-patient" ? OTHER : UID;
+    const qid = await makeFinalizedQuestionnaire(app, sender);
+    if (scenario === "flag-off") deps.config = { ...deps.config, syntheticSelfServiceEnabled: false };
+    if (scenario === "verified-marker") await deps.db.doc(`facilities/${facilityId}`).update({ verificationStatus: "verified" });
+    if (scenario === "unverified-email") deps.auth = { verifyIdToken: async () => ({ uid: UID, authTimeSeconds: 1, emailVerified: false, signInProvider: "password", providers: ["password"] }) };
+    const res = await app.inject({ method: "POST", url: "/v1/deliveries", headers: { ...authHeader(sender), "idempotency-key": `self-denial-${scenario}` }, payload: { ...deliveryPayload(qid), facilityId } });
+    expect(res.statusCode).toBe(scenario === "unverified-email" ? 403 : 412);
+    expect((await deps.db.collection("deliveries").get()).empty).toBe(true);
+    await app.close();
+  });
+
   it("rejects a matching synthetic patient when receiving is disabled", async () => {
     const { deps, app } = await setup();
     const qid = await makeFinalizedQuestionnaire(app);

@@ -28,6 +28,8 @@ const envSchema = z.object({
   INTERNAL_JOB_TOKEN: z.string().optional(),
   API_DOCS_ENABLED: z.enum(["true", "false"]).optional(),
   API_CORS_ORIGINS: z.string().optional(),
+  SYNTHETIC_SELF_SERVICE_ENABLED: z.enum(["true", "false"]).default("false"),
+  SYNTHETIC_SELF_SERVICE_MAX_FACILITIES: z.coerce.number().int().min(1).max(10_000).default(1000),
 
   REAUTH_WINDOW_SECONDS: z.coerce.number().int().positive().default(900),
   DELETION_GRACE_PERIOD_DAYS: z.coerce.number().int().min(0).default(30),
@@ -103,6 +105,8 @@ export type AppConfig = Readonly<{
   internalJobToken: string | undefined;
   apiDocsEnabled: boolean;
   corsOrigins: readonly string[];
+  syntheticSelfServiceEnabled: boolean;
+  syntheticSelfServiceMaxFacilities: number;
   reauthWindowSeconds: number;
   deletionGracePeriodDays: number;
   deletionJobMaxAttempts: number;
@@ -268,6 +272,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ocrTasksOidcSa: parsed.OCR_TASKS_OIDC_SA,
     intakeDraftTtlDays: parsed.INTAKE_DRAFT_TTL_DAYS,
     aiIntakeEnabled: parsed.AI_INTAKE_ENABLED,
+    syntheticSelfServiceEnabled: parsed.SYNTHETIC_SELF_SERVICE_ENABLED === "true",
+    syntheticSelfServiceMaxFacilities: parsed.SYNTHETIC_SELF_SERVICE_MAX_FACILITIES,
     vertexAiModel: parsed.VERTEX_AI_MODEL,
     vertexAiLocation: parsed.VERTEX_AI_LOCATION,
     vertexAiTimeoutMs: parsed.VERTEX_AI_TIMEOUT_MS,

@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:patient/public_patient_api.dart';
 import 'package:patient/public_patient_screen.dart';
+import 'package:patient/patient_theme.dart';
 
 Map<String, dynamic> _question(String id, int index) => {
   'questionId': id,
@@ -39,6 +40,7 @@ class _IntakeBackend {
   bool reviewAfterAnswer = false;
   List<String>? selectedCodesAfterAnswer;
   final questions = <Map<String, dynamic>>[];
+  List<Map<String, String>>? questionOptions;
   final invalidatedQuestions = <String>{};
   final answerPatches = <Map<String, dynamic>>[];
   final requestPaths = <String>[];
@@ -91,6 +93,9 @@ class _IntakeBackend {
       await intakeGetGate?.future;
       final questionId = 'q$nextQuestion';
       final current = _question(questionId, nextQuestion - 1)
+        ..['options'] =
+            questionOptions ??
+            _question(questionId, nextQuestion - 1)['options']
         ..['status'] = answers.any((a) => a['questionId'] == questionId)
             ? 'answered'
             : 'active';
@@ -119,6 +124,9 @@ class _IntakeBackend {
       }
       nextQuestion++;
       final generated = _question('q$nextQuestion', nextQuestion - 1)
+        ..['options'] =
+            questionOptions ??
+            _question('q$nextQuestion', nextQuestion - 1)['options']
         ..['status'] = 'active';
       if (invalidatedQuestions.isNotEmpty) {
         questions.add(generated);
@@ -264,11 +272,13 @@ Future<void> _openQuestion(
   _IntakeBackend backend, {
   Stream<void> changes = const Stream<void>.empty(),
   DateTime Function()? clock,
+  ThemeData? theme,
 }) async {
   final client = backend.client();
   addTearDown(client.close);
   await tester.pumpWidget(
     MaterialApp(
+      theme: theme,
       home: PublicPatientScreen(
         api: PublicPatientApi(
           origin: 'https://api.example.test',
@@ -304,6 +314,56 @@ Future<void> _openQuestion(
 }
 
 void main() {
+  testWidgets('回答後は入力キーボードを閉じて次の質問を表示する', (tester) async {
+    final backend = _IntakeBackend();
+    await _openQuestion(tester, backend);
+    await tester.showKeyboard(find.byKey(const ValueKey('回答（任意）')));
+    await tester.pumpAndSettle();
+    expect(tester.testTextInput.isVisible, isTrue);
+    final answer = find.widgetWithText(FilledButton, 'はい');
+    await tester.ensureVisible(answer);
+    await tester.tap(answer);
+    await tester.pumpAndSettle();
+    expect(tester.testTextInput.isVisible, isFalse);
+    final viewport = tester.getRect(find.byType(SingleChildScrollView));
+    final question = tester.getRect(find.text('合成の質問q2'));
+    expect(question.top, greaterThanOrEqualTo(viewport.top));
+    expect(question.bottom, lessThanOrEqualTo(viewport.bottom));
+  });
+
+  for (final textScale in [1.0, 1.4]) {
+    testWidgets('最新の質問と回答候補が画面内に残る（文字倍率$textScale）', (tester) async {
+      tester.view.physicalSize = const Size(390, 760);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = textScale;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final backend = _IntakeBackend()
+        ..intakeOverride = {'initialSymptomText': '合成症状'}
+        ..questionOptions = [
+          {'code': 'YES', 'label': 'はい'},
+          {'code': 'NO', 'label': 'いいえ'},
+          {'code': 'OTHER', 'label': 'ほかの回答'},
+          {'code': 'UNKNOWN', 'label': '分からない'},
+        ];
+      await _openQuestion(tester, backend, theme: buildPatientTheme());
+
+      for (var index = 1; index <= 6; index++) {
+        final viewport = tester.getRect(find.byType(SingleChildScrollView));
+        final question = tester.getRect(find.text('合成の質問q$index'));
+        final answer = find.widgetWithText(FilledButton, 'はい');
+        final answerRect = tester.getRect(answer);
+        expect(question.top, greaterThanOrEqualTo(viewport.top));
+        expect(question.bottom, lessThanOrEqualTo(viewport.bottom));
+        expect(answerRect.top, greaterThanOrEqualTo(viewport.top));
+        expect(answerRect.bottom, lessThanOrEqualTo(viewport.bottom));
+        await tester.tap(answer);
+        await tester.pumpAndSettle();
+      }
+    });
+  }
+
   testWidgets(
     'first-time registration uses public documents, consent and API',
     (tester) async {
@@ -347,7 +407,9 @@ void main() {
         }
         if (request.url.path == '/v1/auth/register') {
           expect(header(request, 'authorization'), isNull);
+          expect(header(request, 'content-type'), 'application/json');
           registrationKey = header(request, 'idempotency-key');
+          expect(registrationKey, matches(RegExp(r'^[a-f0-9]{48}$')));
           registeredBody = jsonDecode(request.body) as Map<String, dynamic>;
           auth = 'synthetic-auth';
           return http.Response('{"uid":"synthetic-user"}', 201);
@@ -381,9 +443,16 @@ void main() {
       await tester.tap(find.text('初めてご利用の方（新規登録）'));
       await tester.pumpAndSettle();
       expect(find.text('合成文書 terms_of_service'), findsOneWidget);
+      expect(find.text('例: name@example.com（254文字以内）'), findsOneWidget);
+      expect(
+        find.text('8〜128文字。半角英字と数字をそれぞれ1文字以上含めてください。'),
+        findsOneWidget,
+      );
+      expect(find.text('メールアドレスの形式を確認してください。'), findsNothing);
+      expect(find.text('パスワードには英字と数字を両方含めてください。'), findsNothing);
       await tester.enterText(
         find.byKey(const ValueKey('メールアドレス')),
-        'synthetic@example.test',
+        'invalid-email',
       );
       await tester.enterText(
         find.byKey(const ValueKey('パスワード（8〜128文字）')),
@@ -401,8 +470,35 @@ void main() {
       await tester.ensureVisible(find.text('同意してアカウントを登録'));
       await tester.tap(find.text('同意してアカウントを登録'));
       await tester.pumpAndSettle();
+      expect(registeredBody, isEmpty);
+      expect(find.text('メールアドレスの形式を確認してください。'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('メールアドレス')),
+        'synthetic@example.test',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('パスワード（8〜128文字）')),
+        'onlyletters',
+      );
+      await tester.ensureVisible(find.text('同意してアカウントを登録'));
+      await tester.tap(find.text('同意してアカウントを登録'));
+      await tester.pumpAndSettle();
+      expect(registeredBody, isEmpty);
+      expect(find.text('パスワードには英字と数字を両方含めてください。'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('パスワード（8〜128文字）')),
+        'Synthetic1234',
+      );
+      await tester.ensureVisible(find.text('同意してアカウントを登録'));
+      await tester.tap(find.text('同意してアカウントを登録'));
+      await tester.pumpAndSettle();
       expect(registrationKey, isNotEmpty);
       expect(registeredBody['email'], 'synthetic@example.test');
+      expect(registeredBody['locale'], 'ja-JP');
+      expect(
+        registeredBody.keys,
+        unorderedEquals(['email', 'password', 'locale', 'consents']),
+      );
       expect(
         (registeredBody['consents'] as Map).keys,
         containsAll([
@@ -411,6 +507,8 @@ void main() {
           'health_data_collection',
         ]),
       );
+      expect(find.textContaining('登録が完了しました。メールアドレスの確認が必要です。'), findsOneWidget);
+      expect(find.textContaining('確認メールをまだ送信していない場合'), findsOneWidget);
       expect(find.text('メールアドレスの確認'), findsOneWidget);
     },
   );
@@ -509,6 +607,52 @@ void main() {
       expect(find.textContaining('登録結果を確認できません'), findsOneWidget);
     },
   );
+
+  testWidgets('既存の未確認アカウントには新規登録完了を表示しない', (tester) async {
+    final epoch = Object();
+    String? auth;
+    final client = MockClient((request) async {
+      if (request.url.path == '/v1/me') {
+        return http.Response(
+          '{"emailVerified":false,"accountStatus":"onboarding_pending"}',
+          200,
+        );
+      }
+      fail('Unexpected request ${request.url}');
+    });
+    addTearDown(client.close);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PublicPatientScreen(
+          api: PublicPatientApi(
+            origin: 'https://api.example.test',
+            client: client,
+            session: () => epoch,
+            tokens: () async => (auth: auth, appCheck: 'synthetic-appcheck'),
+          ),
+          signIn: (_, _) async {
+            auth = 'synthetic-auth';
+          },
+          signOut: () async {},
+          resetPassword: (_) async {},
+          changes: const Stream<void>.empty(),
+        ),
+      ),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('メールアドレス')),
+      'existing@example.test',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('パスワード')),
+      'Synthetic1234',
+    );
+    await tester.tap(find.text('ログイン'));
+    await tester.pumpAndSettle();
+    expect(find.text('メールアドレスの確認'), findsOneWidget);
+    expect(find.textContaining('登録が完了しました。'), findsNothing);
+    expect(find.textContaining('確認メールをまだ送信していない場合'), findsNothing);
+  });
 
   testWidgets(
     'posts optional freeText separately and clears it on question change',
@@ -1407,19 +1551,50 @@ void main() {
   for (final scenario in [
     (
       name: '合成施設は受付中',
+      verificationStatus: 'pending',
       syntheticRecipient: true,
       receivingEnabled: true,
       sendable: true,
     ),
     (
       name: '別患者のpending施設は受付不可',
+      verificationStatus: 'pending',
       syntheticRecipient: false,
       receivingEnabled: true,
       sendable: false,
     ),
     (
       name: '停止中の合成施設は受付不可',
+      verificationStatus: 'pending',
       syntheticRecipient: false,
+      receivingEnabled: false,
+      sendable: false,
+    ),
+    (
+      name: '受付中の認証済み施設は合成バインディング不要',
+      verificationStatus: 'verified',
+      syntheticRecipient: false,
+      receivingEnabled: true,
+      sendable: true,
+    ),
+    (
+      name: '認証済みでも受付停止なら同意後も送信不可',
+      verificationStatus: 'verified',
+      syntheticRecipient: false,
+      receivingEnabled: false,
+      sendable: false,
+    ),
+    (
+      name: '旧APIが合成施設許可を返さない場合は安全に拒否',
+      verificationStatus: 'pending',
+      syntheticRecipient: null,
+      receivingEnabled: true,
+      sendable: false,
+    ),
+    (
+      name: '合成施設許可が残っていても受付停止は優先',
+      verificationStatus: 'pending',
+      syntheticRecipient: true,
       receivingEnabled: false,
       sendable: false,
     ),
@@ -1452,8 +1627,9 @@ void main() {
             response = {
               'facilityId': 'synthetic-facility',
               'displayName': '合成データ施設',
-              'verificationStatus': 'pending',
-              'syntheticRecipient': scenario.syntheticRecipient,
+              'verificationStatus': scenario.verificationStatus,
+              if (scenario.syntheticRecipient != null)
+                'syntheticRecipient': scenario.syntheticRecipient,
               'receivingEnabled': scenario.receivingEnabled,
             };
           case '/v1/public/legal-documents':
@@ -1507,11 +1683,26 @@ void main() {
       await tap('施設を確認');
       expect(
         find.text('合成デモ施設です。実際の医療機関ではありません。'),
-        scenario.syntheticRecipient ? findsOneWidget : findsNothing,
+        scenario.syntheticRecipient == true ? findsOneWidget : findsNothing,
       );
       expect(
         find.text('この施設は現在受け付けていません。送信できません。'),
-        scenario.sendable ? findsNothing : findsOneWidget,
+        scenario.receivingEnabled ? findsNothing : findsOneWidget,
+      );
+      expect(
+        find.text(
+          'このアカウントでは、この施設への送信が許可されていません。施設コードと利用するアカウントを確認してください。',
+        ),
+        scenario.receivingEnabled && !scenario.sendable
+            ? findsOneWidget
+            : findsNothing,
+      );
+      expect(
+        tester.widget<FilledButton>(
+          find.widgetWithText(FilledButton, '同意した施設へ送信'),
+        ).onPressed,
+        isNull,
+        reason: '送信可能な施設でも明示同意の前には送信できない',
       );
       await tap('「合成データ施設」へ、この問診票と選択した情報を送信することに同意します');
       final button = tester.widget<FilledButton>(

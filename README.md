@@ -1,15 +1,36 @@
 # もしもし問診（moshimoshimonshin）
 
-DevFest 社会課題.exeの開発用リポジトリです。
+DevFest Hackathon 2026 / チーム「社会課題.exe」の提出用リポジトリです。
 
 患者が医療機関へ伝える情報の整理と、許可した医療機関への安全な提出を支援するサービス（診断・治療・予約は行わない）。
+
+## 審査の入口
+
+- **患者 Web:** https://moshimoshi-patient-842827776169.web.app/
+- **医療機関 Web:** https://hospital-842827776169.asia-northeast1.run.app/login
+- [現行の資料一覧](docs/README.md) / [運営の提出ガイド](SUBMISSION_GUIDE.md)
+
+患者Hostingは `a5083cd` を配信済みです（2026-11-10 07:24 UTC のリリース記録）。配信完了は認証後デモの完走や病院受領の確認を意味しません。既存サンプルの認証情報は公開しません。実患者情報・実処方箋を使わず、架空のプロフィール・症状だけで確認してください。
+
+### 短いデモ手順
+
+1. 患者 Web で新規登録し、規約同意・メール確認・必須プロフィールを完了します。認証用には本人が受信できるメールを使い、画面収録には映さないでください。
+2. **自己専用デモ（送信保存のみ）:** ホームに「合成デモを開始」が表示される場合、説明を確認し「架空情報のみで開始」を選びます。新規登録者は既存サンプル施設ではなく、この操作で準備される本人専用の送信先を利用します。部位・症状入力→質問回答→問診票確認・確定→専用送信先・共有範囲確認→個別同意→送信保存へ進みます。利用可否はサーバ設定・配信版に依存します。表示されない場合や拒否された場合は停止し、別施設への送信で代用しません。**公開環境での認証後デモ完走、病院側の閲覧・受領は未確認です。**
+3. **通常フローは別です:** 問診票確定後、運用者が承認した受信先施設コードを入力し、施設情報・共有範囲を確認して個別同意後に送信します。病院側は正規の職員権限でログイン→施設選択→受信一覧→詳細→受領確認へ進みます。承認済み合成データと職員権限がない場合は実行できません。通常登録だけで職員権限や合成施設への送信権限は付与されません。
+
+### 実装と確認範囲
+
+- 患者の公開接続入口は `apps/patient/lib/main_public.dart`。問診・同意・配送APIと病院ポータルの実装を収録しています。実装の存在と公開環境での動作確認は別です。
+- 患者登録・メール確認・パスワード再設定・iPhone Safariでのスクロールは**ユーザー確認済み**です。本資料更新作業での独立再検証ではなく、ネイティブiOS/Androidアプリの公開動作確認を意味しません。
+- AI質問生成は実装がありますが、**実Geminiでの生成成功は未確認**です。固定質問へのフォールバックをAI成功と扱いません。OCRの実画像読取成功、通常フロー全体の公開環境E2Eも未確認です。
+- 自己専用デモは実APIへの送信保存までを対象とし、病院側の閲覧・受領とは区別します。未接続プレビューの表示を実API処理成功の証拠には使いません。
 
 ## 構成
 
 | 層 | 技術 | 場所 |
 |---|---|---|
-| 患者アプリ（Android/iOS/Web） | Flutter（Dart） | `apps/patient`（未作成） |
-| 医療機関ポータル（管理画面・Web） | Next.js + TypeScript + Tailwind CSS | `apps/hospital`（未作成、デプロイはFirebase Hosting） |
+| 患者アプリ（公開Web、ネイティブiOS/Androidの公開動作は未確認） | Flutter（Dart） | `apps/patient` |
+| 医療機関ポータル（管理画面・Web） | Next.js + TypeScript + Tailwind CSS | `apps/hospital`（公開先はCloud Run） |
 | API（Cloud Run 相当） | Node.js + TypeScript + Fastify | `services/api`（[ADR-0004](docs/adr/0004_APIフレームワーク選定.md)） |
 | データ | Firestore(東京) / Storage(東京) / RTDB(非PHI・SG) | Firebase Emulator でローカル再現 |
 
@@ -22,10 +43,16 @@ make urls     # 各サービスのURL
 make down     # 全停止
 ```
 
+Docker / Docker Compose / Make / Flutter SDK が必要です。`make up` はローカルの実API・Firebase Emulator・患者アプリの `main.dart` を起動します。公開版 `main_public.dart` や自己専用デモとは別の起動経路です。起動後は `make ps`、`make logs-patient` で状態を確認してください。本資料更新作業では起動試験は行っていません。
+
+個別の実行・検証方法は [患者アプリ](apps/patient/README.md) / [病院ポータル](apps/hospital/README.md) を参照してください。APIはNode.js 22以降を用意し、`services/api` で `npm ci`、`npm run typecheck`、`npm test` を実行します。単体試験は公開環境のE2E確認を代用しません。
+
+Firebase EmulatorとFlutter widget hostを使う試験も、実ブラウザのFirebase SDK・公開環境のApp Check・実メール配信の確認を代用しません。
+
 - Firebase Emulator UI: http://localhost:4000
 - API ヘルスチェック: `curl http://localhost:8080/healthz`
 - API 仕様（Swagger UI）: http://localhost:8080/docs （OpenAPI JSON は `/docs/json`。ローカル既定で有効、本番は `API_DOCS_ENABLED` で制御）
-- アプリ実装（`apps/hospital`/`apps/patient`/`services/api`）を追加すると `make up` が自動で起動対象に含めます
+- `apps/hospital` / `apps/patient` / `services/api` は収録済みです。独立プレビューは実API未接続の表示例です。
 - 詳しい手順・ツール導入・個別停止は [docs/07_環境構築手順書](docs/07_環境構築手順書.md) と [docs/08_Docker_Makefile運用](docs/08_Docker_Makefile運用.md)
 
 ## 環境変数・秘密情報

@@ -25,6 +25,7 @@ export interface FacilityDetail {
   verificationStatus: string;
   receivingEnabled: boolean;
   syntheticRecipient: boolean;
+  syntheticStorageOnly: boolean;
 }
 
 export interface SearchNearbyInput {
@@ -66,7 +67,7 @@ export async function searchNearbyFacilities(
 
   const matchMap = new Map<string, { facilityId: string; receivingEnabled: boolean }>();
   for (const f of matched) {
-    if (f.placeId && f.verificationStatus === "verified") {
+    if (f.placeId && f.verificationStatus === "verified" && f.syntheticDemo !== true && f.syntheticSelfService !== true) {
       matchMap.set(f.placeId, {
         facilityId: f.facilityId,
         receivingEnabled: f.receivingEnabled,
@@ -106,6 +107,9 @@ export async function getFacilityDetail(
     formattedAddress: facility.address.formatted ?? "",
     verificationStatus: facility.verificationStatus,
     receivingEnabled: facility.receivingEnabled,
-    syntheticRecipient: facility.receivingEnabled === true && isSyntheticRecipient(facility, uid, facilityId, patient.data()),
+    syntheticStorageOnly: facility.syntheticSelfService === true,
+    syntheticRecipient: facility.receivingEnabled === true &&
+      (facility.syntheticSelfService !== true || deps.config.syntheticSelfServiceEnabled) &&
+      isSyntheticRecipient(facility, uid, facilityId, patient.data()),
   };
 }

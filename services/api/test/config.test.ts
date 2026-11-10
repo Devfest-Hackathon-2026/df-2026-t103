@@ -11,6 +11,14 @@ const local = {
 };
 
 describe("Firebase connection configuration", () => {
+  it("defaults self-service demo off, validates flag and bounds lifetime quota", () => {
+    expect(loadConfig(local)).toMatchObject({ syntheticSelfServiceEnabled: false, syntheticSelfServiceMaxFacilities: 1000 });
+    expect(loadConfig({ ...local, SYNTHETIC_SELF_SERVICE_ENABLED: "true" }).syntheticSelfServiceEnabled).toBe(true);
+    expect(() => loadConfig({ ...local, SYNTHETIC_SELF_SERVICE_ENABLED: "yes" })).toThrow();
+    for (const cap of ["0", "10001", "NaN"]) {
+      expect(() => loadConfig({ ...local, SYNTHETIC_SELF_SERVICE_MAX_FACILITIES: cap })).toThrow();
+    }
+  });
   it("accepts the Compose emulator configuration", () => {
     expect(loadConfig(local)).toMatchObject({
       projectId: "demo-mmr-dev", emulator: true, appCheckMode: "permissive",

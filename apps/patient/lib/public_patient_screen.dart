@@ -66,8 +66,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   final _symptom = TextEditingController(),
       _facilityId = TextEditingController();
   final _answerFreeText = TextEditingController();
-  // チャットの最新の質問を画面下へスクロールするためのコントローラ。
   final _scroll = ScrollController();
+  final _activeQuestionKey = GlobalKey();
   late final StreamSubscription<void> _subscription;
   final _profileFields = <String, TextEditingController>{
     for (final key in [
@@ -92,6 +92,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   String _step = 'login';
   bool _busy = false,
       _firstRegistration = false,
+      _justRegistered = false,
       _answerAttempted = false,
       _answerUncertain = false,
       _reviewed = false,
@@ -100,6 +101,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       _medications = false;
   int _generation = 0;
   String? _error, _notice, _intakeId, _questionnaireId, _deliveryId;
+  String? _demoFacilityId;
   String? _createKey, _finalizeKey, _sendKey;
   String? _disclosureVersion, _disclosureHash;
   String _bodyLocation = 'whole_body';
@@ -154,6 +156,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   }
 
   void _clear() {
+    if (_demoFacilityId != null) _facilityId.text = widget.initialFacilityId;
+    _demoFacilityId = null;
     _intake = _question = _summary = _facility = _delivery = null;
     _intakeId = _questionnaireId = _deliveryId = null;
     _createKey = _finalizeKey = _sendKey = null;
@@ -179,6 +183,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _registrationKey = null;
     _registrationRecoveryNotice = null;
     _firstRegistration = false;
+    _justRegistered = false;
     for (final field in _profileFields.values) {
       field.clear();
     }
@@ -207,11 +212,13 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     super.dispose();
   }
 
-  /// チャットの最新メッセージが見えるよう最下部へスクロールする（アニメなし）。
-  void _scrollToLatest() {
+  /// 回答欄の下端ではなく、今答える質問を表示する。
+  void _scrollToCurrentQuestion() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      if (!mounted || _step != 'question') return;
+      final questionContext = _activeQuestionKey.currentContext;
+      if (questionContext != null) {
+        Scrollable.ensureVisible(questionContext, alignment: 0.08);
       }
     });
   }
@@ -247,6 +254,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _justRegistered = false;
     });
     try {
       await widget.signIn(_email.text.trim(), _password.text);
@@ -363,11 +371,17 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     if (_legal.isEmpty || !_accepted.containsAll(_legal.keys)) {
       throw const PatientRequestFailure('412');
     }
-    if (_email.text.trim().isEmpty ||
-        _email.text.trim().length > 254 ||
-        _password.text.length < 8 ||
-        _password.text.length > 128) {
-      throw const PatientRequestFailure('400');
+    final email = _email.text.trim();
+    if (email.length > 254 ||
+        !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      throw const PatientRequestFailure('REGISTER_EMAIL_INVALID');
+    }
+    if (_password.text.length < 8 || _password.text.length > 128) {
+      throw const PatientRequestFailure('REGISTER_PASSWORD_LENGTH');
+    }
+    if (!RegExp(r'[A-Za-z]').hasMatch(_password.text) ||
+        !RegExp(r'[0-9]').hasMatch(_password.text)) {
+      throw const PatientRequestFailure('REGISTER_PASSWORD_COMPLEXITY');
     }
     _registrationKey ??= patientOperationKey();
     try {
@@ -377,7 +391,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         authenticated: false,
         key: _registrationKey,
         body: {
-          'email': _email.text.trim(),
+          'email': email,
           'password': _password.text,
           'locale': 'ja-JP',
           'consents': {
@@ -393,7 +407,11 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       // A definitive validation/consent rejection did not create an account;
       // allow correction with a fresh key. For an unknown network outcome,
       // retain both this key and the now-locked request fields for safe replay.
-      if (error.code == '400' || error.code == '412') {
+      if (error.code == '400') {
+        _registrationKey = null;
+        _registrationRecoveryNotice = null;
+        throw const PatientRequestFailure('REGISTER_REJECTED');
+      } else if (error.code == '412') {
         _registrationKey = null;
         _registrationRecoveryNotice = null;
       } else if (error.code == '409') {
@@ -406,6 +424,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     }
     _registrationRecoveryNotice =
         '登録は完了しました。ログインに失敗した場合は、同じメールアドレスとパスワードでログインできます。';
+    _justRegistered = true;
     try {
       await widget.signIn(_email.text.trim(), _password.text);
       _password.clear();
@@ -453,6 +472,7 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     setState(() {
       _step = 'login';
       _error = null;
+      _justRegistered = false;
     });
   }
 
@@ -648,10 +668,11 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _validateActiveQuestion(_question!);
     _questionIntakeRevision = _revision(_intake!);
     if (mounted) {
+      FocusScope.of(context).unfocus();
       setState(() {
         _step = 'question';
       });
-      _scrollToLatest();
+      _scrollToCurrentQuestion();
     }
   }
 
@@ -1217,10 +1238,22 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
     _disclosureHash = null;
     _share = false;
     _sendKey = null;
+    final generation = _generation;
+    final owner = api.session();
+    final requestedId = _id(_facilityId.text.trim());
+    if (_demoFacilityId != null && requestedId != _demoFacilityId) {
+      throw const PatientRequestFailure('412');
+    }
     final result = await api.request(
       'GET',
-      '/facilities/${_id(_facilityId.text.trim())}',
+      '/facilities/$requestedId',
     );
+    if (_demoFacilityId != null &&
+        (result['facilityId'] != _demoFacilityId ||
+            result['syntheticRecipient'] != true ||
+            result['verificationStatus'] != 'pending')) {
+      throw const PatientRequestFailure('412');
+    }
     final docs = await api.request('GET', '/public/legal-documents');
     final version = (docs['documents'] as Map?)?['hospital_disclosure'];
     if (version is! Map ||
@@ -1230,9 +1263,15 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         (version['documentHash'] as String).trim().isEmpty) {
       throw const PatientRequestFailure('412');
     }
-    if (mounted) {
+    if (_isCurrent(generation) && identical(owner, api.session())) {
       setState(() {
         _facility = result;
+        if (result['syntheticStorageOnly'] == true &&
+            result['syntheticRecipient'] == true &&
+            result['verificationStatus'] == 'pending') {
+          // A previously opted-in sandbox can also be selected from history.
+          _demoFacilityId = requestedId;
+        }
         _disclosureVersion = version['version'] as String;
         _disclosureHash = version['documentHash'] as String;
       });
@@ -1242,6 +1281,10 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
   Future<void> _send() async {
     final facility = _facility;
     if (facility == null ||
+        (_demoFacilityId != null &&
+            (facility['facilityId'] != _demoFacilityId ||
+                facility['verificationStatus'] != 'pending' ||
+                facility['syntheticRecipient'] != true)) ||
         !_share ||
         (facility['verificationStatus'] != 'verified' &&
             facility['syntheticRecipient'] != true) ||
@@ -1290,6 +1333,55 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         _delivery = result;
       });
     }
+  }
+
+  Future<void> _startSyntheticDemo() async {
+    final generation = _generation;
+    final owner = api.session();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('合成デモを開始しますか？'),
+        content: const Text(
+          '架空の情報だけを入力してください。本人専用の架空施設へ送信を保存します。'
+          '実際の医療機関への送信ではなく、病院側の閲覧・受領は確認できません。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('戻る'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('架空情報のみで開始'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true ||
+        !_isCurrent(generation) ||
+        !identical(owner, api.session())) {
+      return;
+    }
+    final result = await api.request(
+      'POST',
+      '/me/synthetic-demo',
+      body: {'syntheticDataOnly': true},
+    );
+    if (!_isCurrent(generation) || !identical(owner, api.session())) return;
+    final id = _id(result['facilityId']);
+    if (result['syntheticRecipient'] != true ||
+        result['verificationStatus'] != 'pending' ||
+        result['mode'] != 'storage_only' ||
+        result['hospitalViewing'] != 'unconfirmed') {
+      throw const PatientRequestFailure('INVALID_RESPONSE');
+    }
+    _clear();
+    setState(() {
+      _demoFacilityId = id;
+      _facilityId.text = id;
+      _step = 'symptom';
+    });
   }
 
   Future<void> _loadHistory() async {
@@ -1707,6 +1799,13 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         'メールアドレスの確認',
         style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
       ),
+      if (_justRegistered)
+        Semantics(
+          liveRegion: true,
+          child: Text(
+            '登録が完了しました。メールアドレスの確認が必要です。確認メールをまだ送信していない場合は「確認メールを送信」を押し、メール内のリンクを開いてください。',
+          ),
+        ),
       const Text('確認メール内のリンクを開いたあと、「確認状況を更新」を押してください。'),
       _button('確認メールを送信', () async {
         final send = widget.sendEmailVerification;
@@ -1733,11 +1832,19 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
             child: Text(_registrationRecoveryNotice!),
           ),
         _field('メールアドレス', _email, readOnly: _registrationKey != null),
+        const Padding(
+          padding: EdgeInsets.only(top: 4, bottom: 12),
+          child: Text('例: name@example.com（254文字以内）'),
+        ),
         _field(
           'パスワード（8〜128文字）',
           _password,
           secret: true,
           readOnly: _registrationKey != null,
+        ),
+        const Padding(
+          padding: EdgeInsets.only(top: 4, bottom: 12),
+          child: Text('8〜128文字。半角英字と数字をそれぞれ1文字以上含めてください。'),
         ),
       ],
       for (final entry in _legal.entries) ...[
@@ -1811,6 +1918,9 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         });
       }),
       _button('過去の問診票を見る', _loadHistory),
+      const Divider(),
+      const Text('合成デモ（対応環境のみ）：架空情報で問診・送信保存を試せます。病院側閲覧は未確認です。'),
+      _button('合成デモを開始', _startSyntheticDemo),
     ],
     'symptom' => [
       const Text(
@@ -1850,11 +1960,14 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       // 会話トランスクリプト（これまでの症状・質問・回答）をチャット表示。
       ..._chatTranscript(),
       // 現在の質問をアシスタントの最新の吹き出しとして表示。
-      _chatBubble(
-        '${_question?['questionText'] ?? ''}',
-        fromUser: false,
-        emphasis: true,
-        header: true,
+      KeyedSubtree(
+        key: _activeQuestionKey,
+        child: _chatBubble(
+          '${_question?['questionText'] ?? ''}',
+          fromUser: false,
+          emphasis: true,
+          header: true,
+        ),
       ),
       const SizedBox(height: 8),
       // 回答コンポーザ（選択肢・自由記述・わからない・答えたくない）。
@@ -1936,7 +2049,13 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
       ),
       ..._summaryWidgets(),
       const Divider(height: 32),
-      _field('施設コード', _facilityId, readOnly: _sendKey != null),
+      _field(
+        '施設コード',
+        _facilityId,
+        readOnly: _sendKey != null || _demoFacilityId != null,
+      ),
+      if (_demoFacilityId != null)
+        const Text('APIで発行された本人専用施設です。送信保存のみで、病院側閲覧・受領は未確認です。'),
       _button('施設を確認', _loadFacility, enabled: _sendKey == null),
       if (_facility != null) ...[
         Text(
@@ -1946,10 +2065,13 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         Text('${_facility!['formattedAddress'] ?? ''}'),
         if (_facility!['syntheticRecipient'] == true)
           const Text('合成デモ施設です。実際の医療機関ではありません。'),
-        if ((_facility!['verificationStatus'] != 'verified' &&
-                _facility!['syntheticRecipient'] != true) ||
-            _facility!['receivingEnabled'] != true)
-          const Text('この施設は現在受け付けていません。送信できません。'),
+        if (_facility!['receivingEnabled'] != true)
+          const Text('この施設は現在受け付けていません。送信できません。')
+        else if (_facility!['verificationStatus'] != 'verified' &&
+            _facility!['syntheticRecipient'] != true)
+          const Text(
+            'このアカウントでは、この施設への送信が許可されていません。施設コードと利用するアカウントを確認してください。',
+          ),
         CheckboxListTile(
           value: _profile,
           onChanged: _busy || _sendKey != null
@@ -1999,14 +2121,21 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
         '送信状況',
         style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
       ),
-      Text(switch (_delivery?['status']) {
-        'created' => '受付済み・配送処理中',
-        'delivered' => '施設の受信箱へ届きました',
-        'acknowledged' => '施設が受領を確認しました',
-        'failed' => '配送に失敗しました',
-        'revoked' => '送信は取り消されました',
-        _ => '状況を確認してください',
-      }),
+      if (_demoFacilityId != null || _facility?['syntheticStorageOnly'] == true)
+        Text(
+          _delivery?['status'] == 'delivered'
+              ? '合成デモの送信を保存しました。病院側閲覧・受領は未確認です。'
+              : '合成デモの保存状況：${_delivery?['status'] ?? '確認中'}。病院側閲覧・受領は未確認です。',
+        )
+      else
+        Text(switch (_delivery?['status']) {
+          'created' => '受付済み・配送処理中',
+          'delivered' => '施設の受信箱へ届きました',
+          'acknowledged' => '施設が受領を確認しました',
+          'failed' => '配送に失敗しました',
+          'revoked' => '送信は取り消されました',
+          _ => '状況を確認してください',
+        }),
       const Text('受信・受領確認は診察や予約の確定ではありません。'),
       _button('送信状況を更新', _refreshDelivery),
       _button('ホームへ戻る', () async {
@@ -2068,6 +2197,8 @@ class _PublicPatientScreenState extends State<PublicPatientScreen> {
                   child: const Text('確認用公開版です。架空の情報でお試しください。診断・治療・予約は行いません。'),
                 ),
                 const SizedBox(height: 24),
+                if (_demoFacilityId != null)
+                  const Text('合成デモ中：架空情報のみ。送信保存まで（病院側閲覧は未確認）。'),
                 if (_busy) const LinearProgressIndicator(),
                 if (_error != null)
                   Padding(

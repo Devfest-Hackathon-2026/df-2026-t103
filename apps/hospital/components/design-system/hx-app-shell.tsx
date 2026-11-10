@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { HxIcon, type HxIconName } from "./hx-icon";
 import { containTabKey, focusableIn } from "../../lib/a11y";
 
@@ -77,6 +77,30 @@ function FacilityBadge({ name, href }: { name: string | null; href?: string }) {
 }
 
 // §6.3: <1024px はドロワー、1024–1199px は72pxアイコンレール、1200–1439px は220px、≥1440px は240px。
+// ≥1200px では利用者の折りたたみ操作で 220/240px サイドバーと72pxレールを切り替えられる。
+const NAV_COLLAPSED_KEY = "hx-nav-collapsed";
+const NAV_COLLAPSED_EVENT = "hx-nav-collapsed-change";
+// localStorage が使えない環境（保存拒否）でも切替を有効にするためのメモリ保持
+let navCollapsedMemory = false;
+
+function readNavCollapsed(): boolean {
+  try {
+    const stored = window.localStorage.getItem(NAV_COLLAPSED_KEY);
+    return stored === null ? navCollapsedMemory : stored === "1";
+  } catch {
+    return navCollapsedMemory;
+  }
+}
+
+function subscribeNavCollapsed(onStoreChange: () => void): () => void {
+  window.addEventListener("storage", onStoreChange);
+  window.addEventListener(NAV_COLLAPSED_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStoreChange);
+    window.removeEventListener(NAV_COLLAPSED_EVENT, onStoreChange);
+  };
+}
+
 export function HxAppShell({
   facilityName,
   facilityHref,
@@ -87,8 +111,20 @@ export function HxAppShell({
   children,
 }: HxAppShellProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // SSR/ハイドレーション時は常に展開状態で描画し、マウント後に保存値へ同期される
+  const navCollapsed = useSyncExternalStore(subscribeNavCollapsed, readNavCollapsed, () => false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
+
+  function toggleNavCollapsed() {
+    navCollapsedMemory = !readNavCollapsed();
+    try {
+      window.localStorage.setItem(NAV_COLLAPSED_KEY, navCollapsedMemory ? "1" : "0");
+    } catch {
+      // 保存に失敗してもメモリ上の切替だけは有効にする
+    }
+    window.dispatchEvent(new Event(NAV_COLLAPSED_EVENT));
+  }
 
   useEffect(() => {
     if (!drawerOpen) return;
@@ -175,29 +211,56 @@ export function HxAppShell({
         </div>
       </header>
 
-      {/* 1024–1199px: 72px アイコンレール */}
+      {/* 1024–1199px および ≥1200px の折りたたみ時: 72px アイコンレール */}
       <nav
         aria-label="主要ナビゲーション"
         inert={drawerOpen}
-        className={`${pos} bottom-0 left-0 top-14 z-30 hidden w-18 border-r border-hx-border bg-hx-surface lg:block min-[1200px]:hidden`}
+        className={`${pos} bottom-0 left-0 top-14 z-30 hidden w-18 flex-col border-r border-hx-border bg-hx-surface lg:flex ${navCollapsed ? "" : "min-[1200px]:hidden"}`}
       >
-        <ul className="space-y-1 p-2">
+        <ul className="flex-1 space-y-1 overflow-y-auto p-2">
           {navItems.map((item) => (
             <NavLink key={item.href} item={item} collapsed={true} />
           ))}
         </ul>
+        {/* 1024–1199px は仕様上レール固定のため、展開ボタンは ≥1200px のみ出す */}
+        <div className="hidden border-t border-hx-border p-2 min-[1200px]:block">
+          <button
+            type="button"
+            onClick={toggleNavCollapsed}
+            aria-expanded={!navCollapsed}
+            aria-controls="hx-nav-sidebar"
+            aria-label="ナビゲーションを展開する"
+            title="ナビゲーションを展開する"
+            className="flex min-h-11 w-full items-center justify-center rounded-sm text-hx-text transition-colors duration-150 hover:bg-hx-row-hover"
+          >
+            <HxIcon name="chevron-right" size={20} />
+          </button>
+        </div>
       </nav>
       {/* ≥1200px: ラベル付きサイドバー（1200–1439は220px、1440以上は240px） */}
       <nav
+        id="hx-nav-sidebar"
         aria-label="主要ナビゲーション"
         inert={drawerOpen}
-        className={`${pos} bottom-0 left-0 top-14 z-30 hidden w-55 border-r border-hx-border bg-hx-surface min-[1200px]:block min-[1440px]:w-60`}
+        className={`${pos} bottom-0 left-0 top-14 z-30 w-55 flex-col border-r border-hx-border bg-hx-surface min-[1440px]:w-60 ${navCollapsed ? "hidden" : "hidden min-[1200px]:flex"}`}
       >
-        <ul className="space-y-1 p-3">
+        <ul className="flex-1 space-y-1 overflow-y-auto p-3">
           {navItems.map((item) => (
             <NavLink key={item.href} item={item} />
           ))}
         </ul>
+        <div className="border-t border-hx-border p-3">
+          <button
+            type="button"
+            onClick={toggleNavCollapsed}
+            aria-expanded={!navCollapsed}
+            aria-controls="hx-nav-sidebar"
+            className="flex min-h-11 w-full items-center gap-3 rounded-sm px-4 text-hx-body text-hx-text transition-colors duration-150 hover:bg-hx-row-hover"
+          >
+            <HxIcon name="chevron-left" size={20} className="shrink-0" />
+            <span className="truncate">ナビゲーションを折りたたむ</span>
+          </button>
+        </div>
       </nav>
 
       {/* <1024px: ドロワーナビ */}
@@ -240,7 +303,7 @@ export function HxAppShell({
         id="hx-main-content"
         inert={drawerOpen}
         tabIndex={-1}
-        className={`pt-14 lg:pl-18 min-[1200px]:pl-55 min-[1440px]:pl-60 ${framed ? "h-full overflow-auto" : "min-h-screen"}`}
+        className={`pt-14 lg:pl-18 ${navCollapsed ? "" : "min-[1200px]:pl-55 min-[1440px]:pl-60"} ${framed ? "h-full overflow-auto" : "min-h-screen"}`}
       >
         <div className="p-4 md:p-6">{children}</div>
       </main>

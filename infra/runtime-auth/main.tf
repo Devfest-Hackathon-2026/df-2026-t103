@@ -17,12 +17,16 @@ provider "google" {
   region  = "asia-northeast1"
 }
 # verifyIdToken(token, true) calls GetAccountInfo to reject revoked/disabled users.
-# No Auth writes, provider config, password hashes or project-wide Admin role.
+# User writes are limited to create/update; no Auth config, password hashes or project-wide Admin role.
 resource "google_project_iam_custom_role" "api_auth_read" {
-  project     = var.project_id
-  role_id     = "moshimoshiApiAuthRead"
-  title       = "Moshimoshi API token revocation check"
-  permissions = ["firebaseauth.users.get"]
+  project = var.project_id
+  role_id = "moshimoshiApiAuthRead"
+  title   = "Moshimoshi API Firebase Auth user operations"
+  permissions = [
+    "firebaseauth.users.get",
+    "firebaseauth.users.create",
+    "firebaseauth.users.update",
+  ]
 }
 resource "google_project_iam_member" "api_auth_read" {
   project = var.project_id

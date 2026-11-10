@@ -44,6 +44,7 @@ export function registerDeliveryRoutes(
     async (req, reply) => {
       const result = await createDelivery(deps, {
         senderUid: uidOf(req),
+        emailVerified: req.requestContext.auth!.emailVerified === true,
         body: req.body,
         idempotencyKey: requireIdempotencyKey(req),
         requestId: req.id,

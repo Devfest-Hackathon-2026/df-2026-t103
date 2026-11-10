@@ -69,6 +69,14 @@ resource "google_cloud_run_v2_service" "api" {
         value = local.cors_origins
       }
       env {
+        name  = "SYNTHETIC_SELF_SERVICE_ENABLED"
+        value = tostring(var.synthetic_self_service_enabled)
+      }
+      env {
+        name  = "SYNTHETIC_SELF_SERVICE_MAX_FACILITIES"
+        value = tostring(var.synthetic_self_service_max_facilities)
+      }
+      env {
         name  = "OCR_TASKS_LOCATION"
         value = var.region
       }

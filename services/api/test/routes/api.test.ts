@@ -1051,6 +1051,29 @@ describe("POST /v1/auth/register", () => {
     await app.close();
   });
 
+  it("不正な secret と未知の consent enum を拒否し、secret を応答に含めない", async () => {
+    const { app } = await setup();
+    const secret = "SecretMissingDigits";
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/auth/register",
+      headers: { "idempotency-key": "reg-negative-secret" },
+      payload: {
+        ...payload,
+        password: secret,
+        consents: { ...payload.consents, admin_override: { accepted: true, documentVersion: "v1" } },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body).not.toContain(secret);
+    expect(res.json().error.fieldErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: expect.stringContaining("consents") }),
+      ]),
+    );
+    await app.close();
+  });
+
   it("Idempotency-Key 無しは 400", async () => {
     const { app } = await setup();
     const res = await app.inject({

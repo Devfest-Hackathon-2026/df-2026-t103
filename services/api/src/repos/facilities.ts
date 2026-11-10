@@ -17,6 +17,7 @@ export interface FacilityDoc {
   verificationStatus: "pending" | "verified" | "rejected" | "suspended";
   receivingEnabled: boolean;
   syntheticDemo?: boolean;
+  syntheticSelfService?: boolean;
   syntheticPatientUid?: string;
 }
 

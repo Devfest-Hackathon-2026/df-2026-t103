@@ -147,6 +147,13 @@ jobs:
           FLUTTER_BIN: flutter
         run: bash apps/patient/tool/run_public_registration_e2e.sh
 
+      - name: Run real Flutter registration-to-synthetic-storage UI E2E (no skips permitted)
+        env:
+          FIREBASE_BIN: npx -y firebase-tools@15.35.0
+          FLUTTER_BIN: flutter
+          SYNTHETIC_DEMO_UI_E2E: '1'
+        run: bash apps/patient/tool/run_public_registration_e2e.sh
+
   patient-browser-integration:
     name: patient / browser CORS + Dart API (emulators)
     runs-on: ubuntu-latest

@@ -12,6 +12,8 @@ RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/public-registration-e2e.XXXXXX")"
 EMU_PID=""
 API_PID=""
 KEEP_RUN_DIR="${KEEP_RUN_DIR:-0}"
+SYNTHETIC_DEMO_UI_E2E="${SYNTHETIC_DEMO_UI_E2E:-0}"
+case "$SYNTHETIC_DEMO_UI_E2E" in 0|1) ;; *) echo 'Invalid UI E2E mode' >&2; exit 1 ;; esac
 
 stop_group() {
   local pid="${1:-}"
@@ -134,6 +136,8 @@ node services/api/scripts/seedPublicRegistrationLegal.mjs >/dev/null
 
 echo '==> start actual API bound to loopback'
 API_PID="$(start_group "$RUN_DIR/api.log" env HOST=127.0.0.1 PORT="$API_PORT" \
+  NODE_ENV=development APP_CHECK_MODE=permissive AI_INTAKE_ENABLED=false \
+  SYNTHETIC_SELF_SERVICE_ENABLED="$([ "$SYNTHETIC_DEMO_UI_E2E" = 1 ] && echo true || echo false)" \
   node services/api/dist/index.js)"
 wait_for_log "$RUN_DIR/api.log" 'Server listening at' "$API_PID"
 
@@ -141,10 +145,18 @@ echo '==> run public registration → Auth sign-in → email verification flow'
 cd apps/patient
 "$FLUTTER_BIN" pub get
 REPORT="$RUN_DIR/public-registration.jsonl"
-if "$FLUTTER_BIN" test --no-pub test/integration/public_patient_registration_test.dart \
-  --dart-define=RUN_PUBLIC_REGISTRATION_INTEGRATION=true \
+TEST_FILE=test/integration/public_patient_registration_test.dart
+TEST_GATE=RUN_PUBLIC_REGISTRATION_INTEGRATION
+if [ "$SYNTHETIC_DEMO_UI_E2E" = 1 ]; then
+  TEST_FILE=test/integration/synthetic_demo_ui_e2e_test.dart
+  TEST_GATE=RUN_SYNTHETIC_DEMO_UI_INTEGRATION
+  echo '==> Flutter screen registration → verification → profile → opt-in → intake → consent → stored demo'
+fi
+if "$FLUTTER_BIN" test --no-pub "$TEST_FILE" \
+  --dart-define="$TEST_GATE=true" \
   --dart-define="PUBLIC_REGISTRATION_API_ORIGIN=$API_ORIGIN" \
   --dart-define="PUBLIC_REGISTRATION_AUTH_ORIGIN=$AUTH_ORIGIN" \
+  --dart-define="PUBLIC_REGISTRATION_FIRESTORE_ORIGIN=http://127.0.0.1:$FS_PORT" \
   --machine >"$REPORT" 2>"$RUN_DIR/flutter.log"; then
   # The parser requires a complete reporter lifecycle and at least one visible
   # success. The single integration test is rejected if it was skipped.

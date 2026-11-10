@@ -183,6 +183,10 @@ test("HxAppShell: スキップリンク・施設名・ナビ active・ログア�
   assert.match(html, /aria-current="page"/);
   assert.match(html, /bg-hx-nav-active/);
   assert.match(html, /ログアウト/);
+  // ≥1200px でサイドバー⇔アイコンレールを切り替えるトグル
+  assert.match(html, /ナビゲーションを折りたたむ/);
+  assert.match(html, /ナビゲーションを展開する/);
+  assert.match(html, /aria-controls="hx-nav-sidebar"/);
   // 施設未選択でもヘッダーが消えない
   const noFacility = render(
     <HxAppShell facilityName={null} navItems={[]}>

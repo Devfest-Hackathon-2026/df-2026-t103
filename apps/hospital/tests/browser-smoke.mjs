@@ -160,6 +160,28 @@ export async function browserSmoke({ apiBaseUrl, authHost, email, password, faci
     await poll("!!document.querySelector('#hx-login-email') && !!document.querySelector('button[type=submit]:not(:disabled)')");
     assert.equal(await evaluate("document.querySelector('form').method"), "post");
     assert.equal(await evaluate("location.search"), "");
+    // Auth succeeds, but a lost session response must stay on login and allow
+    // a clean retry. Interception is restricted to this loopback test browser.
+    let interruptedSession = false;
+    const interruptSession = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.method !== "Fetch.requestPaused" || message.sessionId !== sessionId) return;
+      interruptedSession = true;
+      void send("Fetch.failRequest", { requestId: message.params.requestId, errorReason: "ConnectionFailed" }, sessionId);
+    };
+    socket.addEventListener("message", interruptSession);
+    await send("Fetch.enable", { patterns: [{ urlPattern: `${origin}/api/session`, requestStage: "Request" }] }, sessionId);
+    try {
+      await evaluate(`document.querySelector('[name=email]').value=${JSON.stringify(email)}; document.querySelector('[name=password]').value=${JSON.stringify(password)}; document.querySelector('form').requestSubmit();`);
+      await poll("document.querySelector('[role=alert]')?.textContent.includes('セッションを確立できませんでした')");
+      assert.equal(interruptedSession, true);
+      assert.equal(await evaluate("location.pathname"), "/login");
+      const denied = await send("Network.getCookies", { urls: [origin] }, sessionId);
+      assert.equal(denied.cookies.filter((cookie) => cookie.name === "mmr-session").length, 0);
+    } finally {
+      await send("Fetch.disable", {}, sessionId);
+      socket.removeEventListener("message", interruptSession);
+    }
     // Real password-only staff login, without a pre-injected session.
     await evaluate(`document.querySelector('[name=email]').value=${JSON.stringify(email)}; document.querySelector('[name=password]').value=${JSON.stringify(password)}; document.querySelector('form').requestSubmit();`);
     await poll("location.pathname === '/facilities' && document.body.innerText.includes('合成審査施設')");

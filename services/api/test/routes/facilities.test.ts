@@ -14,6 +14,32 @@ import type { FacilityDoc } from "../../src/repos/facilities.js";
 const UID = "u-facility-1";
 
 describe("synthetic facility detail authorization", () => {
+  it("rechecks receiving status and patient binding on every facility confirmation", async () => {
+    const { deps, app } = await setup();
+    await seedFacility(deps, "synthetic", {
+      verificationStatus: "pending", syntheticDemo: true, syntheticPatientUid: UID,
+    });
+    const binding = deps.db.doc(`syntheticDemoPatients/${UID}`);
+    const facility = deps.db.doc("facilities/synthetic");
+    const confirm = async (receivingEnabled: boolean, syntheticRecipient: boolean) => {
+      const res = await app.inject({ method: "GET", url: "/v1/facilities/synthetic", headers: authHeader(UID) });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["cache-control"]).toBe("private, no-store");
+      expect(res.json()).toMatchObject({ receivingEnabled, syntheticRecipient });
+    };
+    // A newly registered patient must not acquire access just by selecting a demo facility.
+    await confirm(true, false);
+    await binding.set({ facilityId: "synthetic" });
+    await confirm(true, true);
+    await facility.update({ receivingEnabled: false });
+    await confirm(false, false);
+    await facility.update({ receivingEnabled: true });
+    await confirm(true, true);
+    await binding.set({ facilityId: "other" });
+    await confirm(true, false);
+    await app.close();
+  });
+
   it.each([
     [{ verificationStatus: "pending", syntheticDemo: true, syntheticPatientUid: UID }, true],
     [{ verificationStatus: "pending", syntheticDemo: true, syntheticPatientUid: "other" }, false],

@@ -1,5 +1,6 @@
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import type { Deps } from "../deps.js";
+import { deleteSelfServiceDemo } from "../services/syntheticDemo.js";
 import type { DeletionJobDoc } from "../domain/firestoreDocs.js";
 import type { DeletionStepStatus } from "../domain/types.js";
 import type { DeletionStep } from "../domain/deletion.js";
@@ -343,7 +344,7 @@ export class DeletionWorker {
    */
   private async stepAuthAccount(ctx: StepContext): Promise<StepOutcome> {
     const uid = ctx.uid;
-    let count = 0;
+    let count = await deleteSelfServiceDemo(this.deps, uid);
     count += await deleteWhere(this.deps.db, "legalConsents", [
       { field: "subjectUid", op: "==", value: uid },
     ]);
@@ -381,6 +382,7 @@ export class DeletionWorker {
   /** 残存探索: 本人紐付けドキュメントの残骸を除去して検証する。 */
   private async stepResidualScan(ctx: StepContext): Promise<StepOutcome> {
     const uid = ctx.uid;
+    await deleteSelfServiceDemo(this.deps, uid);
     const checks: Array<{ collection: string; field: string }> = [
       { collection: "intakes", field: "patientUid" },
       { collection: "questionnaires", field: "patientUid" },

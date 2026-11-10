@@ -342,6 +342,10 @@ export interface FacilityDoc {
   address?: Record<string, unknown>;
   verificationStatus: FacilityVerificationStatus;
   receivingEnabled: boolean;
+  /** Server-owned synthetic markers; never a real-facility verification. */
+  syntheticDemo?: boolean;
+  syntheticSelfService?: boolean;
+  syntheticPatientUid?: string;
   serviceAgreementVersion: string;
   verifiedAt?: unknown;
   verificationRecordId?: string;

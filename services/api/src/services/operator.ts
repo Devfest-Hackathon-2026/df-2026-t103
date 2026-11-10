@@ -58,6 +58,9 @@ export async function verifyFacility(
     if (!snap.exists || !fac) {
       throw ApiError.notFound("施設が見つかりません。");
     }
+    if (fac.syntheticDemo === true || fac.syntheticSelfService === true) {
+      throw ApiError.forbidden("合成デモ施設を実施設として承認することはできません。");
+    }
     if (fac.verificationStatus === "verified") {
       throw ApiError.conflict(
         ErrorCodes.REVISION_CONFLICT,

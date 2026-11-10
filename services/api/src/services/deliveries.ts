@@ -93,6 +93,7 @@ export async function createDelivery(
   deps: Deps,
   params: {
     senderUid: string;
+    emailVerified?: boolean;
     body: DeliveryCreateBody;
     idempotencyKey: string;
     requestId?: string;
@@ -153,6 +154,7 @@ export async function createDelivery(
           verificationStatus: string;
           receivingEnabled: boolean;
           syntheticDemo?: boolean;
+          syntheticSelfService?: boolean;
           syntheticPatientUid?: string;
         };
         // Read the server-owned patient binding inside the transaction so a
@@ -161,8 +163,14 @@ export async function createDelivery(
           ? await tx.get(deps.db.doc(`syntheticDemoPatients/${senderUid}`))
           : undefined;
         const syntheticDemoDelivery = isSyntheticRecipient(facDoc, senderUid, body.facilityId, syntheticPatient?.data());
-        if (facDoc.verificationStatus !== "verified" && !syntheticDemoDelivery) {
+        if ((facDoc.verificationStatus !== "verified" || facDoc.syntheticDemo === true || facDoc.syntheticSelfService === true) && !syntheticDemoDelivery) {
           throw ApiError.precondition("この施設は現在問診票の受付を行っていません。");
+        }
+        if (facDoc.syntheticSelfService === true && !deps.config.syntheticSelfServiceEnabled) {
+          throw ApiError.precondition("合成デモはこの環境では利用できません。");
+        }
+        if (facDoc.syntheticSelfService === true && params.emailVerified !== true) {
+          throw ApiError.forbidden("メールアドレスの確認が必要です。");
         }
         if (!facDoc.receivingEnabled) {
           throw ApiError.precondition("この施設は現在問診票の受付を停止しています。（E2E-006）");

@@ -56,7 +56,7 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         id: check
         with:
           script: |

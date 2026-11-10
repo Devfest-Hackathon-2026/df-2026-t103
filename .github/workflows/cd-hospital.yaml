@@ -34,7 +34,7 @@ jobs:
       NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
       NEXT_PUBLIC_APP_CHECK_SITE_KEY: ${{ vars.NEXT_PUBLIC_APP_CHECK_SITE_KEY }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/github-script@v7

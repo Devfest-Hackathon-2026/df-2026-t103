@@ -186,6 +186,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('いつ頃からですか？'), findsOneWidget);
     expect(find.text('今日から'), findsOneWidget);
+    // 保存確認と案内は最初の質問（履歴なし）まで表示される。
+    expect(
+      find.text('症状を保存しました。続けて質問にお答えください。'),
+      findsOneWidget,
+    );
 
     // Answer the question; flow fetches the (null) next question → review.
     await tester.enterText(find.byType(TextField), '昨夜から続いています');
@@ -195,6 +200,11 @@ void main() {
     expect(backend.answerFreeTexts, ['昨夜から続いています']);
     expect(backend.summarized, isTrue);
     expect(find.text('ここまでの回答'), findsOneWidget);
+    // 確認画面では「続けて質問にお答えください」は消える。
+    expect(
+      find.text('症状を保存しました。続けて質問にお答えください。'),
+      findsNothing,
+    );
     expect(find.textContaining('昨夜から続いています'), findsOneWidget);
     expect(find.textContaining('未回答の項目: 1件'), findsOneWidget);
 
@@ -203,6 +213,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(backend.finalized, isTrue);
     expect(find.text('問診票を確定しました'), findsOneWidget);
+    // 確定後も案内は残らない。
+    expect(
+      find.text('症状を保存しました。続けて質問にお答えください。'),
+      findsNothing,
+    );
   });
 
   testWidgets('the "分からない" option is saved as unknown', (tester) async {

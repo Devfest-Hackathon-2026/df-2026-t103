@@ -221,12 +221,23 @@ class _IntakeQuestionFlowState extends State<IntakeQuestionFlow> {
   }
 
   List<Widget> _buildQuestioning(TextTheme textTheme) {
+    // 保存確認と次の案内は最初の質問（準備中含む）まで。確定・確認画面で
+    // 「続けて質問にお答えください」と残ると誤解を招くため、回答履歴の
+    // 無い間だけ表示する。
+    final savedNotice = <Widget>[
+      if (_history.isEmpty)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 16),
+          child: Text('症状を保存しました。続けて質問にお答えください。'),
+        ),
+    ];
     final question = _question;
     if (question == null) {
       // 初回ロード中・エラー時は質問カードを描かない（進捗/メッセージのみ）。
-      return [const Text('質問を準備しています。')];
+      return [...savedNotice, const Text('質問を準備しています。')];
     }
     return [
+      ...savedNotice,
       const Text('質問に答えると、医療機関に伝える内容を整理できます。診断は行いません。'),
       const SizedBox(height: 16),
       Semantics(
